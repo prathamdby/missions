@@ -101,6 +101,7 @@ export interface AgentRuntimeOptions {
   systemPrompt?: string;
   mcpServers?: SdkMcpServer[];
   disabledToolIds?: string[];
+  enabledToolIds?: string[];
   supervisor: ProcessSupervisor;
   onEvent: (event: AgentEvent) => void;
   onPermission: (ask: PermissionAsk) => Promise<boolean>;
@@ -459,8 +460,14 @@ export class AgentRuntime {
       Parameters<DroidClient["initializeSession"]>[0]["mcpServers"]
     >
   ): Promise<RuntimeStartResult> {
-    const { cwd, modelId, reasoningEffort, systemPrompt, disabledToolIds } =
-      this.options;
+    const {
+      cwd,
+      modelId,
+      reasoningEffort,
+      systemPrompt,
+      disabledToolIds,
+      enabledToolIds,
+    } = this.options;
     const response = await client.initializeSession({
       // SDK sessions always ask: the broker applies the user's autonomy, so
       // High cannot skip plan/publish gates through prompt-skipping.
@@ -481,6 +488,7 @@ export class AgentRuntime {
           }
         : {}),
       ...(disabledToolIds?.length ? { disabledToolIds } : {}),
+      ...(enabledToolIds?.length ? { enabledToolIds } : {}),
     });
     const result: unknown = response.result;
     if (!isRecord(result) || typeof result.sessionId !== "string") {

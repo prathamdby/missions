@@ -13,7 +13,7 @@ All paths come from `routes` in `src/routes.ts`. Bodies and responses use the sc
 
 1. `GET missionSnapshot(id)` returns `MissionSnapshot` with `cursor`.
 2. `GET events()?after=<cursor>[&missionId=<id>]` streams SSE. Frames named `event` carry a `DaemonEvent` JSON body and `id: <seq>`; reconnects may send `Last-Event-ID` instead of `after`. A `resync` frame (`ResyncRequiredSchema`) means the cursor is older than retained history: refetch the snapshot. Without `missionId`, only global events (`missionId: null`) are sent.
-3. Clients drop events with `seq <= applied` and refetch the snapshot on a gap. `transcript.delta` frames are coalesced previews; the matching `transcript.item` is authoritative.
+3. Clients drop events with `seq <= applied` and refetch the snapshot on a gap. Sequences are gap-free per stream (one mission, or global). `transcript.delta` frames are coalesced previews: each delta's `messageId` equals the `id` of the `transcript.item` that will replace it, so append deltas to a preview keyed by that ID and drop the preview when the item arrives (the item is authoritative).
 
 ## Routes
 

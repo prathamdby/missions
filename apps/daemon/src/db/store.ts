@@ -13,7 +13,7 @@ import type {
   TranscriptItem,
 } from "@missions/protocol/missions";
 import type { Project, CloneJob } from "@missions/protocol/projects";
-import { and, desc, eq, inArray, lt, max } from "drizzle-orm";
+import { and, desc, eq, inArray, like, lt, max } from "drizzle-orm";
 
 import type { DatabaseHandle, Db } from "./database";
 import {
@@ -437,5 +437,18 @@ export class Store {
       .values({ data: value, key })
       .onConflictDoUpdate({ set: { data: value }, target: settings.key })
       .run();
+  }
+
+  settingsWithPrefix<T>(prefix: string): { key: string; value: T }[] {
+    return this.db
+      .select()
+      .from(settings)
+      .where(like(settings.key, `${prefix}%`))
+      .all()
+      .map((row) => ({ key: row.key, value: row.data as T }));
+  }
+
+  deleteSetting(key: string) {
+    this.db.delete(settings).where(eq(settings.key, key)).run();
   }
 }
