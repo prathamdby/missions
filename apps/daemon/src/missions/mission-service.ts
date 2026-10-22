@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 
 import type {
   AnswerQuestionRequest,
@@ -35,6 +36,8 @@ import type {
 import type { OperationJournal } from "../db/journal";
 import type { Store } from "../db/store";
 import type { Emit, EventLog } from "../events/event-log";
+import type { ArtifactStore } from "../files/artifact-store";
+import { mediaTypeOf, resolveWorkspacePath } from "../files/workspace-files";
 import { AppError, conflict, notFound, stale } from "../lib/app-error";
 import { errorMessage } from "../lib/async";
 import { PermissionBroker } from "../permissions/permission-broker";
@@ -123,6 +126,7 @@ export interface MissionServiceOptions {
   workspaces: WorkspaceService;
   settings: SettingsService;
   supervisor: ProcessSupervisor;
+  artifacts: ArtifactStore;
   createRuntime?: RuntimeFactory;
   now?: () => Date;
 }
@@ -138,6 +142,19 @@ interface PendingQuestion {
 }
 
 const PROCESS_PREFIX = "process:";
+const WRITE_TOOLS = new Set([
+  "Edit",
+  "Create",
+  "ApplyPatch",
+  "MultiEdit",
+  "Execute",
+]);
+const PREVIEWABLE = /^(?:image|video)\//u;
+
+const pathInput = (input: Record<string, unknown>) => {
+  const value = input.file_path ?? input.filePath ?? input.path;
+  return typeof value === "string" ? value : null;
+};
 const TERMINAL_QUEUE = new Set<QueueItem["state"]>([
   "sent",
   "removed",
@@ -183,6 +200,12 @@ export class MissionService {
   readonly #questions = new Map<string, PendingQuestion>();
   readonly #deltas: DeltaCoalescer;
   readonly #starting = new Map<string, Promise<RuntimeHandle>>();
+  readonly #artifacts: ArtifactStore;
+  /** Tool inputs awaiting their result, for artifact detection. */
+  readonly #toolCalls = new Map<
+    string,
+    { name: string; input: Record<string, unknown> }
+  >();
 
   constructor(options: MissionServiceOptions) {
     this.#store = options.store;
@@ -192,6 +215,7 @@ export class MissionService {
     this.#workspaces = options.workspaces;
     this.#settings = options.settings;
     this.#supervisor = options.supervisor;
+    this.#artifacts = options.artifacts;
     this.#createRuntime =
       options.createRuntime ??
       ((runtimeOptions) => new AgentRuntime(runtimeOptions));
@@ -279,6 +303,14 @@ export class MissionService {
         transcriptHasMore: page.hasMore,
       };
     });
+  }
+
+  artifact(missionId: string, artifactId: string) {
+    const artifact = this.#store.artifacts.get(artifactId);
+    if (!artifact || artifact.missionId !== missionId) {
+      throw notFound("Artifact");
+    }
+    return artifact;
   }
 
   transcript(id: string, before: number | null, limit: number) {
@@ -775,6 +807,10 @@ export class MissionService {
         break;
       }
       case "tool_call": {
+        this.#toolCalls.set(event.toolUseId, {
+          input: event.input,
+          name: event.name,
+        });
         this.#appendTranscript(mission.id, [
           toolCallItem(base, event.toolUseId, event.name, event.input),
         ]);
@@ -784,6 +820,12 @@ export class MissionService {
         this.#appendTranscript(mission.id, [
           toolResultItem(base, event.toolUseId, event.content, event.isError),
         ]);
+        this.#afterToolResult(
+          agentId,
+          mission.id,
+          event.toolUseId,
+          event.isError
+        );
         break;
       }
       default: {
@@ -858,6 +900,63 @@ export class MissionService {
         break;
       }
     }
+  }
+
+  #afterToolResult(
+    agentId: string,
+    missionId: string,
+    toolUseId: string,
+    isError: boolean
+  ) {
+    const call = this.#toolCalls.get(toolUseId);
+    this.#toolCalls.delete(toolUseId);
+    if (!call || isError) {
+      return;
+    }
+    const target = pathInput(call.input);
+    if (WRITE_TOOLS.has(call.name)) {
+      this.#publish(missionId, {
+        data: { paths: target ? [target] : [] },
+        type: "workspace.changed",
+      });
+    }
+    if (
+      target &&
+      call.name !== "Read" &&
+      PREVIEWABLE.test(mediaTypeOf(target))
+    ) {
+      this.#attachArtifact(agentId, { path: target }).catch(() => null);
+    }
+  }
+
+  async #attachArtifact(
+    agentId: string,
+    input: { path: string; name?: string | undefined }
+  ) {
+    const { agent, mission } = this.#requireCurrent(agentId);
+    const root = mission.workspace?.path;
+    if (!root) {
+      throw new Error("The mission has no folder");
+    }
+    const relative = path.isAbsolute(input.path)
+      ? path.relative(root, input.path)
+      : input.path;
+    const target = await resolveWorkspacePath(root, relative);
+    if (!target.real) {
+      throw new Error(`No file at ${input.path}`);
+    }
+    const artifact = await this.#artifacts.import({
+      agentId: agent.id,
+      createdAt: this.#iso(),
+      missionId: mission.id,
+      name: input.name ?? path.basename(target.rel),
+      source: target.real,
+    });
+    this.#log.commit((emit) => {
+      this.#store.artifacts.put(artifact);
+      emit(mission.id, { data: { artifact }, type: "artifact.created" });
+    });
+    return `Attached ${artifact.name} as an artifact.`;
   }
 
   #syncQueue(agentId: string, entry: NativeQueueEntry) {
@@ -1052,6 +1151,7 @@ export class MissionService {
 
   #roleHandlers(): RoleToolHandlers {
     return {
+      attachArtifact: (agentId, input) => this.#attachArtifact(agentId, input),
       completeMission: (agentId, input) =>
         Promise.resolve(this.#completeMission(agentId, input)),
       dispatchWorker: (agentId, input) =>

@@ -1,3 +1,6 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+
 import type { DeliveryMode } from "@missions/protocol/common";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import { MissionSnapshotSchema } from "@missions/protocol/missions";
@@ -385,6 +388,39 @@ describe("mission service", () => {
     expect(
       restarted?.submitted.map((s) => s.id.startsWith("sys:"))
     ).toStrictEqual([true]);
+  });
+
+  it("serves registered artifacts and refuses paths outside the mission folder", async () => {
+    const { daemon, missionId, orchestrator, repo } = await startMission();
+    await writeFile(
+      path.join(repo, "shot.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47])
+    );
+    await orchestrator.tool("attach_artifact", {
+      path: path.join(repo, "shot.png"),
+    });
+    const [artifact] = daemon.missions.snapshot(missionId).artifacts;
+    const headers = {
+      authorization: `Bearer ${daemon.token}`,
+      host: "127.0.0.1:4317",
+    };
+    const res = await daemon.app.request(
+      routes.artifact(missionId, artifact?.id ?? ""),
+      { headers }
+    );
+    expect([
+      res.status,
+      res.headers.get("content-type"),
+      res.headers.get("x-content-type-options"),
+    ]).toStrictEqual([200, "image/png", "nosniff"]);
+    const escaped = await daemon.app.request(
+      `${routes.file(missionId)}?path=../../etc/passwd`,
+      { headers }
+    );
+    expect(escaped.status).toBe(403);
+    await expect(
+      orchestrator.tool("attach_artifact", { path: "/etc/hostname" })
+    ).rejects.toThrow(/escapes/u);
   });
 
   it("marks active missions interrupted after a crash without restarting agents", async () => {

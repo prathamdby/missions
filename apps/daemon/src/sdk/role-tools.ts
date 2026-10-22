@@ -42,6 +42,10 @@ export interface RoleToolHandlers {
     agentId: string,
     input: { summary: string; checks: { command: string; outcome: string }[] }
   ) => Promise<string>;
+  attachArtifact: (
+    agentId: string,
+    input: { path: string; name?: string | undefined }
+  ) => Promise<string>;
 }
 
 const todoShape = z.object({
@@ -57,6 +61,18 @@ const updateTodosTool = (agentId: string, handlers: RoleToolHandlers) =>
     "Replace your todo list for this mission. Keep exactly one item in_progress while work remains.",
     { todos: z.array(todoShape).max(50) },
     async ({ todos }) => await handlers.updateTodos(agentId, { todos }),
+    { annotations: { readOnlyHint: true } }
+  );
+
+const attachArtifactTool = (agentId: string, handlers: RoleToolHandlers) =>
+  tool(
+    "attach_artifact",
+    "Show a file you produced (screenshot, recording, report) to the user as an artifact. The path must be inside the mission folder.",
+    {
+      name: z.string().min(1).max(200).optional(),
+      path: z.string().min(1).max(4096),
+    },
+    async (input) => await handlers.attachArtifact(agentId, input),
     { annotations: { readOnlyHint: true } }
   );
 
@@ -97,6 +113,7 @@ const orchestratorTools = (
     { annotations: { readOnlyHint: true } }
   ),
   updateTodosTool(agentId, handlers),
+  attachArtifactTool(agentId, handlers),
   tool(
     "complete_mission",
     "Declare the mission complete after reviewing the shared changes and running final checks.",
@@ -114,6 +131,7 @@ const workerTools = (
   handlers: RoleToolHandlers
 ): DroidTool[] => [
   updateTodosTool(agentId, handlers),
+  attachArtifactTool(agentId, handlers),
   tool(
     "submit_handoff",
     "Finish your assignment: summarize what you changed and how you verified it. Call this exactly once when done.",
