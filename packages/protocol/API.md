@@ -12,7 +12,7 @@ All paths come from `routes` in `src/routes.ts`. Bodies and responses use the sc
 ## Live state
 
 1. `GET missionSnapshot(id)` returns `MissionSnapshot` with `cursor`.
-2. `GET events()?after=<cursor>[&missionId=<id>]` streams SSE. Frames named `event` carry a `DaemonEvent` JSON body and `id: <seq>`; reconnects may send `Last-Event-ID` instead of `after`. A `resync` frame (`ResyncRequiredSchema`) means the cursor is older than retained history: refetch the snapshot. Without `missionId`, only global events (`missionId: null`) are sent.
+2. `GET events()?after=<cursor>[&missionId=<id>]` streams SSE. Frames named `event` carry a `DaemonEvent` JSON body and `id: <seq>`; reconnects may send `Last-Event-ID` instead of `after`. A `resync` frame (`ResyncRequiredSchema`) means the cursor is older than retained history: refetch the snapshot. Each stream keeps its most recent 20,000 events. Without `missionId`, only global events (`missionId: null`) are sent.
 3. Clients drop events with `seq <= applied` and refetch the snapshot on a gap. Sequences are gap-free per stream (one mission, or global). `transcript.delta` frames are coalesced previews: each delta's `messageId` equals the `id` of the `transcript.item` that will replace it, so append deltas to a preview keyed by that ID and drop the preview when the item arrives (the item is authoritative).
 
 ## Routes
@@ -58,3 +58,7 @@ All paths come from `routes` in `src/routes.ts`. Bodies and responses use the sc
 | POST | `cleanup(id)` | `CleanupRequest` | `Mission` |
 
 Mutations are idempotent per `operationId`: repeating one returns the recorded result instead of acting twice. Stale `expectedRevision`, `epoch`, `planRevision`, `expectedHead` or `expectedChangesHash` values return `409` (`stale_revision` or `conflict`).
+
+- `Changes.hash` fingerprints the reviewed diff; send it back as `expectedChangesHash` so a commit never includes changes the user has not seen. Each `FileDiff.committed` is `true` when the file is already in a mission commit rather than the working tree.
+- `ModelList` comes from the installed Droid CLI (cached for 10 minutes). `PATCH settings()` rejects model IDs that are not in it.
+- File routes resolve paths inside the mission workspace only; `..`, absolute paths, symlinks leaving the workspace and `.git` return `403` (`forbidden`). Artifacts are served by ID with `nosniff` and a sandboxed CSP.
