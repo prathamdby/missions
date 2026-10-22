@@ -346,3 +346,4 @@ export type MissionSnapshot = z.infer<typeof MissionSnapshotSchema>;
 export const MissionListSchema = z.object({
   missions: z.array(MissionSummarySchema),
 });
+export type MissionList = z.infer<typeof MissionListSchema>;
