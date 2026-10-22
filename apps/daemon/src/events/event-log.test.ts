@@ -55,4 +55,16 @@ describe(EventLog, () => {
     expect(log.prune(null)).toBe(2);
     expect(log.bounds(null)).toStrictEqual({ latest: 4, oldest: 3 });
   });
+
+  it("enforces retention on every stream while appending and at startup", () => {
+    const log = setup(10);
+    for (let index = 0; index < 1000; index += 1) {
+      log.publish("m1", notice(String(index)));
+    }
+    expect(log.bounds("m1")).toStrictEqual({ latest: 1000, oldest: 991 });
+    log.publish("m1", notice("over"));
+    log.publish("m2", notice("a"));
+    expect(log.pruneAll()).toBe(1);
+    expect(log.bounds("m1").oldest).toBe(992);
+  });
 });
