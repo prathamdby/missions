@@ -12,7 +12,8 @@ const readJson = (file: string) =>
     devDependencies?: Record<string, string>;
   };
 
-const EXACT_VERSION = /^\d+\.\d+\.\d+$/u;
+// Aliases (`npm:zod@3.25.76`) are allowed when they pin an exact version.
+const EXACT_VERSION = /^(?:npm:(?:@[\w.-]+\/)?[\w.-]+@)?\d+\.\d+\.\d+$/u;
 const MANIFESTS = [
   "package.json",
   "apps/web/package.json",
