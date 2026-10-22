@@ -6,8 +6,12 @@ import { openDatabase } from "./db/database";
 import { OperationJournal } from "./db/journal";
 import { Store } from "./db/store";
 import { EventLog } from "./events/event-log";
+import { registerMissionRoutes } from "./http/mission-routes";
 import { registerProjectRoutes } from "./http/project-routes";
 import { registerSystemRoutes } from "./http/system-routes";
+import { MissionService } from "./missions/mission-service";
+import type { RuntimeFactory } from "./missions/mission-service";
+import { ProcessSupervisor } from "./processes/process-supervisor";
 import { ProjectService } from "./projects/project-service";
 import { ensureToken } from "./security/token";
 import { defaultSettings, SettingsService } from "./settings/settings-service";
@@ -21,6 +25,8 @@ export interface Daemon {
   projects: ProjectService;
   settings: SettingsService;
   workspaces: WorkspaceService;
+  missions: MissionService;
+  supervisor: ProcessSupervisor;
   token: string;
   close: () => Promise<void>;
 }
@@ -31,6 +37,8 @@ export interface DaemonOptions {
   startedAt?: Date;
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
+  /** Test seam: substitutes scripted agents for real Droid sessions. */
+  createRuntime?: RuntimeFactory;
 }
 
 /** Composition root; startup recovery runs before any route can be served. */
@@ -61,10 +69,31 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
     settings: () => settings.get(),
   });
 
+  let missions: MissionService | null = null;
+  const supervisor = new ProcessSupervisor({
+    binDir: config.binDir,
+    droidPath: config.droidPath,
+    onRecord: (record, agentId) => missions?.recordProcess(record, agentId),
+  });
+  missions = new MissionService({
+    createRuntime: options.createRuntime,
+    journal,
+    log,
+    now,
+    projects,
+    settings,
+    store,
+    supervisor,
+    workspaces,
+  });
+  const missionService = missions;
+
   journal.recoverInterrupted();
   projects.recoverCloneJobs();
+  await missionService.recover();
   log.prune(null);
 
+  let closing: Promise<void> | null = null;
   const app = createApp({
     boundary: { port: config.port, token },
     now,
@@ -78,6 +107,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
         version,
       });
       registerProjectRoutes(hono, projects);
+      registerMissionRoutes(hono, missionService);
     },
     startedAt,
     version,
@@ -85,15 +115,17 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
 
   return {
     app,
-    close: async () => {
-      handle.close();
-      await Promise.resolve();
+    close: () => {
+      closing ??= missionService.shutdown().finally(() => handle.close());
+      return closing;
     },
     journal,
     log,
+    missions: missionService,
     projects,
     settings,
     store,
+    supervisor,
     token,
     workspaces,
   };

@@ -142,6 +142,25 @@ export const createRoleToolServer = (
     version: "1.0.0",
   });
 
+/**
+ * Any non-empty `disabledToolIds` makes the CLI fall back to a read-only tool
+ * set, so the tools agents need are re-enabled explicitly (verified live).
+ */
+export const ENABLED_TOOL_IDS = [
+  "Read",
+  "LS",
+  "Glob",
+  "Grep",
+  "Execute",
+  "Edit",
+  "Create",
+  "ApplyPatch",
+  "AskUser",
+  "TodoWrite",
+  "WebSearch",
+  "FetchUrl",
+];
+
 /** Native tools that would bypass mission coordination or act outside it. */
 export const DISABLED_TOOL_IDS = [
   "Task",
