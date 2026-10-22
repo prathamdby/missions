@@ -81,7 +81,7 @@ export const DaemonEventSchema = z.intersection(
   z.object({
     at: TimestampSchema,
     missionId: IdSchema.nullable(),
-    /** Strictly increasing, gap-free per daemon database. */
+    /** Strictly increasing and gap-free within one stream: a mission, or global (`missionId: null`). */
     seq: z.int().positive(),
   }),
   EventBodySchema
