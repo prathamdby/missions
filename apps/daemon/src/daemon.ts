@@ -6,6 +6,8 @@ import { openDatabase } from "./db/database";
 import { OperationJournal } from "./db/journal";
 import { Store } from "./db/store";
 import { EventLog } from "./events/event-log";
+import { ArtifactStore } from "./files/artifact-store";
+import { registerFileRoutes } from "./http/file-routes";
 import { registerMissionRoutes } from "./http/mission-routes";
 import { registerProjectRoutes } from "./http/project-routes";
 import { registerSystemRoutes } from "./http/system-routes";
@@ -75,7 +77,9 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
     droidPath: config.droidPath,
     onRecord: (record, agentId) => missions?.recordProcess(record, agentId),
   });
+  const artifacts = new ArtifactStore(config.artifactsDir);
   missions = new MissionService({
+    artifacts,
     createRuntime: options.createRuntime,
     journal,
     log,
@@ -108,6 +112,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
       });
       registerProjectRoutes(hono, projects);
       registerMissionRoutes(hono, missionService);
+      registerFileRoutes(hono, missionService, artifacts);
     },
     startedAt,
     version,

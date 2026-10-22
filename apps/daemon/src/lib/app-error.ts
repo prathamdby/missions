@@ -18,5 +18,7 @@ export const notFound = (what: string) =>
 export const conflict = (message: string) => new AppError("conflict", message);
 export const stale = (message: string) =>
   new AppError("stale_revision", message);
+export const forbidden = (message: string) =>
+  new AppError("forbidden", message);
 export const badRequest = (message: string) =>
   new AppError("bad_request", message);

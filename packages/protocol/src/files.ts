@@ -65,6 +65,8 @@ export type DiffLine = z.infer<typeof DiffLineSchema>;
 export const ChangesSchema = z.object({
   baseRevision: z.string().nullable(),
   files: z.array(FileDiffSchema),
+  /** Digest of the reviewed change set; commit approvals must echo it. */
+  hash: z.string(),
   head: z.string().nullable(),
   totals: z.object({
     additions: z.int().nonnegative(),
