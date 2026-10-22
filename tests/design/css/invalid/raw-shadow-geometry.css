@@ -1,0 +1,4 @@
+/* expect: css/no-raw-value */
+.card {
+  box-shadow: 0 0 0 2px var(--color-focus);
+}

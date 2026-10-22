@@ -1,0 +1,4 @@
+/* expect: css/no-raw-color */
+.card {
+  border-color: red;
+}

@@ -1,0 +1,31 @@
+{
+  "name": "missions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:daemon": "pnpm --filter @missions/daemon dev",
+    "dev:web": "pnpm --filter @missions/web dev",
+    "check": "ultracite check",
+    "fix": "ultracite fix",
+    "check:doctor": "ultracite doctor",
+    "design:tokens": "node design/scripts/build-tokens.ts",
+    "design:check": "node design/scripts/build-tokens.ts --check && node design/scripts/check-contract.ts",
+    "typecheck": "tsc -p tsconfig.json && pnpm -r --parallel typecheck",
+    "test": "vitest run",
+    "gate": "pnpm design:check && pnpm check && pnpm check:doctor && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@shadcn/lint": "0.2.3",
+    "@types/node": "24.19.2",
+    "oxfmt": "0.74.0",
+    "oxlint": "1.89.0",
+    "postcss": "8.5.31",
+    "typescript": "7.0.2",
+    "ultracite": "8.0.2",
+    "vitest": "5.0.5"
+  },
+  "engines": {
+    "node": ">=24.2.0"
+  },
+  "packageManager": "pnpm@12.14.0"
+}

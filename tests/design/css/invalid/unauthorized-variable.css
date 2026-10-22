@@ -1,0 +1,4 @@
+/* expect: css/no-unauthorized-variable */
+.card {
+  color: var(--brand-pink);
+}

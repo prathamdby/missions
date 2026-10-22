@@ -1,0 +1,14 @@
+{
+  "extends": "./packages/tsconfig/node.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
+  },
+  "include": [
+    "design/**/*.ts",
+    "tests/design/*.ts",
+    "*.config.ts",
+    "apps/web/oxlint.config.ts",
+    "tests/design/fixture-app/fixtures.oxlint.config.ts"
+  ]
+}

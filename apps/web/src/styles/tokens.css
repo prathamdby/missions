@@ -1,0 +1,234 @@
+/* Generated from design/tokens.json by `pnpm design:tokens`. Do not edit. */
+
+@theme static {
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --font-weight-*: initial;
+  --tracking-*: initial;
+  --leading-*: initial;
+  --breakpoint-*: initial;
+  --container-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+  --text-shadow-*: initial;
+  --blur-*: initial;
+  --perspective-*: initial;
+  --aspect-*: initial;
+  --ease-*: initial;
+  --animate-*: initial;
+
+  --spacing: 4px; /* Multiplier for numeric sizing utilities (w-4, size-4). Spacing utilities use the named scale. */
+
+  --color-bg: #0B0B0B; /* App ground behind all panes. */
+  --color-surface: #121212; /* Main pane background (chat, panels). */
+  --color-surface-raised: #171717; /* Sidebar, cards, message bubbles. */
+  --color-surface-overlay: #1D1D1D; /* Inputs, menus, hover rows. */
+  --color-surface-active: #242424; /* Selected row or pressed state. */
+  --color-border: #FFFFFF14; /* Hairline (white 8%). Used as the ring layer inside shadows and for dividers between rows, not as element borders. */
+  --color-border-strong: #FFFFFF24; /* Focus-adjacent and input borders (white 14%). */
+  --color-border-subtle: #FFFFFF0A; /* Dividers inside surfaces (white 4%). */
+  --color-text: #F5F5F5; /* Primary text. */
+  --color-text-secondary: #A3A3A3; /* Secondary text, labels. */
+  --color-text-tertiary: #8A8A8A; /* Metadata, timestamps, placeholders. ≥4.5:1 on surface-raised and surface-overlay. */
+  --color-text-disabled: #4D4D4D; /* Disabled text and icons. */
+  --color-accent: #FF5A00; /* Factory orange. Active mission, running state, primary action. */
+  --color-accent-hover: #FF7326; /* Accent hover. */
+  --color-accent-text: #FF7A33; /* Accent used as text on dark surfaces. */
+  --color-accent-muted: #FF5A001A; /* Tinted background for accent pills. */
+  --color-on-accent: #140700; /* Text and icons on solid accent. */
+  --color-success: #5ECC71; /* Passed, merged, completed. */
+  --color-success-muted: #5ECC711A; /* Success pill background. */
+  --color-warning: #FFB224; /* Needs attention, retry limits. */
+  --color-warning-muted: #FFB2241A; /* Warning pill background. */
+  --color-danger: #F0442E; /* Failed, blocked, destructive. */
+  --color-danger-muted: #F0442E1A; /* Danger pill background. */
+  --color-info: #2B948B; /* Capy teal. Links and informational states. */
+  --color-info-muted: #2B948B1F; /* Info pill background. */
+  --color-focus: #FF7A33; /* Focus-visible ring. Draw as 0 0 0 2px bg, 0 0 0 4px focus. */
+  --color-shadow: #00000066; /* Drop layer in layered shadows (black 40%). */
+  --color-highlight: #FFFFFF0F; /* Inset top highlight in layered shadows (white 6%). */
+  --color-syntax-keyword: #C4A1FF; /* Keywords, control flow */
+  --color-syntax-string: #F2C46D; /* Strings */
+  --color-syntax-function: #7CC7FF; /* Functions, calls */
+  --color-syntax-type: #6CD4C4; /* Types, properties */
+  --color-syntax-text: #E5E5E5; /* Plain code */
+  --color-syntax-comment: #8A8A8A; /* Comments, punctuation */
+  --color-diff-add: #5ECC711A; /* Added line background */
+  --color-diff-add-gutter: #5ECC712E; /* Added line number gutter */
+  --color-diff-del: #F0442E1A; /* Removed line background */
+  --color-diff-del-gutter: #F0442E2E; /* Removed line number gutter */
+  --color-diff-line-number: #4D4D4D; /* Unchanged line numbers */
+  --color-terminal-green: #5ECC71; /* ANSI green: PASS */
+  --color-terminal-red: #F0442E; /* ANSI red: FAIL, errors */
+  --color-terminal-yellow: #FFB224; /* ANSI yellow: RUNS, warnings */
+  --color-terminal-blue: #7CC7FF; /* ANSI blue */
+  --color-terminal-magenta: #C4A1FF; /* ANSI magenta */
+  --color-terminal-cyan: #6CD4C4; /* ANSI cyan */
+  --color-terminal-white: #E5E5E5; /* ANSI white */
+  --color-terminal-dim: #8A8A8A; /* ANSI dim, summaries */
+
+  --font-sans: var(--font-geist-sans), Geist, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; /* Machine output only: code, IDs, paths, timers. */
+
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px; /* Default UI and body size. */
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+
+  --font-weight-regular: 400;
+  --font-weight-book: 450; /* Default body weight. */
+  --font-weight-medium: 500; /* Labels, nav items, buttons. */
+  --font-weight-semibold: 600; /* Headings. */
+  --font-weight-bold: 700; /* Display only. */
+
+  --tracking-tighter: -0.02em; /* Display and headings 20px+. */
+  --tracking-tight: -0.01em; /* Body and UI text. */
+  --tracking-normal: 0em;
+  --tracking-wide: 0.06em; /* Uppercase mono labels. */
+
+  --leading-xs: 14px;
+  --leading-sm: 16px;
+  --leading-md: 18px;
+  --leading-lg: 20px;
+  --leading-chat: 22px; /* Conversation body copy at 13px. */
+  --leading-xl: 28px;
+  --leading-2xl: 36px;
+
+  --spacing-2xs: 2px;
+  --spacing-xs: 4px;
+  --spacing-sm: 6px; /* Default gap between related items. */
+  --spacing-md: 8px;
+  --spacing-lg: 12px;
+  --spacing-xl: 16px;
+  --spacing-2xl: 24px;
+  --spacing-3xl: 32px;
+  --spacing-4xl: 48px;
+
+  --radius-xs: 3px; /* Inline code, tiny chips. */
+  --radius-sm: 6px; /* Buttons, inputs, rows. */
+  --radius-md: 8px; /* Cards, message bubbles, menus. */
+  --radius-lg: 12px; /* Composer, large panels. */
+  --radius-xl: 14px; /* Container holding radius-sm items with 8px padding (6 + 8). */
+  --radius-2xl: 20px; /* Container holding radius-md items with 12px padding (8 + 12), or a 24px round button with 8px padding. */
+  --radius-full: 9999px; /* Pills, avatars, status dots. */
+
+  --shadow-button: inset 0 1px 0 #FFFFFF1F, 0 0 0 1px var(--color-border), 0 1px 2px var(--color-shadow); /* Secondary and icon buttons. */
+  --shadow-sm: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border), 0 1px 2px var(--color-shadow), 0 2px 6px #0000003D; /* Cards, lists, panes. */
+  --shadow-md: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border-strong), 0 2px 4px var(--color-shadow), 0 8px 20px #00000052; /* Composer, raised controls. */
+  --shadow-lg: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border-strong), 0 8px 24px #00000080, 0 24px 48px #00000066; /* Menus, popovers, modals. */
+  --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus); /* Focus-visible ring, as specified on --color-focus. */
+
+  --opacity-muted: 60%;
+  --opacity-disabled: 40%;
+
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 1024px;
+  --breakpoint-lg: 1440px;
+  --breakpoint-xl: 1920px;
+
+  --container-sidebar: 240px; /* Left navigation width. */
+  --container-chat: 720px; /* Max width of the conversation column. */
+  --container-panel: 520px; /* Right inspector panel width. */
+  --container-prose: 560px; /* Max width for message and long-form text: 60–75 characters at 13px. */
+
+  --transition-duration-fast: 120ms; /* Hover, color, opacity. */
+  --transition-duration-base: 200ms; /* Press, toggles, checkboxes. */
+  --transition-duration-slow: 320ms; /* Panels, sheets, dialogs. */
+
+  --ease-out: cubic-bezier(.22,1,.36,1); /* Anything entering. */
+  --ease-in-out: cubic-bezier(.65,0,.35,1); /* Anything moving in place. */
+
+  --scale-press: 0.97; /* Buttons and rows on press. */
+
+  --z-index-sticky: 10; /* Headers, composer. */
+  --z-index-panel: 20; /* Drawer, bottom sheet. */
+  --z-index-popover: 30; /* Menus, selects, mention list. */
+  --z-index-toast: 40; /* Toasts. */
+  --z-index-dialog: 50; /* Scrim and dialog. */
+  --z-index-tooltip: 60; /* Tooltips, always on top. */
+
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-text);
+  --color-card: var(--color-surface-raised);
+  --color-card-foreground: var(--color-text);
+  --color-popover: var(--color-surface-overlay);
+  --color-popover-foreground: var(--color-text);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-on-accent);
+  --color-secondary: var(--color-surface-overlay);
+  --color-secondary-foreground: var(--color-text);
+  --color-muted: var(--color-surface-overlay);
+  --color-muted-foreground: var(--color-text-tertiary);
+  --color-destructive: var(--color-danger);
+  --color-input: var(--color-border-strong);
+  --color-ring: var(--color-focus);
+
+  --default-font-family: var(--font-sans);
+  --default-mono-font-family: var(--font-mono);
+  --default-transition-duration: var(--transition-duration-fast);
+  --default-transition-timing-function: var(--ease-out);
+}
+
+@utility type-display {
+  font-size: var(--text-3xl);
+  line-height: var(--leading-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-tighter);
+}
+
+@utility type-title {
+  font-size: var(--text-xl);
+  line-height: var(--leading-xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-tighter);
+}
+
+@utility type-heading {
+  font-size: var(--text-lg);
+  line-height: var(--leading-chat);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+
+@utility type-body {
+  font-size: var(--text-sm);
+  line-height: var(--leading-chat);
+  font-weight: var(--font-weight-book);
+  letter-spacing: var(--tracking-tight);
+}
+
+@utility type-label {
+  font-size: var(--text-sm);
+  line-height: var(--leading-md);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-tight);
+}
+
+@utility type-caption {
+  font-size: var(--text-xs);
+  line-height: var(--leading-sm);
+  font-weight: var(--font-weight-book);
+  letter-spacing: var(--tracking-tight);
+}
+
+@utility type-micro {
+  font-size: var(--text-2xs);
+  line-height: var(--leading-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-tight);
+}
+
+@utility type-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-md);
+  font-weight: var(--font-weight-book);
+  letter-spacing: var(--tracking-normal);
+}
