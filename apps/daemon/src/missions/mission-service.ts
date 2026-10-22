@@ -345,6 +345,20 @@ export class MissionService {
     );
   }
 
+  /** For publishing: applies a change to the stored mission and emits it. */
+  patch(id: string, change: (mission: Mission) => Mission) {
+    return this.#mutateMission(id, change);
+  }
+
+  notify(
+    missionId: string,
+    code: Extract<EventBody, { type: "notice" }>["data"]["notice"]["code"],
+    level: "info" | "warning" | "error",
+    message: string
+  ) {
+    this.#notice(missionId, code, level, message);
+  }
+
   #saveAgent(agent: Agent, emit?: Emit) {
     const next = { ...agent, updatedAt: this.#iso() };
     const write = (e: Emit) => {

@@ -13,7 +13,7 @@ import type {
 } from "@missions/protocol/files";
 import type { WorkspaceBinding } from "@missions/protocol/workspaces";
 
-import { canonical, head, isInside } from "../git/repo";
+import { canonical, head, isInside, status } from "../git/repo";
 import { badRequest, forbidden } from "../lib/app-error";
 import { git } from "../lib/exec";
 
@@ -342,7 +342,15 @@ export const workspaceChanges = async (
     digest.update(names.stdout);
     digest.update(patch.stdout);
   }
-  const untracked = await untrackedPaths(root);
+  const [untracked, dirtyEntries] = await Promise.all([
+    untrackedPaths(root),
+    status(root),
+  ]);
+  const dirty = new Set(
+    (dirtyEntries ?? []).flatMap((entry) =>
+      entry.oldPath ? [entry.path, entry.oldPath] : [entry.path]
+    )
+  );
   const baseline = new Set(binding.baselineDirtyFiles);
   let remaining = TOTAL_LINE_BUDGET;
   const files: FileDiff[] = [];
@@ -355,6 +363,7 @@ export const workspaceChanges = async (
     files.push({
       additions: parsed.additions,
       binary: parsed.binary,
+      committed: !dirty.has(entry.path),
       deletions: parsed.deletions,
       hunks: cut.hunks,
       oldPath: entry.oldPath,
@@ -376,6 +385,7 @@ export const workspaceChanges = async (
     files.push({
       additions: parsed.additions,
       binary: parsed.binary,
+      committed: false,
       deletions: 0,
       hunks: cut.hunks,
       oldPath: null,

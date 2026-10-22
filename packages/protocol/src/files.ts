@@ -48,6 +48,8 @@ export const DiffHunkSchema = z.object({
 export const FileDiffSchema = z.object({
   additions: z.int().nonnegative(),
   binary: z.boolean(),
+  /** Already committed since the mission started; nothing left to commit. */
+  committed: z.boolean(),
   deletions: z.int().nonnegative(),
   hunks: z.array(DiffHunkSchema),
   oldPath: z.string().nullable(),

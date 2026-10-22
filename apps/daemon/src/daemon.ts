@@ -7,15 +7,19 @@ import { OperationJournal } from "./db/journal";
 import { Store } from "./db/store";
 import { EventLog } from "./events/event-log";
 import { ArtifactStore } from "./files/artifact-store";
+import { GitService } from "./git/git-service";
 import { registerFileRoutes } from "./http/file-routes";
 import { registerMissionRoutes } from "./http/mission-routes";
 import { registerProjectRoutes } from "./http/project-routes";
+import { registerPublishRoutes } from "./http/publish-routes";
 import { registerSystemRoutes } from "./http/system-routes";
 import { MissionService } from "./missions/mission-service";
 import type { RuntimeFactory } from "./missions/mission-service";
 import { ProcessSupervisor } from "./processes/process-supervisor";
 import { ProjectService } from "./projects/project-service";
 import { ensureToken } from "./security/token";
+import { ModelCatalog } from "./settings/models";
+import type { ModelLoader } from "./settings/models";
 import { defaultSettings, SettingsService } from "./settings/settings-service";
 import { WorkspaceService } from "./workspaces/workspace-service";
 
@@ -28,6 +32,7 @@ export interface Daemon {
   settings: SettingsService;
   workspaces: WorkspaceService;
   missions: MissionService;
+  publish: GitService;
   supervisor: ProcessSupervisor;
   token: string;
   close: () => Promise<void>;
@@ -41,6 +46,10 @@ export interface DaemonOptions {
   env?: NodeJS.ProcessEnv;
   /** Test seam: substitutes scripted agents for real Droid sessions. */
   createRuntime?: RuntimeFactory;
+  /** Test seam: a scripted GitHub CLI. */
+  ghPath?: string;
+  /** Test seam: model discovery without spawning Droid. */
+  loadModels?: ModelLoader;
 }
 
 /** Composition root; startup recovery runs before any route can be served. */
@@ -91,6 +100,12 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
     workspaces,
   });
   const missionService = missions;
+  const publish = new GitService({
+    ghPath: options.ghPath,
+    journal,
+    missions: missionService,
+    settings,
+  });
 
   journal.recoverInterrupted();
   projects.recoverCloneJobs();
@@ -105,6 +120,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
       registerSystemRoutes(hono, {
         droidPath: config.droidPath,
         log,
+        models: new ModelCatalog(config.droidPath, options.loadModels),
         settings,
         startedAt,
         store,
@@ -113,6 +129,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
       registerProjectRoutes(hono, projects);
       registerMissionRoutes(hono, missionService);
       registerFileRoutes(hono, missionService, artifacts);
+      registerPublishRoutes(hono, publish);
     },
     startedAt,
     version,
@@ -128,6 +145,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
     log,
     missions: missionService,
     projects,
+    publish,
     settings,
     store,
     supervisor,
