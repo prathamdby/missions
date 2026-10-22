@@ -4,9 +4,18 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./commands": "./src/commands.ts",
+    "./common": "./src/common.ts",
     "./errors": "./src/errors.ts",
+    "./events": "./src/events.ts",
+    "./files": "./src/files.ts",
     "./health": "./src/health.ts",
-    "./version": "./src/version.ts"
+    "./missions": "./src/missions.ts",
+    "./projects": "./src/projects.ts",
+    "./routes": "./src/routes.ts",
+    "./settings": "./src/settings.ts",
+    "./version": "./src/version.ts",
+    "./workspaces": "./src/workspaces.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

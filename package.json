@@ -12,9 +12,11 @@
     "design:check": "node design/scripts/build-tokens.ts --check && node design/scripts/check-contract.ts",
     "typecheck": "tsc -p tsconfig.json && pnpm -r --parallel typecheck",
     "test": "vitest run",
+    "test:live": "MISSIONS_LIVE=1 vitest run -c vitest.live.config.ts",
     "gate": "pnpm design:check && pnpm check && pnpm check:doctor && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@shadcn/lint": "0.2.3",
     "@types/node": "24.19.2",
     "oxfmt": "0.74.0",
