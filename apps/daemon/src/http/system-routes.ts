@@ -3,6 +3,7 @@ import { routes } from "@missions/protocol/routes";
 import {
   ConnectionStatusSchema,
   GrantListSchema,
+  ModelListSchema,
   SettingsSchema,
   UpdateSettingsRequestSchema,
 } from "@missions/protocol/settings";
@@ -15,6 +16,7 @@ import { eventStream } from "../events/sse";
 import { notFound } from "../lib/app-error";
 import { run } from "../lib/exec";
 import { githubAuth } from "../projects/project-service";
+import type { ModelCatalog } from "../settings/models";
 import type { SettingsService } from "../settings/settings-service";
 import { param, parseBody, reply } from "./json";
 
@@ -22,6 +24,7 @@ export interface SystemDeps {
   store: Store;
   log: EventLog;
   settings: SettingsService;
+  models: ModelCatalog;
   droidPath: string;
   version: string;
   startedAt: Date;
@@ -65,12 +68,14 @@ export const registerSystemRoutes = (app: Hono, deps: SystemDeps) => {
   app.get(routes.settings(), (c) =>
     reply(c, SettingsSchema, deps.settings.get())
   );
-  app.patch(routes.settings(), async (c) =>
-    reply(
-      c,
-      SettingsSchema,
-      deps.settings.update(await parseBody(c, UpdateSettingsRequestSchema))
-    )
+  app.patch(routes.settings(), async (c) => {
+    const body = await parseBody(c, UpdateSettingsRequestSchema);
+    await deps.models.validate(body.orchestrator, "Orchestrator");
+    await deps.models.validate(body.worker, "Worker");
+    return reply(c, SettingsSchema, deps.settings.update(body));
+  });
+  app.get(routes.models(), async (c) =>
+    reply(c, ModelListSchema, await deps.models.list())
   );
   app.get(routes.grants(), (c) =>
     reply(c, GrantListSchema, { grants: deps.store.listGrants() })
