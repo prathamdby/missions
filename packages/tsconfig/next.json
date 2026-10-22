@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./base.json",
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "es2024"],
+    "module": "esnext",
+    "jsx": "react-jsx",
+    "allowJs": false,
+    "incremental": true,
+    "plugins": [{ "name": "next" }]
+  }
+}

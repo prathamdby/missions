@@ -1,0 +1,4 @@
+{
+  "extends": "@missions/tsconfig/base.json",
+  "include": ["src"]
+}

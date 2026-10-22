@@ -1,0 +1,27 @@
+.card {
+  --tw-ring-offset-width: 0;
+  margin: calc(-1 * var(--spacing-md)) 0;
+  padding: var(--spacing-lg) var(--spacing-xl);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: var(--leading-chat);
+  box-shadow: var(--shadow-sm);
+  z-index: var(--z-index-sticky);
+  transition-duration: var(--transition-duration-fast);
+  transition-timing-function: var(--ease-out);
+  border-color: transparent;
+}
+
+.card:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition-duration: 0s !important;
+  }
+}

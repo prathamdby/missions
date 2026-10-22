@@ -1,0 +1,28 @@
+{
+  "name": "@missions/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 4318",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 4318",
+    "typecheck": "next typegen && tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@missions/protocol": "workspace:*",
+    "geist": "1.8.2",
+    "next": "16.4.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@missions/tsconfig": "workspace:*",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2"
+  }
+}

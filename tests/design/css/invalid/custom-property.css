@@ -1,0 +1,4 @@
+/* expect: css/no-custom-property */
+.card {
+  --brand: var(--color-accent);
+}

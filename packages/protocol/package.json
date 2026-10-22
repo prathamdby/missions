@@ -1,0 +1,22 @@
+{
+  "name": "@missions/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./errors": "./src/errors.ts",
+    "./health": "./src/health.ts",
+    "./version": "./src/version.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@missions/tsconfig": "workspace:*",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

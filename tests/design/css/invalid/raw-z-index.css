@@ -1,0 +1,4 @@
+/* expect: css/no-raw-value */
+.card {
+  z-index: 999;
+}

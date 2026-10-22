@@ -1,0 +1,4 @@
+/* expect: css/no-raw-color */
+.card {
+  background-color: oklch(70% 0.2 40);
+}

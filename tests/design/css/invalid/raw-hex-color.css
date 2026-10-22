@@ -1,0 +1,4 @@
+/* expect: css/no-raw-color */
+.card {
+  color: #ff5a00;
+}

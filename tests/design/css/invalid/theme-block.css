@@ -1,0 +1,4 @@
+/* expect: css/no-theme-block */
+@theme {
+  --color-brand: var(--color-accent);
+}
