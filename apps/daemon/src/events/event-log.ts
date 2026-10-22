@@ -14,6 +14,8 @@ export interface EventLogOptions {
 }
 
 const streamOf = (missionId: string | null) => missionId ?? "";
+/** Retention is enforced every this many appends to a stream, inside the appending transaction. */
+const PRUNE_INTERVAL = 1000;
 
 /**
  * Persist-then-broadcast event log. State writes and their events share one
@@ -57,6 +59,9 @@ export class EventLog {
         type: event.type,
       })
       .run();
+    if (event.seq % PRUNE_INTERVAL === 0) {
+      this.prune(missionId);
+    }
     this.#pending.push(event);
     return event;
   };
@@ -116,6 +121,18 @@ export class EventLog {
       .limit(limit)
       .all()
       .map((row) => row.data as DaemonEvent);
+  }
+
+  pruneAll() {
+    const streams = this.#store.db
+      .selectDistinct({ stream: events.stream })
+      .from(events)
+      .all();
+    let removed = 0;
+    for (const { stream } of streams) {
+      removed += this.prune(stream === "" ? null : stream);
+    }
+    return removed;
   }
 
   /** Drops the oldest events beyond the retention budget, keeping each stream contiguous. */

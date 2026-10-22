@@ -50,6 +50,8 @@ export interface DaemonOptions {
   ghPath?: string;
   /** Test seam: model discovery without spawning Droid. */
   loadModels?: ModelLoader;
+  /** Events kept per stream before the oldest are pruned. */
+  retainEventsPerStream?: number;
 }
 
 /** Composition root; startup recovery runs before any route can be served. */
@@ -60,7 +62,10 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
   const token = await ensureToken(config.tokenPath);
   const handle = openDatabase(config.dbPath);
   const store = new Store(handle);
-  const log = new EventLog(store, { now });
+  const log = new EventLog(store, {
+    now,
+    retainPerStream: options.retainEventsPerStream,
+  });
   const journal = new OperationJournal(store, log, now);
   const settings = new SettingsService(
     store,
@@ -110,7 +115,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
   journal.recoverInterrupted();
   projects.recoverCloneJobs();
   await missionService.recover();
-  log.prune(null);
+  log.pruneAll();
 
   let closing: Promise<void> | null = null;
   const app = createApp({
