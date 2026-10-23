@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProcessSupervisor } from "../processes/process-supervisor";
 import { AgentRuntime, normalizeMessage } from "./agent-runtime";
 import type { AgentEvent, AgentRuntimeOptions } from "./agent-runtime";
-import { ORCHESTRATOR_PROMPT, WORKER_PROMPT } from "./role-tools";
+import { MAIN_PROMPT, WORKER_PROMPT } from "./prompts";
 import { SESSION_START_TIMEOUT_MS } from "./startup";
 
 type WireMessage = Parameters<DroidClientTransport["send"]>[0];
@@ -187,7 +187,7 @@ describe(AgentRuntime, () => {
   });
 
   it.each([
-    { role: "orchestrator" as const, systemPrompt: ORCHESTRATOR_PROMPT },
+    { role: "orchestrator" as const, systemPrompt: MAIN_PROMPT },
     { role: "worker" as const, systemPrompt: WORKER_PROMPT },
   ])(
     "appends $role guidance without replacing the SDK Droid preset",
@@ -755,6 +755,47 @@ describe(AgentRuntime, () => {
     }).toStrictEqual({ requests: [], stops: 2 });
   });
 
+  it("sends structured agent senders, model-only context and native Spec mode", async () => {
+    const { runtime, transport } = setup();
+    await runtime.start();
+    await runtime.submit("from-worker", "report", "steer", {
+      sender: { kind: "agent", sessionId: "worker-session", title: "Worker 1" },
+    });
+    await runtime.submit("from-user", "hello", "steer");
+    await runtime.addContext("sys:plan-guidance:1", "guidance");
+    await runtime.setInteractionMode("spec");
+    const [worker, user, context, mode] = transport.requests.slice(1);
+    expect(worker).toMatchObject({
+      id: "from-worker",
+      method: "droid.add_user_message",
+      params: {
+        queuePlacement: "end_of_turn",
+        sender: {
+          kind: "agent",
+          sessionId: "worker-session",
+          title: "Worker 1",
+        },
+        text: "report",
+      },
+    });
+    expect(user?.params).not.toHaveProperty("sender");
+    expect(context).toMatchObject({
+      id: "sys:plan-guidance:1",
+      method: "droid.add_user_message",
+      params: {
+        role: "system",
+        skipAgentLoop: true,
+        text: "guidance",
+        visibility: "llm_only",
+      },
+    });
+    expect(mode).toMatchObject({
+      method: "droid.update_session_settings",
+      params: { interactionMode: "spec" },
+    });
+    await runtime.close();
+  });
+
   it("initializes with mandatory broker permissions and native queue placements", async () => {
     const { runtime, transport } = setup();
     await expect(runtime.start()).resolves.toMatchObject({
@@ -1083,6 +1124,29 @@ describe(AgentRuntime, () => {
 });
 
 describe(normalizeMessage, () => {
+  it("preserves structured senders and hides model-only context", () => {
+    expect(
+      normalizeMessage(
+        {
+          ...message("m", "report", "r"),
+          sender: { kind: "agent", sessionId: "s", title: "Worker 1" },
+        },
+        null
+      )
+    ).toMatchObject({
+      sender: { kind: "agent", sessionId: "s", title: "Worker 1" },
+    });
+    expect(normalizeMessage(message("m", "text"), null)).toMatchObject({
+      sender: null,
+    });
+    expect(
+      normalizeMessage(
+        { ...message("m", "guidance"), role: "system", visibility: "llm_only" },
+        null
+      )
+    ).toBeNull();
+  });
+
   it("keeps real request IDs but never promotes message IDs to request IDs", () => {
     expect(
       normalizeMessage(message("m", "text", "request"), null)

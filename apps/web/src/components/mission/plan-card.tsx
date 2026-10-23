@@ -168,7 +168,31 @@ const NOTES: Record<PlanRevision["status"], string> = {
   superseded: "Superseded",
 };
 
-/** Paper RHI plan card. Only the latest proposed revision can be approved. */
+/** Approval binds to a live native request; without one the card is a record. */
+const isActionable = (plan: PlanRevision) =>
+  plan.actionable && plan.status === "proposed";
+
+const noteFor = (plan: PlanRevision) =>
+  plan.status === "proposed" && !plan.actionable
+    ? "Approval ended"
+    : NOTES[plan.status];
+
+const ApprovalEnded = () => (
+  <ChatCardFooter>
+    <p
+      className="text-xs leading-sm font-book tracking-tight text-text-tertiary"
+      data-testid="plan-not-actionable"
+    >
+      Approval ended when the mission stopped; the agent will present it again
+      after Resume.
+    </p>
+  </ChatCardFooter>
+);
+
+/**
+ * Paper RHI plan card. Only the latest proposed revision with a live native
+ * approval request can be approved or sent back.
+ */
 export const PlanCard = ({
   latest,
   plan,
@@ -182,7 +206,7 @@ export const PlanCard = ({
         <CollapsibleRow>
           <ClipboardIcon className="size-3.5" />
           <span className="truncate">
-            Plan revision {plan.revision} · {NOTES[plan.status].toLowerCase()}
+            Plan revision {plan.revision} · {noteFor(plan).toLowerCase()}
           </span>
         </CollapsibleRow>
         <CollapsibleContent>
@@ -193,20 +217,23 @@ export const PlanCard = ({
       </Collapsible>
     );
   }
+  const note = noteFor(plan);
+  let footer = null;
+  if (isActionable(plan)) {
+    footer = <PlanReview plan={plan} />;
+  } else if (plan.status === "proposed") {
+    footer = <ApprovalEnded />;
+  }
   return (
     <ChatCard label={`Plan: ${plan.title || "Plan"}`} testId="plan-card">
       <ChatCardHeader
         icon={<ClipboardIcon className="size-4 text-text-secondary" />}
-        note={
-          plan.revision > 1
-            ? `Revision ${plan.revision} · ${NOTES[plan.status]}`
-            : NOTES[plan.status]
-        }
+        note={plan.revision > 1 ? `Revision ${plan.revision} · ${note}` : note}
       >
         Plan
       </ChatCardHeader>
       <PlanBody plan={plan} />
-      {plan.status === "proposed" ? <PlanReview plan={plan} /> : null}
+      {footer}
     </ChatCard>
   );
 };

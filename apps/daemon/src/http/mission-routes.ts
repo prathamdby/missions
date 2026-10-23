@@ -8,6 +8,7 @@ import {
   EditQueueItemResponseSchema,
   MissionControlRequestSchema,
   RemoveQueueItemRequestSchema,
+  RetryQueueItemRequestSchema,
   SubmitMessageRequestSchema,
   UpdateMissionRequestSchema,
 } from "@missions/protocol/commands";
@@ -119,6 +120,17 @@ export const registerMissionRoutes = (app: Hono, missions: MissionService) => {
       )
     );
   });
+  app.post(routes.queueItemRetry(M, ":itemId"), async (c) =>
+    reply(
+      c,
+      QueueItemSchema,
+      await missions.retryQueueItem(
+        id(c),
+        param(c, "itemId"),
+        await parseBody(c, RetryQueueItemRequestSchema)
+      )
+    )
+  );
   app.post(routes.queueItemEdit(M, ":itemId"), async (c) =>
     reply(
       c,

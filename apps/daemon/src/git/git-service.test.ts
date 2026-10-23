@@ -18,6 +18,7 @@ import { githubRepository } from "./git-service";
 const opened: Daemon[] = [];
 
 const idleRuntime = (): RuntimeHandle => ({
+  addContext: () => Promise.resolve(),
   changeMode: () => Promise.resolve(),
   close: () => Promise.resolve({ stopped: true, survivors: [] }),
   edit: () => Promise.resolve("replaced"),
@@ -26,6 +27,7 @@ const idleRuntime = (): RuntimeHandle => ({
   queue: new NativeQueueTracker(() => null),
   remove: () => Promise.resolve("removed"),
   sessionId: "s",
+  setInteractionMode: () => Promise.resolve(),
   start: () =>
     Promise.resolve({
       cwd: null,

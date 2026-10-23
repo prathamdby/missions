@@ -1,30 +1,26 @@
 "use client";
 
 import type { TranscriptItem } from "@missions/protocol/missions";
-import { useState } from "react";
+import { useEffect } from "react";
 
+import { AgentMessages } from "@/components/mission/agent-message";
 import { AssignmentCard } from "@/components/mission/assignment-card";
 import { EventLine } from "@/components/mission/chat-cards";
-import {
-  BrainIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  MergeIcon,
-} from "@/components/mission/icons";
+import { CheckIcon, MergeIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { PermissionCard } from "@/components/mission/permission-card";
 import { PlanCard } from "@/components/mission/plan-card";
 import { QuestionCard } from "@/components/mission/question-card";
+import { Thinking } from "@/components/mission/thinking";
 import { CommandCard, EditCard, RanRow } from "@/components/mission/tool-cards";
-import { IndentRule, ToolRun } from "@/components/mission/tool-group";
+import { ToolRun } from "@/components/mission/tool-group";
 import { Callout } from "@/components/ui/callout";
 import { Markdown } from "@/components/ui/markdown";
-import { Spinner } from "@/components/ui/spinner";
 import { todoProgress } from "@/lib/mission/overview";
 import { goalRequestId } from "@/lib/mission/queue";
 import { transcriptRows } from "@/lib/mission/timeline";
 import type { TimelineEntry } from "@/lib/mission/timeline";
+import { markFirstOutput } from "@/lib/perf-marks";
 
 /** Paper user bubble: right-aligned, 480px max, overlay surface. */
 export const UserMessage = ({ text }: { text: string }) => (
@@ -34,36 +30,6 @@ export const UserMessage = ({ text }: { text: string }) => (
     </p>
   </div>
 );
-
-/** Paper I9X "Thought" row: a quiet disclosure over the reasoning text. */
-const Thinking = ({ text }: { text: string }) => {
-  const [open, setOpen] = useState(false);
-  const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
-  return (
-    <div className="flex flex-col gap-2xs">
-      <button
-        aria-expanded={open}
-        className="flex h-2xl w-fit cursor-pointer items-center gap-md rounded-xs text-text-tertiary transition-colors duration-fast hover:text-text-secondary focus-visible:shadow-focus"
-        onClick={() => setOpen(!open)}
-        type="button"
-      >
-        <BrainIcon aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="text-sm leading-sm font-book tracking-tight">
-          Thought
-        </span>
-        <Chevron aria-hidden="true" className="size-3 shrink-0" />
-      </button>
-      {open ? (
-        <div className="flex">
-          <IndentRule />
-          <p className="min-w-0 flex-1 py-xs pl-control text-xs leading-sm font-book tracking-tight whitespace-pre-wrap text-text-secondary">
-            {text}
-          </p>
-        </div>
-      ) : null}
-    </div>
-  );
-};
 
 /** Paper QAU: the worktree the mission runs in, under the goal. */
 export const WorkspaceLine = () => {
@@ -97,6 +63,23 @@ const SystemLine = ({ text }: { text: string }) => (
   <EventLine icon={null}>{text}</EventLine>
 );
 
+/** A streaming preview; its first paint is a performance mark. */
+const Preview = ({
+  entry,
+}: {
+  entry: Extract<TimelineEntry, { kind: "preview" }>;
+}) => {
+  const { id, previewKind, text } = entry;
+  useEffect(() => markFirstOutput(previewKind, id), [id, previewKind]);
+  return previewKind === "thinking" ? (
+    <Thinking streaming text={text} />
+  ) : (
+    <Markdown className="max-w-prose" streaming>
+      {text}
+    </Markdown>
+  );
+};
+
 const EntryBody = ({ entry }: { entry: TimelineEntry }) => {
   switch (entry.kind) {
     case "user": {
@@ -119,14 +102,10 @@ const EntryBody = ({ entry }: { entry: TimelineEntry }) => {
       );
     }
     case "preview": {
-      return entry.previewKind === "thinking" ? (
-        <div className="flex h-2xl items-center gap-md text-sm leading-sm font-book tracking-tight text-text-tertiary">
-          <Spinner label="Thinking" size="sm" />
-          Thinking…
-        </div>
-      ) : (
-        <Markdown className="max-w-prose">{entry.text}</Markdown>
-      );
+      return <Preview entry={entry} />;
+    }
+    case "agent_message": {
+      return <AgentMessages items={[entry.item]} />;
     }
     case "permission": {
       return <PermissionCard request={entry.request} />;
@@ -181,6 +160,13 @@ export const Transcript = ({
                   <EditCard call={call} key={call.id} />
                 );
               })}
+            </li>
+          );
+        }
+        if (row.kind === "messages") {
+          return (
+            <li className="flex min-w-0 flex-col" key={row.id}>
+              <AgentMessages items={row.items} />
             </li>
           );
         }

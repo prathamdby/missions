@@ -52,5 +52,7 @@ export const routes = {
     apiPath(`/missions/${missionId}/queue/${itemId}`),
   queueItemEdit: (missionId: string, itemId: string) =>
     apiPath(`/missions/${missionId}/queue/${itemId}/edit`),
+  queueItemRetry: (missionId: string, itemId: string) =>
+    apiPath(`/missions/${missionId}/queue/${itemId}/retry`),
   settings: () => apiPath("/settings"),
 } as const;

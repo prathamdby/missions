@@ -16,6 +16,22 @@ export type Role = z.infer<typeof RoleSchema>;
 export const DeliveryModeSchema = z.enum(["steer", "queue"]);
 export type DeliveryMode = z.infer<typeof DeliveryModeSchema>;
 
+/** Work is the default; Plan is explicit, read-only for every agent, and ends with native approval. */
+export const ExecutionModeSchema = z.enum(["work", "plan"]);
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
+
+/** Who produced a delivered message. Bound server-side, never taken from agent input. */
+export const MessageOriginSchema = z.enum(["user", "agent", "daemon"]);
+export type MessageOrigin = z.infer<typeof MessageOriginSchema>;
+
+export const MessagePurposeSchema = z.enum([
+  "message",
+  "assignment",
+  "handoff",
+  "control",
+]);
+export type MessagePurpose = z.infer<typeof MessagePurposeSchema>;
+
 export const ReasoningEffortSchema = z.enum([
   "none",
   "dynamic",

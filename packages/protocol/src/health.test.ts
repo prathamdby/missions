@@ -4,7 +4,7 @@ import { ApiErrorSchema } from "./errors";
 import { HEALTH_PATH, HealthResponseSchema } from "./health";
 
 const valid = {
-  protocolVersion: 1,
+  protocolVersion: 2,
   service: "missions-daemon",
   startedAt: "2026-10-22T12:00:00.000Z",
   status: "ok",
@@ -13,8 +13,8 @@ const valid = {
 };
 
 describe("health contract", () => {
-  it("is versioned under /v1", () => {
-    expect(HEALTH_PATH).toBe("/v1/health");
+  it("is versioned under /v2", () => {
+    expect(HEALTH_PATH).toBe("/v2/health");
   });
 
   it("accepts a well-formed response", () => {
@@ -22,7 +22,7 @@ describe("health contract", () => {
   });
 
   it.each([
-    ["wrong protocol version", { ...valid, protocolVersion: 2 }],
+    ["wrong protocol version", { ...valid, protocolVersion: 1 }],
     ["negative uptime", { ...valid, uptimeMs: -1 }],
     ["non-ISO start time", { ...valid, startedAt: "yesterday" }],
     ["unknown field", { ...valid, token: "secret" }],

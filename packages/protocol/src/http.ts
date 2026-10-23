@@ -13,7 +13,7 @@ export const AUTH_SCHEME = "Bearer";
 /** Same-origin browser path that the Next.js server forwards to the daemon. */
 export const PROXY_PREFIX = "/api/daemon";
 
-/** SSE event names on `GET /v1/events`. Every `event` frame carries `id: seq`. */
+/** SSE event names on `GET /v2/events`. Every `event` frame carries `id: seq`. */
 export const SSE_EVENT = "event";
 export const SSE_RESYNC = "resync";
 export const SSE_HEARTBEAT_MS = 15_000;

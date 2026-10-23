@@ -1,12 +1,23 @@
+"use client";
+
 import type { ComponentProps } from "react";
-import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import {
+  defaultRehypePlugins,
+  Streamdown,
+  useIsCodeFenceIncomplete,
+} from "streamdown";
+import type { Components, StreamdownProps } from "streamdown";
 
 import { CodeBlock, InlineCode } from "@/components/ui/code-block";
+import {
+  codePlugin,
+  HighlightedCode,
+  useHighlightedCode,
+} from "@/components/ui/syntax-highlight";
 import { cn } from "@/lib/utils";
 
 const LANGUAGE = /language-(?<lang>[\w-]+)/u;
+const TRAILING_NEWLINE = /\n$/u;
 
 type Props<T extends keyof React.JSX.IntrinsicElements> = ComponentProps<T> & {
   node?: unknown;
@@ -45,12 +56,28 @@ const OrderedList = ({ node: _node, ...props }: Props<"ol">) => (
 const ListItem = ({ node: _node, ...props }: Props<"li">) => (
   <li className="type-body text-text" {...props} />
 );
-const Link = ({ children, node: _node, ...props }: Props<"a">) => (
+
+type LinkProps = Props<"a">;
+
+/**
+ * Same-page anchors (footnotes) stay in the tab; everything else opens a new
+ * one. The sanitizer's own rel/target are replaced, not merged.
+ */
+const linkProps = ({
+  href,
+  node: _node,
+  rel: _rel,
+  target: _target,
+  ...props
+}: Omit<LinkProps, "children">) =>
+  href?.startsWith("#")
+    ? { ...props, href }
+    : { ...props, href, rel: "noopener noreferrer", target: "_blank" };
+
+const Link = ({ children, ...props }: LinkProps) => (
   <a
     className="text-info underline decoration-info/40 underline-offset-2 hover:decoration-info"
-    rel="noopener noreferrer"
-    target="_blank"
-    {...props}
+    {...linkProps(props)}
   >
     {children}
   </a>
@@ -80,47 +107,96 @@ const TableCell = ({ node: _node, ...props }: Props<"td">) => (
 );
 const Rule = () => <hr className="border-border-subtle" />;
 
-const Pre = ({ children }: Props<"pre">) => children;
+// Streamdown's defaults for these carry its own typography; plain elements keep ours.
+const TableSection = ({ node: _node, ...props }: Props<"tbody">) => (
+  <tbody {...props} />
+);
+const TableHeader = ({ node: _node, ...props }: Props<"thead">) => (
+  <thead {...props} />
+);
+const TableRow = ({ node: _node, ...props }: Props<"tr">) => <tr {...props} />;
+const Strong = ({ node: _node, ...props }: Props<"strong">) => (
+  <strong className="font-semibold" {...props} />
+);
+const Superscript = ({ node: _node, ...props }: Props<"sup">) => (
+  <sup {...props} />
+);
+const Subscript = ({ node: _node, ...props }: Props<"sub">) => (
+  <sub {...props} />
+);
+const Section = ({ node: _node, ...props }: Props<"section">) => (
+  <section className="flex flex-col gap-sm" {...props} />
+);
+/** Agent images open in a new tab rather than loading remote content inline. */
+const Image = ({ alt, node: _node, src }: Props<"img">) =>
+  typeof src === "string" ? (
+    <a
+      className="text-info underline decoration-info/40 underline-offset-2 hover:decoration-info"
+      href={src}
+      rel="noopener noreferrer"
+      target="_blank"
+    >
+      {alt || src}
+    </a>
+  ) : null;
 
-const Code = ({
-  children,
-  className,
-  node: _node,
-  ...props
-}: Props<"code">) => {
-  const text = String(children ?? "");
-  const lang = LANGUAGE.exec(className ?? "")?.groups?.lang;
-  if (lang || text.includes("\n")) {
-    return (
-      <CodeBlock
-        code={text.replace(/\n$/u, "")}
-        meta={
-          lang ? (
-            <span className="type-micro text-text-tertiary">{lang}</span>
-          ) : undefined
-        }
-        title={lang ? " " : undefined}
-      />
-    );
-  }
-  return <InlineCode {...props}>{children}</InlineCode>;
+const Inline = ({ node: _node, ...props }: Props<"code">) => (
+  <InlineCode {...props} />
+);
+
+/** A fenced block: app code chrome around Shiki tokens colored by design tokens. */
+const Fence = ({ children, className }: Props<"code">) => {
+  const incomplete = useIsCodeFenceIncomplete();
+  const lang = LANGUAGE.exec(className ?? "")?.groups?.lang ?? "";
+  const code = String(children ?? "").replace(TRAILING_NEWLINE, "");
+  const highlighted = useHighlightedCode(code, lang, incomplete);
+  return (
+    <CodeBlock
+      code={code}
+      highlighted={
+        highlighted ? (
+          <HighlightedCode
+            rest={highlighted.rest}
+            result={highlighted.result}
+          />
+        ) : undefined
+      }
+      meta={
+        lang ? (
+          <span className="type-micro text-text-tertiary">{lang}</span>
+        ) : undefined
+      }
+      title={lang ? " " : undefined}
+    />
+  );
 };
 
 const COMPONENTS: Components = {
   a: Link,
   blockquote: Quote,
-  code: Code,
+  code: Fence,
   h1: Heading1,
   h2: Heading2,
   h3: Heading3,
+  h4: Heading3,
+  h5: Heading3,
+  h6: Heading3,
   hr: Rule,
+  img: Image,
+  inlineCode: Inline,
   li: ListItem,
   ol: OrderedList,
   p: Paragraph,
-  pre: Pre,
+  section: Section,
+  strong: Strong,
+  sub: Subscript,
+  sup: Superscript,
   table: Table,
+  tbody: TableSection,
   td: TableCell,
   th: TableHead,
+  thead: TableHeader,
+  tr: TableRow,
   ul: List,
 };
 
@@ -138,12 +214,10 @@ const PanelParagraph = ({ node: _node, ...props }: Props<"p">) => (
 const PanelListItem = ({ node: _node, ...props }: Props<"li">) => (
   <li className="type-body text-text-secondary" {...props} />
 );
-const PanelLink = ({ children, node: _node, ...props }: Props<"a">) => (
+const PanelLink = ({ children, ...props }: LinkProps) => (
   <a
     className="text-xs leading-sm font-book tracking-tight text-accent-text hover:underline"
-    rel="noopener noreferrer"
-    target="_blank"
-    {...props}
+    {...linkProps(props)}
   >
     {children}
   </a>
@@ -154,32 +228,77 @@ const PANEL_COMPONENTS: Components = {
   h1: PanelHeading,
   h2: PanelHeading,
   h3: PanelHeading,
+  h4: PanelHeading,
+  h5: PanelHeading,
+  h6: PanelHeading,
   li: PanelListItem,
   p: PanelParagraph,
 };
 
-/** Agent-authored Markdown. Raw HTML is never rendered. */
+const { harden: hardenEntry, sanitize } = defaultRehypePlugins;
+if (!(sanitize && Array.isArray(hardenEntry))) {
+  throw new TypeError(
+    "Streamdown no longer exposes its sanitize and harden plugins"
+  );
+}
+const [harden] = hardenEntry;
+
+/*
+ * Streamdown's defaults minus `rehype-raw`, so HTML in agent output stays
+ * literal text. Harden drops javascript:, data:, file: and vbscript: URLs and
+ * any protocol outside its safe list, keeping the link text.
+ */
+const REHYPE_PLUGINS: StreamdownProps["rehypePlugins"] = [
+  sanitize,
+  [
+    harden,
+    {
+      allowDataImages: false,
+      allowedImagePrefixes: ["*"],
+      allowedLinkPrefixes: ["*"],
+      allowedProtocols: [],
+      imageBlockPolicy: "text-only",
+      linkBlockPolicy: "text-only",
+    },
+  ],
+];
+
+const PLUGINS: StreamdownProps["plugins"] = { code: codePlugin };
+const LINK_SAFETY: StreamdownProps["linkSafety"] = { enabled: false };
+
+/**
+ * Agent-authored Markdown. Raw HTML is never rendered. `streaming` renders a
+ * growing preview: blocks are memoized and unfinished syntax (open fences,
+ * emphasis, links) is closed before parsing. Finished text renders statically.
+ */
 export const Markdown = ({
   children,
   className,
   appearance = "default",
+  streaming = false,
 }: {
   children: string;
   className?: string;
   appearance?: "default" | "panel";
+  streaming?: boolean;
 }) => (
-  <div
+  <Streamdown
     className={cn(
-      "flex min-w-0 flex-col break-words",
+      // space-y-0 replaces Streamdown's root spacing; blocks use our gap instead.
+      "flex min-w-0 flex-col space-y-0 break-words",
       appearance === "panel" ? "gap-sm" : "gap-md",
       className
     )}
+    components={appearance === "panel" ? PANEL_COMPONENTS : COMPONENTS}
+    controls={false}
+    isAnimating={streaming}
+    lineNumbers={false}
+    linkSafety={LINK_SAFETY}
+    mode={streaming ? "streaming" : "static"}
+    parseIncompleteMarkdown={streaming}
+    plugins={PLUGINS}
+    rehypePlugins={REHYPE_PLUGINS}
   >
-    <ReactMarkdown
-      components={appearance === "panel" ? PANEL_COMPONENTS : COMPONENTS}
-      remarkPlugins={[remarkGfm]}
-    >
-      {children}
-    </ReactMarkdown>
-  </div>
+    {children}
+  </Streamdown>
 );

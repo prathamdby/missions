@@ -1,4 +1,5 @@
 import { AUTH_SCHEME, OPERATION_HEADER } from "@missions/protocol/http";
+import { API_PREFIX } from "@missions/protocol/version";
 
 export interface ProxyRequestInfo {
   fetchSite: string | null;
@@ -88,9 +89,15 @@ export const forwardResponseHeaders = (upstream: Headers) => {
   return headers;
 };
 
-/** Maps catch-all segments to a daemon path; only `/v1/...` is reachable. */
+const API_SEGMENT = API_PREFIX.slice(1);
+
+/**
+ * Maps catch-all segments to a daemon path. Only the current protocol
+ * version is reachable, so a mismatched web/daemon pair fails before any
+ * mutation executes.
+ */
 export const upstreamPath = (segments: readonly string[] | undefined) => {
-  if (!segments || segments[0] !== "v1" || segments.length < 2) {
+  if (!segments || segments[0] !== API_SEGMENT || segments.length < 2) {
     return null;
   }
   if (

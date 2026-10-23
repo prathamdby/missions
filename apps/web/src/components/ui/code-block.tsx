@@ -24,8 +24,11 @@ const preVariants = cva(
 );
 
 type CodeBlockProps = VariantProps<typeof preVariants> & {
+  /** Plain text: what the copy button writes and what renders without `highlighted`. */
   code: string;
   copy?: boolean;
+  /** Pre-colored content for `code` (syntax tokens); copy still uses `code`. */
+  highlighted?: ReactNode;
   meta?: ReactNode;
   title?: ReactNode;
   tone?: "default" | "error";
@@ -35,6 +38,7 @@ export const CodeBlock = ({
   code,
   copy = true,
   height,
+  highlighted,
   meta,
   title,
   tone = "default",
@@ -56,7 +60,7 @@ export const CodeBlock = ({
         tone === "error" ? "text-terminal-red" : ""
       )}
     >
-      <code>{code}</code>
+      <code>{highlighted ?? code}</code>
     </pre>
     {copy && !(title || meta) ? (
       <div className="absolute top-xs right-xs opacity-0 transition-opacity duration-fast group-focus-within/code:opacity-100 group-hover/code:opacity-100">

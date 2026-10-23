@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 import Database from "better-sqlite3";
@@ -48,6 +48,42 @@ const assertKnownSchema = (sqlite: Database.Database, file: string) => {
   }
 };
 
+/**
+ * Before applying migrations to an existing database, keep a consistent copy
+ * next to it. Rollback restores this copy with the matching app/daemon pair;
+ * downgrading over upgraded records is unsupported.
+ */
+export const backupBeforeMigration = (
+  sqlite: Database.Database,
+  file: string
+): string | null => {
+  if (file === ":memory:") {
+    return null;
+  }
+  const tracked = sqlite
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__drizzle_migrations'"
+    )
+    .get();
+  if (!tracked) {
+    return null;
+  }
+  const { applied } = sqlite
+    .prepare("SELECT COUNT(*) AS applied FROM __drizzle_migrations")
+    .get() as { applied: number };
+  const migrations = readMigrationFiles({ migrationsFolder: MIGRATIONS });
+  if (applied >= migrations.length) {
+    return null;
+  }
+  const target = `${file}.pre-migration-${applied}.bak`;
+  if (existsSync(target)) {
+    return target;
+  }
+  sqlite.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`);
+  chmodSync(target, 0o600);
+  return target;
+};
+
 const prepare = (sqlite: Database.Database, file: string) => {
   try {
     sqlite.pragma("journal_mode = WAL");
@@ -67,6 +103,7 @@ const prepare = (sqlite: Database.Database, file: string) => {
   sqlite.pragma("foreign_keys = ON");
   sqlite.pragma("busy_timeout = 5000");
   assertKnownSchema(sqlite, file);
+  backupBeforeMigration(sqlite, file);
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: MIGRATIONS });
   return db;

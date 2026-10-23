@@ -21,6 +21,7 @@ import {
   isMissionActive,
 } from "@/lib/format";
 import { displayStatus } from "@/lib/mission/display-status";
+import { modeStatus } from "@/lib/mission/execution-mode";
 import { todoProgress } from "@/lib/mission/overview";
 import { useNow } from "@/lib/use-now";
 
@@ -142,6 +143,7 @@ export const MissionHeader = ({
     (entry) => entry.id === mission.projectId
   );
   const status = displayStatus(live);
+  const mode = modeStatus(mission);
   const elapsed = useElapsed(
     mission.createdAt,
     isMissionActive(mission.status)
@@ -175,6 +177,11 @@ export const MissionHeader = ({
       >
         {status.label}
       </Badge>
+      {mode ? (
+        <Badge className="max-md:hidden" data-testid="mission-mode" tone="info">
+          {mode}
+        </Badge>
+      ) : null}
       {project ? (
         <span className="font-mono text-2xs leading-xs text-text-tertiary max-md:hidden">
           {project.name}

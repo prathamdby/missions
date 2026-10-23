@@ -10,6 +10,7 @@ import type {
   EditQueueItemResponse,
   MissionControlRequest,
   PushRequest,
+  RetryQueueItemRequest,
   SubmitMessageRequest,
   UpdateMissionRequest,
 } from "@missions/protocol/commands";
@@ -41,6 +42,7 @@ export interface MissionCommandInputs {
   queueMode: ChangeQueueModeRequest & { itemId: string };
   removeQueue: { expectedRevision: number; itemId: string };
   resume: WithoutOperation<MissionControlRequest>;
+  retryQueue: WithoutOperation<RetryQueueItemRequest> & { itemId: string };
   update: UpdateMissionRequest;
 }
 
@@ -59,6 +61,7 @@ export interface MissionCommandResults {
   queueMode: QueueItem;
   removeQueue: QueueItem;
   resume: Mission;
+  retryQueue: QueueItem;
   update: Mission;
 }
 
