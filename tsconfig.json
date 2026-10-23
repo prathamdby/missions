@@ -8,6 +8,7 @@
     "design/**/*.ts",
     "tests/design/*.ts",
     "*.config.ts",
+    "e2e/**/*.ts",
     "apps/web/oxlint.config.ts",
     "tests/design/fixture-app/fixtures.oxlint.config.ts"
   ]
