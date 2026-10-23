@@ -69,6 +69,13 @@
   --color-terminal-cyan: #6CD4C4; /* ANSI cyan */
   --color-terminal-white: #E5E5E5; /* ANSI white */
   --color-terminal-dim: #8A8A8A; /* ANSI dim, summaries */
+  --color-scrim: #00000099; /* Behind dialogs (black 60%). */
+  --color-scrim-strong: #000000A6; /* Behind mobile drawers and sheets (black 65%). */
+  --color-logo-fill-2: #E8E8E8; /* ASCII logo blocks, row 2. Row 1 uses text; the rows fade toward the bottom. */
+  --color-logo-fill-3: #D4D4D4; /* ASCII logo blocks, row 3. */
+  --color-logo-fill-4: #B8B8B8; /* ASCII logo blocks, row 4. */
+  --color-logo-fill-5: #9A9A9A; /* ASCII logo blocks, row 5. */
+  --color-logo-shade: #FF5A0099; /* ASCII logo box-drawing shadow (accent 60%). */
 
   --font-sans: var(--font-geist-sans), Geist, ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; /* Machine output only: code, IDs, paths, timers. */
@@ -101,14 +108,23 @@
   --leading-xl: 28px;
   --leading-2xl: 36px;
 
+  --spacing-hairline: 1px; /* Off-grid step used across Paper: the gap between stacked rows in lists and menus. */
   --spacing-2xs: 2px;
+  --spacing-stack: 3px; /* Off-grid step used in Paper rich menu rows (Y8B, PNO): between a title, its description, and examples. */
   --spacing-xs: 4px;
   --spacing-sm: 6px; /* Default gap between related items. */
+  --spacing-tight: 5px; /* Off-grid step used in Paper mission screens: icon and short label pairs. */
   --spacing-md: 8px;
+  --spacing-control: 10px; /* Off-grid step used in Paper mission screens: row gaps and pill or button side padding. */
   --spacing-lg: 12px;
+  --spacing-card: 14px; /* Off-grid step used in Paper mission screens: card and composer padding. */
   --spacing-xl: 16px;
+  --spacing-field: 18px; /* Off-grid step used in Paper dialogs: the gap between form fields and the dialog header's top padding. */
+  --spacing-gutter: 20px; /* Off-grid step used in Paper mission screens: pane gutters and header side padding. */
   --spacing-2xl: 24px;
+  --spacing-section: 28px; /* Off-grid step used in Paper mission screens: gap between right panel sections. */
   --spacing-3xl: 32px;
+  --spacing-group: 36px; /* Off-grid step used in Paper Z6J: the gap between settings groups. */
   --spacing-4xl: 48px;
 
   --radius-xs: 3px; /* Inline code, tiny chips. */
@@ -122,6 +138,7 @@
   --shadow-button: inset 0 1px 0 #FFFFFF1F, 0 0 0 1px var(--color-border), 0 1px 2px var(--color-shadow); /* Secondary and icon buttons. */
   --shadow-sm: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border), 0 1px 2px var(--color-shadow), 0 2px 6px #0000003D; /* Cards, lists, panes. */
   --shadow-md: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border-strong), 0 2px 4px var(--color-shadow), 0 8px 20px #00000052; /* Composer, raised controls. */
+  --shadow-composer-focus: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border-strong), 0 0 0 4px var(--color-accent-muted), 0 8px 20px #00000052; /* Composer while its field has focus (Paper PZ7): md with the drop layer swapped for an accent ring. */
   --shadow-lg: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border-strong), 0 8px 24px #00000080, 0 24px 48px #00000066; /* Menus, popovers, modals. */
   --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus); /* Focus-visible ring, as specified on --color-focus. */
 
@@ -137,6 +154,7 @@
   --container-chat: 720px; /* Max width of the conversation column. */
   --container-panel: 520px; /* Right inspector panel width. */
   --container-prose: 560px; /* Max width for message and long-form text: 60–75 characters at 13px. */
+  --container-settings: 760px; /* Settings page column width (Paper Z6J). */
 
   --transition-duration-fast: 120ms; /* Hover, color, opacity. */
   --transition-duration-base: 200ms; /* Press, toggles, checkboxes. */

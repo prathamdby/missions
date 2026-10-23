@@ -2,21 +2,17 @@
 
 import type { PlanRevision } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
-import { CheckIcon, FileTextIcon } from "lucide-react";
 import { useState } from "react";
 
+import {
+  ChatCard,
+  ChatCardFooter,
+  ChatCardHeader,
+} from "@/components/mission/chat-cards";
+import { ClipboardIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { reportMutationError } from "@/components/mission/report-error";
-import { Badge, Tag } from "@/components/ui/badge";
-import type { BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
@@ -25,16 +21,12 @@ import {
 import { Textarea } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { api } from "@/lib/api/endpoints";
+import { useModelName } from "@/lib/api/queries";
+import { groupTodos } from "@/lib/mission/overview";
+import { parsePlan } from "@/lib/mission/plan";
 
-const STATUS: Record<
-  PlanRevision["status"],
-  { label: string; tone: BadgeTone }
-> = {
-  approved: { label: "Approved", tone: "success" },
-  proposed: { label: "Waiting for you", tone: "warning" },
-  rejected: { label: "Sent back", tone: "muted" },
-  superseded: { label: "Superseded", tone: "quiet" },
-};
+const plural = (count: number, one: string) =>
+  `${count} ${count === 1 ? one : `${one}s`}`;
 
 const PlanReview = ({ plan }: { plan: PlanRevision }) => {
   const { applyLocal, missionId, refresh } = useMission();
@@ -54,7 +46,7 @@ const PlanReview = ({ plan }: { plan: PlanRevision }) => {
 
   if (revising) {
     return (
-      <CardFooter>
+      <ChatCardFooter>
         <form
           className="flex w-full flex-col gap-md"
           onSubmit={(event) => {
@@ -83,13 +75,14 @@ const PlanReview = ({ plan }: { plan: PlanRevision }) => {
             </Button>
           </div>
         </form>
-      </CardFooter>
+      </ChatCardFooter>
     );
   }
 
   return (
-    <CardFooter>
+    <ChatCardFooter>
       <Button
+        data-testid="plan-approve"
         disabled={decide.isPending}
         onClick={() => decide.mutate({ approve: true })}
         variant="primary"
@@ -103,22 +96,79 @@ const PlanReview = ({ plan }: { plan: PlanRevision }) => {
       >
         Keep planning
       </Button>
-    </CardFooter>
+    </ChatCardFooter>
   );
 };
 
-const PlanBody = ({ plan }: { plan: PlanRevision }) => (
-  <CardContent>
-    <Markdown>{plan.markdown}</Markdown>
-    {plan.feedback ? (
-      <p className="type-caption text-text-tertiary">
-        Your feedback: {plan.feedback}
+const PlanBody = ({ plan }: { plan: PlanRevision }) => {
+  const { live } = useMission();
+  const orchestratorModel = useModelName(live.mission.orchestrator.modelId);
+  const workerModel = useModelName(live.mission.worker.modelId);
+  const parsed = parsePlan(plan.markdown);
+  const todoCount = groupTodos(live.todos, live.agents).main.length;
+  const counts = [
+    parsed ? plural(parsed.steps.length, "step") : null,
+    (plan.status === "approved" || plan.status === "proposed") && todoCount > 0
+      ? plural(todoCount, "todo")
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div className="flex flex-col gap-control p-card">
+      {parsed ? (
+        <>
+          <p className="text-sm leading-chat font-book tracking-tight text-text">
+            {parsed.summary || plan.title}
+          </p>
+          <ol className="flex flex-col">
+            {parsed.steps.map((step, index) => (
+              <li
+                className="flex gap-control py-sm"
+                key={`${index}-${step.title}`}
+              >
+                <span className="w-xl shrink-0 font-mono text-xs leading-lg font-book text-text-tertiary">
+                  {index + 1}.
+                </span>
+                <span className="flex min-w-0 flex-col gap-2xs">
+                  <span className="text-sm leading-lg font-medium tracking-tight text-text">
+                    {step.title}
+                  </span>
+                  {step.detail ? (
+                    <span className="text-xs leading-sm font-book tracking-tight text-text-tertiary">
+                      {step.detail}
+                    </span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : (
+        <Markdown>{plan.markdown}</Markdown>
+      )}
+      <p className="flex flex-wrap items-center gap-x-xl gap-y-xs pt-xs text-xs leading-sm font-book tracking-tight text-text-tertiary">
+        {counts ? <span>{counts}</span> : null}
+        <span>Orchestrator · {orchestratorModel}</span>
+        <span>Workers · {workerModel}</span>
       </p>
-    ) : null}
-  </CardContent>
-);
+      {plan.feedback ? (
+        <p className="text-xs leading-sm font-book tracking-tight text-text-tertiary">
+          Your feedback: {plan.feedback}
+        </p>
+      ) : null}
+    </div>
+  );
+};
 
-/** Plan revision. Only the latest proposed revision can be approved. */
+const NOTES: Record<PlanRevision["status"], string> = {
+  approved: "Approved",
+  proposed: "Waiting for your approval",
+  rejected: "Sent back for changes",
+  superseded: "Superseded",
+};
+
+/** Paper RHI plan card. Only the latest proposed revision can be approved. */
 export const PlanCard = ({
   latest,
   plan,
@@ -126,47 +176,37 @@ export const PlanCard = ({
   latest: boolean;
   plan: PlanRevision;
 }) => {
-  const status = STATUS[plan.status];
   if (!latest) {
     return (
       <Collapsible>
         <CollapsibleRow>
-          <FileTextIcon aria-hidden="true" />
+          <ClipboardIcon className="size-3.5" />
           <span className="truncate">
-            Plan revision {plan.revision} · {status.label.toLowerCase()}
+            Plan revision {plan.revision} · {NOTES[plan.status].toLowerCase()}
           </span>
         </CollapsibleRow>
         <CollapsibleContent>
-          <Card tone="inset">
+          <div className="rounded-md bg-surface-raised shadow-sm">
             <PlanBody plan={plan} />
-          </Card>
+          </div>
         </CollapsibleContent>
       </Collapsible>
     );
   }
   return (
-    <Card aria-label={`Plan: ${plan.title}`}>
-      <CardHeader>
-        <FileTextIcon
-          aria-hidden="true"
-          className="size-4 shrink-0 text-text-secondary"
-        />
-        <CardTitle>{plan.title || "Plan"}</CardTitle>
-        <Tag>r{plan.revision}</Tag>
-        <Badge dot tone={status.tone}>
-          {status.label}
-        </Badge>
-      </CardHeader>
+    <ChatCard label={`Plan: ${plan.title || "Plan"}`} testId="plan-card">
+      <ChatCardHeader
+        icon={<ClipboardIcon className="size-4 text-text-secondary" />}
+        note={
+          plan.revision > 1
+            ? `Revision ${plan.revision} · ${NOTES[plan.status]}`
+            : NOTES[plan.status]
+        }
+      >
+        Plan
+      </ChatCardHeader>
       <PlanBody plan={plan} />
       {plan.status === "proposed" ? <PlanReview plan={plan} /> : null}
-      {plan.status === "approved" ? (
-        <CardFooter>
-          <p className="flex items-center gap-sm type-caption text-text-tertiary">
-            <CheckIcon aria-hidden="true" className="size-3.5" />
-            Plan approved. Workers build from this revision.
-          </p>
-        </CardFooter>
-      ) : null}
-    </Card>
+    </ChatCard>
   );
 };

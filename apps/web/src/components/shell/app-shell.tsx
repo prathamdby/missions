@@ -2,11 +2,13 @@
 
 import type { ReactNode } from "react";
 
+import { GlobalShortcuts } from "@/components/shell/global-shortcuts";
+import { SearchDialog } from "@/components/shell/search-dialog";
 import { useShell } from "@/components/shell/shell-context";
 import { Sidebar } from "@/components/shell/sidebar";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 
-/** Sidebar, then one rounded pane that pages fill. Below `md` the sidebar is a drawer. */
+/** Sidebar, then one rounded pane that pages fill. Below `md` the sidebar is a drawer (JD1). */
 export const AppShell = ({ children }: { children: ReactNode }) => {
   const { navOpen, setNavOpen } = useShell();
   return (
@@ -20,11 +22,11 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
       <Sheet onOpenChange={setNavOpen} open={navOpen}>
         <SheetContent aria-describedby={undefined} side="left">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <Sidebar />
+          <Sidebar layout="touch" />
         </SheetContent>
       </Sheet>
       <main
-        className="flex min-w-0 flex-1 md:py-md md:pr-md"
+        className="flex min-w-0 flex-1 md:my-md md:mr-md"
         id="main"
         tabIndex={-1}
       >
@@ -32,6 +34,8 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
           {children}
         </div>
       </main>
+      <SearchDialog />
+      <GlobalShortcuts />
     </div>
   );
 };

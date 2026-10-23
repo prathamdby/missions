@@ -1,6 +1,13 @@
 export type ToastTone = "danger" | "info" | "success" | "warning";
 
+export interface ToastAction {
+  href: string;
+  label: string;
+}
+
 export interface ToastMessage {
+  /** A link shown before the close button, e.g. "Settings" (OZS). */
+  action?: ToastAction;
   description?: string;
   id: string;
   title: string;

@@ -66,6 +66,89 @@ export const CodeBlock = ({
   </div>
 );
 
+/** Raw command output on the page background (NZJ, OBV). */
+export const TerminalLog = ({ className, ...props }: ComponentProps<"div">) => (
+  <div
+    className={cn(
+      "flex min-w-0 flex-col gap-2xs overflow-x-auto rounded-sm bg-bg px-lg py-control shadow-[inset_0_0_0_1px_var(--color-border-subtle)]",
+      className
+    )}
+    {...props}
+  />
+);
+
+const terminalLineTone = {
+  current: "text-text-secondary",
+  danger: "text-danger",
+  muted: "text-text-tertiary",
+} as const;
+
+export const TerminalLine = ({
+  className,
+  tone = "muted",
+  ...props
+}: ComponentProps<"p"> & { tone?: keyof typeof terminalLineTone }) => (
+  <p
+    className={cn(
+      // No weight class here: tailwind-merge reads `font-book` as a family and would drop `font-mono`.
+      "min-h-5 font-mono text-2xs leading-sm whitespace-pre",
+      terminalLineTone[tone],
+      className
+    )}
+    {...props}
+  />
+);
+
+/** The command a dialog is about to run, previewed in a quiet inset box (ONT). */
+export const CommandPreview = ({
+  className,
+  command,
+  icon,
+}: {
+  className?: string;
+  command: string;
+  icon?: ReactNode;
+}) => (
+  <div
+    className={cn(
+      "flex min-w-0 items-center gap-sm rounded-sm bg-bg px-lg py-control text-text-tertiary shadow-[inset_0_0_0_1px_var(--color-border-subtle)]",
+      className
+    )}
+  >
+    {icon}
+    <span className="min-w-0 truncate font-mono text-2xs leading-xs font-book">
+      {command}
+    </span>
+  </div>
+);
+
+/** A shell prompt with one command and a copy button (NNV). */
+export const CommandField = ({
+  className,
+  command,
+}: {
+  className?: string;
+  command: string;
+}) => (
+  <div
+    className={cn(
+      "flex h-10 w-90 max-w-full shrink-0 items-center gap-control rounded-sm bg-bg pr-md pl-card shadow-[inset_0_0_0_1px_var(--color-border)]",
+      className
+    )}
+  >
+    <span
+      aria-hidden="true"
+      className="font-mono text-xs leading-sm font-book text-text-tertiary"
+    >
+      $
+    </span>
+    <code className="min-w-0 flex-1 truncate text-left font-mono text-xs leading-sm text-text">
+      {command}
+    </code>
+    <CopyButton label={`Copy ${command}`} size="md" value={command} />
+  </div>
+);
+
 export const InlineCode = ({ className, ...props }: ComponentProps<"code">) => (
   <code
     className={cn(

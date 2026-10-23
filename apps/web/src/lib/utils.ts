@@ -21,11 +21,13 @@ const twMerge = extendTailwindMerge<"typography">({
       ],
     },
     theme: {
+      "font-weight": ["regular", "book", "medium", "semibold", "bold"],
       leading: ["xs", "sm", "md", "lg", "chat", "xl", "2xl"],
       radius: ["xs", "sm", "md", "lg", "xl", "2xl", "full"],
       shadow: ["button", "sm", "md", "lg", "focus"],
       spacing: ["2xs", "xs", "sm", "md", "lg", "xl", "2xl", "3xl", "4xl"],
       text: ["2xs", "xs", "sm", "base", "lg", "xl", "2xl", "3xl"],
+      tracking: ["tighter", "tight", "normal", "wide"],
     },
   },
 });

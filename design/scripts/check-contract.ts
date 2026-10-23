@@ -5,12 +5,16 @@ import { checkCss } from "../contract/css.ts";
 import { loadManifest, ROOT, TOKENS_CSS_PATH } from "../manifest.ts";
 
 const AUTHORED_CSS = ["apps/web/src/**/*.css"];
+// Vendored from the @dotmatrix registry; see "Documented exceptions" in design/README.md.
+const VENDORED_CSS = new Set([
+  path.join(ROOT, "apps/web/src/components/dotmatrix-loader.css"),
+]);
 
 const main = () => {
   const manifest = loadManifest();
   const files = globSync(AUTHORED_CSS, { cwd: ROOT })
     .map((file) => path.join(ROOT, file))
-    .filter((file) => file !== TOKENS_CSS_PATH)
+    .filter((file) => file !== TOKENS_CSS_PATH && !VENDORED_CSS.has(file))
     .toSorted();
 
   let count = 0;

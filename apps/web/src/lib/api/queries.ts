@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { isApiError } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
@@ -43,6 +43,65 @@ export const useModels = () =>
     queryFn: api.models,
     queryKey: queryKeys.models,
     staleTime: Infinity,
+  });
+
+/** A model's display name, falling back to its ID until the list loads. */
+export const useModelName = (modelId: string) => {
+  const models = useModels();
+  return (
+    models.data?.models.find((model) => model.id === modelId)?.displayName ??
+    modelId
+  );
+};
+
+export const useGrants = () =>
+  useQuery({
+    queryFn: async () => {
+      const response = await api.grants();
+      return response.grants;
+    },
+    queryKey: queryKeys.grants,
+  });
+
+/**
+ * The reviewed change set. Keyed by the workspace event seq so every
+ * `workspace.changed` refetches while the previous diff stays on screen.
+ */
+export const useChanges = (
+  missionId: string,
+  workspaceSeq: number,
+  enabled = true
+) =>
+  useQuery({
+    enabled,
+    placeholderData: keepPreviousData,
+    queryFn: () => api.changes(missionId),
+    queryKey: [...queryKeys.changes(missionId), workspaceSeq],
+  });
+
+export const useFileTree = (
+  missionId: string,
+  dir: string,
+  workspaceSeq: number,
+  enabled = true
+) =>
+  useQuery({
+    enabled,
+    placeholderData: keepPreviousData,
+    queryFn: () => api.files(missionId, dir),
+    queryKey: [...queryKeys.files(missionId, dir), workspaceSeq],
+  });
+
+export const useFileContent = (
+  missionId: string,
+  path: string | null,
+  workspaceSeq: number
+) =>
+  useQuery({
+    enabled: path !== null,
+    queryFn: () => api.file(missionId, path ?? ""),
+    queryKey: [...queryKeys.file(missionId, path ?? ""), workspaceSeq],
+    retry: false,
   });
 
 export const useBranches = (projectId: string | null, enabled = true) =>

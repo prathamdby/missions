@@ -2,18 +2,15 @@
 
 import type { Question, QuestionItem } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
-import { CheckIcon, XIcon } from "lucide-react";
 import { useState } from "react";
+import type { ReactNode } from "react";
 
+import { ChatCard } from "@/components/mission/chat-cards";
+import { CloseIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { reportMutationError } from "@/components/mission/report-error";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
 import {
   Checkbox,
@@ -21,6 +18,7 @@ import {
   RadioGroupItem,
 } from "@/components/ui/selection";
 import { api } from "@/lib/api/endpoints";
+import { answerLabel, parseOption } from "@/lib/mission/questions";
 import { cn } from "@/lib/utils";
 
 const OTHER = "__other__";
@@ -33,6 +31,16 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { other: "", otherOn: false, selected: [] };
 
+/** A single-choice question starts on the agent's recommended option, as in Paper QXJ. */
+const initialDraft = (item: QuestionItem): Draft => {
+  const recommended = item.multiSelect
+    ? undefined
+    : item.options.find((option) => parseOption(option).recommended);
+  return recommended
+    ? { ...EMPTY_DRAFT, selected: [recommended] }
+    : EMPTY_DRAFT;
+};
+
 const answerOf = (item: QuestionItem, draft: Draft) => {
   const picked = item.options.filter((option) =>
     draft.selected.includes(option)
@@ -42,25 +50,69 @@ const answerOf = (item: QuestionItem, draft: Draft) => {
   return [...picked, ...(other ? [other] : [])].join(", ");
 };
 
-const optionRow =
-  "flex cursor-pointer items-start gap-md rounded-sm px-md py-sm transition-colors duration-fast hover:bg-surface-overlay has-[[data-state=checked]]:bg-surface-overlay";
+export const optionRow =
+  "flex cursor-pointer gap-control rounded-sm px-lg py-control transition-colors duration-fast hover:bg-surface-overlay";
+export const selectedRow =
+  "bg-surface-active ring-1 ring-border hover:bg-surface-active";
 
-const OtherInput = ({
+/** Option label, Recommended tag, and detail line, as in Paper QXJ and VTC. */
+export const OptionText = ({ option }: { option: string }) => {
+  const { detail, label, recommended } = parseOption(option);
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-2xs">
+      <span className="flex items-center gap-md">
+        <span className="text-sm leading-sm font-medium tracking-tight text-text">
+          {label}
+        </span>
+        {recommended ? (
+          <Badge size="tag" tone="muted">
+            Recommended
+          </Badge>
+        ) : null}
+      </span>
+      {detail ? (
+        <span className="text-xs leading-sm font-book tracking-tight text-text-tertiary">
+          {detail}
+        </span>
+      ) : null}
+    </span>
+  );
+};
+
+const OtherRow = ({
+  control,
   draft,
+  id,
   onChange,
 }: {
+  control: ReactNode;
   draft: Draft;
+  id: string;
   onChange: (draft: Draft) => void;
-}) =>
-  draft.otherOn ? (
-    <Input
-      aria-label="Your answer"
-      className="mt-xs"
-      onChange={(event) => onChange({ ...draft, other: event.target.value })}
-      placeholder="Type your answer"
-      value={draft.other}
-    />
-  ) : null;
+}) => (
+  <div
+    className={cn(optionRow, "flex-col gap-sm", draft.otherOn && selectedRow)}
+  >
+    <label
+      className="flex cursor-pointer items-center gap-control"
+      htmlFor={id}
+    >
+      {control}
+      <span className="text-sm leading-sm font-book tracking-tight text-text-tertiary">
+        Something else…
+      </span>
+    </label>
+    {draft.otherOn ? (
+      <Input
+        aria-label="Your answer"
+        autoFocus
+        onChange={(event) => onChange({ ...draft, other: event.target.value })}
+        placeholder="Type your answer"
+        value={draft.other}
+      />
+    ) : null}
+  </div>
+);
 
 const SingleChoice = ({
   draft,
@@ -84,28 +136,24 @@ const SingleChoice = ({
   >
     {item.options.map((option, index) => (
       <label
-        className={optionRow}
+        className={cn(
+          optionRow,
+          "items-start",
+          draft.selected.includes(option) && selectedRow
+        )}
         htmlFor={`q${item.index}-${index}`}
         key={option}
       >
-        <RadioGroupItem
-          className="mt-2xs"
-          id={`q${item.index}-${index}`}
-          value={option}
-        />
-        <span className="type-body text-text">{option}</span>
+        <RadioGroupItem id={`q${item.index}-${index}`} value={option} />
+        <OptionText option={option} />
       </label>
     ))}
-    <div className={cn(optionRow, "flex-col items-stretch")}>
-      <label
-        className="flex cursor-pointer items-center gap-md"
-        htmlFor={`q${item.index}-other`}
-      >
-        <RadioGroupItem id={`q${item.index}-other`} value={OTHER} />
-        <span className="type-body text-text-secondary">Something else…</span>
-      </label>
-      <OtherInput draft={draft} onChange={onChange} />
-    </div>
+    <OtherRow
+      control={<RadioGroupItem id={`q${item.index}-other`} value={OTHER} />}
+      draft={draft}
+      id={`q${item.index}-other`}
+      onChange={onChange}
+    />
   </RadioGroup>
 );
 
@@ -118,17 +166,20 @@ const MultiChoice = ({
   item: QuestionItem;
   onChange: (draft: Draft) => void;
 }) => (
-  <fieldset className="flex flex-col gap-xs">
+  <fieldset className="flex flex-col gap-2xs">
     <legend className="sr-only">{item.question}</legend>
     {item.options.map((option, index) => (
       <label
-        className={optionRow}
+        className={cn(
+          optionRow,
+          "items-start",
+          draft.selected.includes(option) && selectedRow
+        )}
         htmlFor={`q${item.index}-${index}`}
         key={option}
       >
         <Checkbox
           checked={draft.selected.includes(option)}
-          className="mt-2xs"
           id={`q${item.index}-${index}`}
           onCheckedChange={(checked) =>
             onChange({
@@ -140,14 +191,11 @@ const MultiChoice = ({
             })
           }
         />
-        <span className="type-body text-text">{option}</span>
+        <OptionText option={option} />
       </label>
     ))}
-    <div className={cn(optionRow, "flex-col items-stretch")}>
-      <label
-        className="flex cursor-pointer items-center gap-md"
-        htmlFor={`q${item.index}-other`}
-      >
+    <OtherRow
+      control={
         <Checkbox
           checked={draft.otherOn}
           id={`q${item.index}-other`}
@@ -155,10 +203,11 @@ const MultiChoice = ({
             onChange({ ...draft, otherOn: checked === true })
           }
         />
-        <span className="type-body text-text-secondary">Something else…</span>
-      </label>
-      <OtherInput draft={draft} onChange={onChange} />
-    </div>
+      }
+      draft={draft}
+      id={`q${item.index}-other`}
+      onChange={onChange}
+    />
   </fieldset>
 );
 
@@ -173,12 +222,16 @@ const QuestionStep = ({
 }) => {
   if (item.options.length === 0) {
     return (
-      <Textarea
-        aria-label={item.question}
-        onChange={(event) => onChange({ ...draft, other: event.target.value })}
-        placeholder="Answer in your own words"
-        value={draft.other}
-      />
+      <div className="px-md pb-sm">
+        <Textarea
+          aria-label={item.question}
+          onChange={(event) =>
+            onChange({ ...draft, other: event.target.value })
+          }
+          placeholder="Answer in your own words"
+          value={draft.other}
+        />
+      </div>
     );
   }
   return item.multiSelect ? (
@@ -188,40 +241,85 @@ const QuestionStep = ({
   );
 };
 
+/** Paper RHI: the answered questions, as a compact bubble on the user's side. */
 const AnsweredQuestions = ({ question }: { question: Question }) => {
   if (question.status === "cancelled") {
     return (
-      <p className="flex items-center gap-sm type-caption text-text-tertiary">
-        <XIcon aria-hidden="true" className="size-3.5" />
+      <p className="flex items-center gap-sm self-end text-xs leading-sm font-book tracking-tight text-text-tertiary">
+        <CloseIcon aria-hidden="true" className="size-3.5" />
         Questions skipped
       </p>
     );
   }
   const answers = question.answers ?? [];
+  const count = question.questions.length;
   return (
-    <div className="ml-auto flex w-full max-w-prose flex-col rounded-md bg-surface-raised px-lg py-md">
-      <p className="flex items-center gap-sm pb-sm type-caption text-text-secondary">
-        <CheckIcon aria-hidden="true" className="size-3.5" />
-        Answered {question.questions.length}{" "}
-        {question.questions.length === 1 ? "question" : "questions"}
-      </p>
+    <section
+      aria-label="Your answers"
+      className="flex w-full max-w-120 flex-col self-end rounded-md bg-surface-overlay px-card pt-lg pb-xs"
+    >
+      <h3 className="pb-md text-xs leading-sm font-medium tracking-tight text-text-secondary">
+        Answered {count} {count === 1 ? "question" : "questions"}
+      </h3>
       <dl className="flex flex-col">
-        {question.questions.map((item) => (
-          <div
-            className="flex gap-lg border-t border-border-subtle py-sm type-caption"
-            key={item.index}
-          >
-            <dt className="w-1/2 text-text-tertiary">{item.question}</dt>
-            <dd className="w-1/2 font-medium text-text">
-              {answers.find((answer) => answer.index === item.index)?.answer ??
-                "—"}
-            </dd>
-          </div>
-        ))}
+        {question.questions.map((item) => {
+          const answer = answers.find((entry) => entry.index === item.index);
+          return (
+            <div
+              className="flex gap-lg border-t border-border-subtle py-md text-xs leading-sm tracking-tight"
+              key={item.index}
+            >
+              <dt className="w-50 shrink-0 font-book text-text-tertiary">
+                {item.question}
+              </dt>
+              <dd className="min-w-0 flex-1 font-medium text-text">
+                {answer ? answerLabel(item.options, answer.answer) : "—"}
+              </dd>
+            </div>
+          );
+        })}
       </dl>
-    </div>
+    </section>
   );
 };
+
+const Tabs = ({
+  items,
+  onSelect,
+  step,
+}: {
+  items: readonly QuestionItem[];
+  onSelect: (step: number) => void;
+  step: number;
+}) => (
+  <div className="flex items-center gap-2xs px-md pt-md">
+    {items.map((entry, index) => (
+      <button
+        aria-current={index === step ? "step" : undefined}
+        className={cn(
+          "flex h-6.5 cursor-pointer items-center gap-sm rounded-sm px-md transition-colors duration-fast focus-visible:shadow-focus",
+          index === step
+            ? "bg-surface-active text-text"
+            : "text-text-tertiary hover:text-text-secondary"
+        )}
+        key={entry.index}
+        onClick={() => onSelect(index)}
+        type="button"
+      >
+        <span className="font-mono text-2xs leading-xs font-book">
+          {index + 1}
+        </span>
+        <span className="text-xs leading-sm font-medium tracking-tight">
+          {entry.topic}
+        </span>
+      </button>
+    ))}
+    <span className="flex-1" />
+    <span className="pr-sm font-mono text-2xs leading-xs font-book text-text-tertiary">
+      {step + 1} of {items.length}
+    </span>
+  </div>
+);
 
 const PendingQuestions = ({ question }: { question: Question }) => {
   const { applyLocal, missionId, refresh } = useMission();
@@ -231,15 +329,13 @@ const PendingQuestions = ({ question }: { question: Question }) => {
   const item = items[step];
 
   const answer = useMutation({
-    mutationFn: (cancelled: boolean) =>
+    mutationFn: () =>
       api.answerQuestion(missionId, question.id, {
-        answers: cancelled
-          ? []
-          : items.map((entry) => ({
-              answer: answerOf(entry, drafts[entry.index] ?? EMPTY_DRAFT),
-              index: entry.index,
-            })),
-        cancelled,
+        answers: items.map((entry) => ({
+          answer: answerOf(entry, drafts[entry.index] ?? initialDraft(entry)),
+          index: entry.index,
+        })),
+        cancelled: false,
         epoch: question.epoch,
       }),
     onError: (error) =>
@@ -250,46 +346,29 @@ const PendingQuestions = ({ question }: { question: Question }) => {
   if (!item) {
     return null;
   }
-  const draft = drafts[item.index] ?? EMPTY_DRAFT;
+  const draft = drafts[item.index] ?? initialDraft(item);
   const answered = (entry: QuestionItem) =>
-    answerOf(entry, drafts[entry.index] ?? EMPTY_DRAFT) !== "";
+    answerOf(entry, drafts[entry.index] ?? initialDraft(entry)) !== "";
   const last = step === items.length - 1;
-  const hint = item.multiSelect ? "Select all that apply" : "Pick one";
+  let hint = item.multiSelect ? "Select all that apply" : "Pick one";
+  if (item.options.length === 0) {
+    hint = "Answer in your own words";
+  }
 
   return (
-    <Card aria-label="Questions from the agent">
+    <ChatCard label="Questions from the agent" testId="question-card">
       {items.length > 1 ? (
-        <CardHeader>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-xs">
-            {items.map((entry, index) => (
-              <Button
-                aria-current={index === step ? "step" : undefined}
-                key={entry.index}
-                onClick={() => setStep(index)}
-                size="sm"
-                variant={index === step ? "secondary" : "ghost"}
-              >
-                {answered(entry) && index !== step ? (
-                  <CheckIcon aria-hidden="true" />
-                ) : (
-                  <span className="font-mono">{index + 1}</span>
-                )}
-                {entry.topic}
-              </Button>
-            ))}
-          </div>
-          <span className="font-mono text-xs text-text-tertiary">
-            {step + 1} of {items.length}
-          </span>
-        </CardHeader>
+        <Tabs items={items} onSelect={setStep} step={step} />
       ) : null}
-      <CardContent>
-        <div className="flex flex-col gap-2xs">
-          <h3 className="type-heading text-text">{item.question}</h3>
-          <p className="type-caption text-text-tertiary">
-            {item.options.length === 0 ? "Answer in your own words" : hint}
-          </p>
-        </div>
+      <div className="flex flex-col gap-xs px-card pt-card pb-control">
+        <h3 className="text-lg leading-lg font-medium tracking-tight text-text">
+          {item.question}
+        </h3>
+        <p className="text-xs leading-sm font-book tracking-tight text-text-tertiary">
+          {hint}
+        </p>
+      </div>
+      <div className="flex flex-col px-sm pb-sm">
         <QuestionStep
           draft={draft}
           item={item}
@@ -297,15 +376,8 @@ const PendingQuestions = ({ question }: { question: Question }) => {
             setDrafts((current) => ({ ...current, [item.index]: next }))
           }
         />
-      </CardContent>
-      <CardFooter>
-        <Button
-          disabled={answer.isPending}
-          onClick={() => answer.mutate(true)}
-          variant="ghost"
-        >
-          Skip
-        </Button>
+      </div>
+      <div className="flex items-center gap-md border-t border-border-subtle px-card py-control">
         <span className="flex-1" />
         {step > 0 ? (
           <Button onClick={() => setStep(step - 1)} variant="ghost">
@@ -314,14 +386,16 @@ const PendingQuestions = ({ question }: { question: Question }) => {
         ) : null}
         {last ? (
           <Button
+            data-testid="question-submit"
             disabled={!items.every(answered) || answer.isPending}
-            onClick={() => answer.mutate(false)}
+            onClick={() => answer.mutate()}
             variant="primary"
           >
             {answer.isPending ? "Sending…" : "Send answers"}
           </Button>
         ) : (
           <Button
+            data-testid="question-next"
             disabled={!answered(item)}
             onClick={() => setStep(step + 1)}
             variant="primary"
@@ -329,12 +403,12 @@ const PendingQuestions = ({ question }: { question: Question }) => {
             Next
           </Button>
         )}
-      </CardFooter>
-    </Card>
+      </div>
+    </ChatCard>
   );
 };
 
-/** Clarifying questions: one step per question, then a compact answer summary. */
+/** Paper QXJ clarifying questions: one tab per question, then a compact answer summary. */
 export const QuestionCard = ({ question }: { question: Question }) =>
   question.status === "pending" ? (
     <PendingQuestions question={question} />

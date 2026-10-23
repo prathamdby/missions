@@ -1,71 +1,46 @@
-import { cva } from "class-variance-authority";
-import type { VariantProps } from "class-variance-authority";
-
+import { DotmSquare3 } from "@/components/ui/dotm-square-3";
+import { DotmSquare12 } from "@/components/ui/dotm-square-12";
 import { cn } from "@/lib/utils";
 
-// Delay order for a 3x3 grid: "spiral" walks the ring (agents working),
-// "wave" sweeps diagonally (a command running).
-const DELAYS = {
-  spiral: [
-    "[animation-delay:0ms]",
-    "[animation-delay:160ms]",
-    "[animation-delay:320ms]",
-    "[animation-delay:1120ms]",
-    "[animation-delay:640ms]",
-    "[animation-delay:480ms]",
-    "[animation-delay:960ms]",
-    "[animation-delay:800ms]",
-    "[animation-delay:640ms]",
-  ],
-  wave: [
-    "[animation-delay:0ms]",
-    "[animation-delay:160ms]",
-    "[animation-delay:320ms]",
-    "[animation-delay:160ms]",
-    "[animation-delay:320ms]",
-    "[animation-delay:480ms]",
-    "[animation-delay:320ms]",
-    "[animation-delay:480ms]",
-    "[animation-delay:640ms]",
-  ],
+/*
+ * Paper's two pixel loaders, taken from the Dot Matrix registry: Core Spiral
+ * (dotm-square-3, accent) means an agent is working; Origin Wave
+ * (dotm-square-12, white) covers commands, todos, and uploads. The library
+ * holds a still frame under reduced motion.
+ */
+
+const DIMENSIONS = {
+  md: { dotSize: 3, size: 19 },
+  sm: { dotSize: 2, size: 14 },
 } as const;
 
-const CELL_KEYS = ["a", "b", "c", "d", "e", "f", "g", "h", "i"] as const;
+// The library sets `color` inline, so a text-color class cannot reach the dots.
+const LOADERS = {
+  spiral: { Loader: DotmSquare3, color: "var(--color-accent)" },
+  wave: { Loader: DotmSquare12, color: "var(--color-text)" },
+} as const;
 
-const gridVariants = cva("grid shrink-0 grid-cols-3", {
-  defaultVariants: { size: "md" },
-  variants: {
-    size: {
-      md: "size-4 gap-2xs",
-      sm: "size-2.5 gap-2xs",
-    },
-  },
-});
-
-type SpinnerProps = VariantProps<typeof gridVariants> & {
+interface SpinnerProps {
   className?: string;
   label?: string;
-  pattern?: keyof typeof DELAYS;
-};
+  pattern?: keyof typeof LOADERS;
+  size?: keyof typeof DIMENSIONS;
+}
 
-/** Pixel-grid loader from the Paper "Loaders" set. */
+/** Pixel-dot loader from the Paper "Loaders" set. */
 export const Spinner = ({
   className,
   label = "Working",
   pattern = "spiral",
-  size,
-}: SpinnerProps) => (
-  <output className={cn(gridVariants({ size }), className)}>
-    <span className="sr-only">{label}</span>
-    {CELL_KEYS.map((key, index) => (
-      <span
-        aria-hidden="true"
-        className={cn(
-          "animate-loader-cell bg-surface-active",
-          DELAYS[pattern][index]
-        )}
-        key={key}
-      />
-    ))}
-  </output>
-);
+  size = "md",
+}: SpinnerProps) => {
+  const { color, Loader } = LOADERS[pattern];
+  return (
+    <Loader
+      ariaLabel={label}
+      className={cn("shrink-0", className)}
+      color={color}
+      {...DIMENSIONS[size]}
+    />
+  );
+};

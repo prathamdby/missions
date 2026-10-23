@@ -1,6 +1,5 @@
 "use client";
 
-import { CheckIcon } from "lucide-react";
 import {
   Checkbox as CheckboxPrimitive,
   RadioGroup as RadioPrimitive,
@@ -8,10 +7,11 @@ import {
 } from "radix-ui";
 import type { ComponentProps } from "react";
 
+import { CheckIcon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 const control =
-  "shrink-0 cursor-pointer transition-[background-color,box-shadow] duration-base ease-out focus-visible:shadow-focus disabled:cursor-not-allowed disabled:opacity-disabled";
+  "shrink-0 cursor-pointer outline-none transition-[background-color,box-shadow] duration-base ease-out focus-visible:shadow-focus disabled:cursor-not-allowed";
 
 export const Switch = ({
   className,
@@ -20,12 +20,12 @@ export const Switch = ({
   <SwitchPrimitive.Root
     className={cn(
       control,
-      "inline-flex h-4.5 w-8 items-center rounded-full bg-surface-active p-2xs shadow-[inset_0_0_0_1px_var(--color-border-strong)] data-[state=checked]:bg-accent data-[state=checked]:shadow-none",
+      "group/switch inline-flex h-4.5 w-8 items-center rounded-full bg-surface-active p-2xs shadow-[inset_0_0_0_1px_var(--color-border)] disabled:bg-surface disabled:shadow-[inset_0_0_0_1px_var(--color-border)] data-[state=checked]:bg-accent data-[state=checked]:shadow-none",
       className
     )}
     {...props}
   >
-    <SwitchPrimitive.Thumb className="block size-3.5 rounded-full bg-text-secondary transition-transform duration-base ease-out data-[state=checked]:translate-x-3.5 data-[state=checked]:bg-on-accent" />
+    <SwitchPrimitive.Thumb className="block size-3.5 rounded-full bg-text-secondary shadow-[0_1px_2px_var(--color-shadow)] transition-transform duration-base ease-out group-disabled/switch:bg-text-disabled data-[state=checked]:translate-x-3.5 data-[state=checked]:bg-text" />
   </SwitchPrimitive.Root>
 );
 
@@ -36,13 +36,17 @@ export const Checkbox = ({
   <CheckboxPrimitive.Root
     className={cn(
       control,
-      "inline-flex size-4 items-center justify-center rounded-xs bg-surface-overlay shadow-[inset_0_0_0_1px_var(--color-border-strong)] data-[state=checked]:bg-accent data-[state=checked]:shadow-none",
+      "group/checkbox inline-flex size-4 items-center justify-center rounded-[4px] bg-surface-raised shadow-[inset_0_0_0_1px_var(--color-border-strong)] disabled:bg-surface disabled:shadow-[inset_0_0_0_1px_var(--color-border)] data-[state=checked]:bg-accent data-[state=checked]:shadow-none data-[state=indeterminate]:bg-accent data-[state=indeterminate]:shadow-none",
       className
     )}
     {...props}
   >
-    <CheckboxPrimitive.Indicator className="text-on-accent">
-      <CheckIcon className="size-3" strokeWidth={3} />
+    <CheckboxPrimitive.Indicator className="flex items-center justify-center text-on-accent">
+      <CheckIcon
+        className="group-data-[state=indeterminate]/checkbox:hidden"
+        size="xs"
+      />
+      <span className="hidden h-0.5 w-2 rounded-full bg-on-accent group-data-[state=indeterminate]/checkbox:block" />
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 );
@@ -64,11 +68,11 @@ export const RadioGroupItem = ({
   <RadioPrimitive.Item
     className={cn(
       control,
-      "inline-flex size-4 items-center justify-center rounded-full bg-surface-overlay shadow-[inset_0_0_0_1px_var(--color-border-strong)] data-[state=checked]:shadow-[inset_0_0_0_1px_var(--color-accent)]",
+      "inline-flex size-4 items-center justify-center rounded-full bg-surface-raised shadow-[inset_0_0_0_1px_var(--color-border-strong)] disabled:bg-surface disabled:shadow-[inset_0_0_0_1px_var(--color-border)] data-[state=checked]:bg-accent data-[state=checked]:shadow-none",
       className
     )}
     {...props}
   >
-    <RadioPrimitive.Indicator className="size-2 rounded-full bg-accent" />
+    <RadioPrimitive.Indicator className="size-sm rounded-full bg-on-accent" />
   </RadioPrimitive.Item>
 );

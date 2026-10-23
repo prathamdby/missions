@@ -12,9 +12,13 @@ export const badgeVariants = cva(
       size: {
         md: "h-5.5 rounded-full px-md text-xs leading-sm",
         sm: "h-4.5 rounded-xs px-xs text-2xs leading-xs",
+        /** Menu row labels such as Default or Recommended (PB7, PNO). */
+        tag: "h-4.5 rounded-xs px-sm text-2xs leading-xs",
       },
       tone: {
         accent: "bg-accent-muted text-accent-text",
+        /** Accent text with no fill, e.g. "In a mission". */
+        "accent-plain": "text-accent-text",
         danger: "bg-danger-muted text-danger",
         info: "bg-info-muted text-info",
         muted: "bg-surface-active text-text-secondary",
@@ -31,6 +35,7 @@ export const badgeVariants = cva(
 
 const dotTone = {
   accent: "bg-accent",
+  "accent-plain": "bg-accent",
   danger: "bg-danger",
   info: "bg-info",
   muted: "bg-text-secondary",
