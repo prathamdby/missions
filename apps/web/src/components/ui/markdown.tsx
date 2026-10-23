@@ -124,16 +124,61 @@ const COMPONENTS: Components = {
   ul: List,
 };
 
+const PanelHeading = ({ children, node: _node, ...props }: Props<"h3">) => (
+  <h3
+    className="mt-sm text-sm leading-md font-medium tracking-tight text-text"
+    {...props}
+  >
+    {children}
+  </h3>
+);
+const PanelParagraph = ({ node: _node, ...props }: Props<"p">) => (
+  <p className="type-body text-text-secondary" {...props} />
+);
+const PanelListItem = ({ node: _node, ...props }: Props<"li">) => (
+  <li className="type-body text-text-secondary" {...props} />
+);
+const PanelLink = ({ children, node: _node, ...props }: Props<"a">) => (
+  <a
+    className="text-xs leading-sm font-book tracking-tight text-accent-text hover:underline"
+    rel="noopener noreferrer"
+    target="_blank"
+    {...props}
+  >
+    {children}
+  </a>
+);
+const PANEL_COMPONENTS: Components = {
+  ...COMPONENTS,
+  a: PanelLink,
+  h1: PanelHeading,
+  h2: PanelHeading,
+  h3: PanelHeading,
+  li: PanelListItem,
+  p: PanelParagraph,
+};
+
 /** Agent-authored Markdown. Raw HTML is never rendered. */
 export const Markdown = ({
   children,
   className,
+  appearance = "default",
 }: {
   children: string;
   className?: string;
+  appearance?: "default" | "panel";
 }) => (
-  <div className={cn("flex min-w-0 flex-col gap-md break-words", className)}>
-    <ReactMarkdown components={COMPONENTS} remarkPlugins={[remarkGfm]}>
+  <div
+    className={cn(
+      "flex min-w-0 flex-col break-words",
+      appearance === "panel" ? "gap-sm" : "gap-md",
+      className
+    )}
+  >
+    <ReactMarkdown
+      components={appearance === "panel" ? PANEL_COMPONENTS : COMPONENTS}
+      remarkPlugins={[remarkGfm]}
+    >
       {children}
     </ReactMarkdown>
   </div>

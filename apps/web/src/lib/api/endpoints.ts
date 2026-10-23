@@ -15,6 +15,7 @@ import type {
 } from "@missions/protocol/commands";
 import { EditQueueItemResponseSchema } from "@missions/protocol/commands";
 import { PageSchema } from "@missions/protocol/common";
+import type { ComparisonMode } from "@missions/protocol/files";
 import {
   ChangesSchema,
   FileContentSchema,
@@ -24,6 +25,7 @@ import {
   MissionListSchema,
   MissionSchema,
   MissionSnapshotSchema,
+  PullRequestListSchema,
   PermissionRequestSchema,
   PlanRevisionSchema,
   QueueItemSchema,
@@ -56,7 +58,7 @@ import {
   WorktreeListSchema,
 } from "@missions/protocol/workspaces";
 
-import { apiRequest, apiRequestVoid, proxyUrl } from "@/lib/api/client";
+import { apiRequest, apiRequestVoid, proxyUrl } from "./client";
 
 /** Typed calls for every daemon route the web app uses. */
 export const api = {
@@ -91,10 +93,15 @@ export const api = {
       body,
       method: "PATCH",
     }),
-  changes: (missionId: string) =>
-    apiRequest(routes.changes(missionId), ChangesSchema),
-  checkout: (projectId: string) =>
-    apiRequest(routes.projectCheckout(projectId), CheckoutStatusSchema),
+  changes: (missionId: string, signal?: AbortSignal, mode?: ComparisonMode) =>
+    apiRequest(routes.changes(missionId), ChangesSchema, {
+      query: { mode },
+      signal,
+    }),
+  checkout: (projectId: string, signal?: AbortSignal) =>
+    apiRequest(routes.projectCheckout(projectId), CheckoutStatusSchema, {
+      signal,
+    }),
   cleanup: (missionId: string, body: CleanupRequest) =>
     apiRequest(routes.cleanup(missionId), MissionSchema, {
       body,
@@ -102,14 +109,15 @@ export const api = {
     }),
   clone: (body: CloneProjectRequest) =>
     apiRequest(routes.clone(), CloneJobSchema, { body, method: "POST" }),
-  cloneJob: (jobId: string) =>
-    apiRequest(routes.cloneJob(jobId), CloneJobSchema),
+  cloneJob: (jobId: string, signal?: AbortSignal) =>
+    apiRequest(routes.cloneJob(jobId), CloneJobSchema, { signal }),
   commit: (missionId: string, body: CommitRequest) =>
     apiRequest(routes.commit(missionId), MissionSchema, {
       body,
       method: "POST",
     }),
-  connection: () => apiRequest(routes.connection(), ConnectionStatusSchema),
+  connection: (signal?: AbortSignal) =>
+    apiRequest(routes.connection(), ConnectionStatusSchema, { signal }),
   createMission: (body: CreateMissionRequest) =>
     apiRequest(routes.missions(), MissionSnapshotSchema, {
       body,
@@ -151,41 +159,69 @@ export const api = {
         method: "POST",
       }
     ),
-  file: (missionId: string, path: string) =>
-    apiRequest(routes.file(missionId), FileContentSchema, { query: { path } }),
-  files: (missionId: string, dir: string) =>
-    apiRequest(routes.files(missionId), FileTreeSchema, { query: { dir } }),
-  fsBrowse: (path?: string) =>
-    apiRequest(routes.fsBrowse(), FsBrowseResponseSchema, { query: { path } }),
-  githubAuth: () => apiRequest(routes.githubAuth(), GithubAuthStatusSchema),
-  githubRepos: (q?: string) =>
-    apiRequest(routes.githubRepos(), GithubRepoListSchema, { query: { q } }),
-  grants: () => apiRequest(routes.grants(), GrantListSchema),
+  file: (missionId: string, path: string, signal?: AbortSignal) =>
+    apiRequest(routes.file(missionId), FileContentSchema, {
+      query: { path },
+      signal,
+    }),
+  files: (missionId: string, dir: string, signal?: AbortSignal) =>
+    apiRequest(routes.files(missionId), FileTreeSchema, {
+      query: { dir },
+      signal,
+    }),
+  fsBrowse: (path?: string, signal?: AbortSignal) =>
+    apiRequest(routes.fsBrowse(), FsBrowseResponseSchema, {
+      query: { path },
+      signal,
+    }),
+  githubAuth: (signal?: AbortSignal) =>
+    apiRequest(routes.githubAuth(), GithubAuthStatusSchema, { signal }),
+  githubRepos: (q?: string, signal?: AbortSignal) =>
+    apiRequest(routes.githubRepos(), GithubRepoListSchema, {
+      query: { q },
+      signal,
+    }),
+  grants: (signal?: AbortSignal) =>
+    apiRequest(routes.grants(), GrantListSchema, { signal }),
   missionSnapshot: (missionId: string, signal?: AbortSignal) =>
     apiRequest(routes.missionSnapshot(missionId), MissionSnapshotSchema, {
       signal,
     }),
-  missionTranscript: (missionId: string, before: number, limit: number) =>
+  missionTranscript: (
+    missionId: string,
+    before: number,
+    limit: number,
+    signal?: AbortSignal
+  ) =>
     apiRequest(
       routes.missionTranscript(missionId),
       PageSchema(TranscriptItemSchema),
-      { query: { before, limit } }
+      { query: { before, limit }, signal }
     ),
-  missions: (projectId?: string) =>
-    apiRequest(routes.missions(), MissionListSchema, { query: { projectId } }),
-  models: () => apiRequest(routes.models(), ModelListSchema),
+  missions: (projectId?: string, signal?: AbortSignal) =>
+    apiRequest(routes.missions(), MissionListSchema, {
+      query: { projectId },
+      signal,
+    }),
+  models: (signal?: AbortSignal) =>
+    apiRequest(routes.models(), ModelListSchema, { signal }),
   pauseMission: (missionId: string, body: MissionControlRequest) =>
     apiRequest(routes.missionPause(missionId), MissionSchema, {
       body,
       method: "POST",
     }),
-  projectBranches: (projectId: string) =>
-    apiRequest(routes.projectBranches(projectId), BranchListSchema),
-  projectWorktrees: (projectId: string) =>
-    apiRequest(routes.projectWorktrees(projectId), WorktreeListSchema),
-  projects: () => apiRequest(routes.projects(), ProjectListSchema),
-  pullRequest: (missionId: string) =>
-    apiRequest(routes.pullRequest(missionId), MissionSchema),
+  projectBranches: (projectId: string, signal?: AbortSignal) =>
+    apiRequest(routes.projectBranches(projectId), BranchListSchema, { signal }),
+  projectWorktrees: (projectId: string, signal?: AbortSignal) =>
+    apiRequest(routes.projectWorktrees(projectId), WorktreeListSchema, {
+      signal,
+    }),
+  projects: (signal?: AbortSignal) =>
+    apiRequest(routes.projects(), ProjectListSchema, { signal }),
+  pullRequest: (missionId: string, signal?: AbortSignal) =>
+    apiRequest(routes.pullRequest(missionId), MissionSchema, { signal }),
+  pullRequests: (signal?: AbortSignal) =>
+    apiRequest(routes.pullRequests(), PullRequestListSchema, { signal }),
   push: (missionId: string, body: PushRequest) =>
     apiRequest(routes.push(missionId), MissionSchema, {
       body,
@@ -209,7 +245,18 @@ export const api = {
     }),
   revokeGrant: (grantId: string) =>
     apiRequestVoid(routes.grant(grantId), { method: "DELETE" }),
-  settings: () => apiRequest(routes.settings(), SettingsSchema),
+  settings: (signal?: AbortSignal) =>
+    apiRequest(routes.settings(), SettingsSchema, { signal }),
+  sharedFile: (missionId: string, path: string, signal?: AbortSignal) =>
+    apiRequest(routes.file(missionId), FileContentSchema, {
+      query: { path, scope: "shared" },
+      signal,
+    }),
+  sharedFiles: (missionId: string, dir: string, signal?: AbortSignal) =>
+    apiRequest(routes.files(missionId), FileTreeSchema, {
+      query: { dir, scope: "shared" },
+      signal,
+    }),
   submitMessage: (missionId: string, body: SubmitMessageRequest) =>
     apiRequest(routes.missionMessages(missionId), QueueItemSchema, {
       body,

@@ -12,14 +12,19 @@ import type {
   ReasoningEffort,
   Role,
 } from "@missions/protocol/common";
+import { AgentModelSettingsSchema } from "@missions/protocol/missions";
+import type { AgentModelSettings } from "@missions/protocol/missions";
+import type { ModelOption } from "@missions/protocol/settings";
 
 import { errorMessage, sleep } from "../lib/async";
 import type {
   ProcessSupervisor,
   StopResult,
 } from "../processes/process-supervisor";
+import { toModelOption } from "../settings/models";
 import { NativeQueueTracker } from "./native-queue";
 import type { NativeQueueEntry } from "./native-queue";
+import { SESSION_START_TIMEOUT_MS, withDeadline } from "./startup";
 
 /** SDK placement for each UI delivery mode. */
 export const PLACEMENT = {
@@ -107,7 +112,7 @@ export interface AgentRuntimeOptions {
   onPermission: (ask: PermissionAsk) => Promise<boolean>;
   onAskUser: (ask: AskUserAsk) => Promise<AskUserAnswer>;
   /** Test seam: a fake transport exercises the adapter, not CLI scheduling. */
-  createTransport?: () => DroidClientTransport;
+  createTransport?: () => DroidClientTransport | Promise<DroidClientTransport>;
   extraEnv?: Record<string, string>;
 }
 
@@ -124,6 +129,20 @@ export type RemoveOutcome = "removed" | "already_sent" | "unconfirmed";
 export type EditOutcome = "replaced" | "already_sent" | "delete_unconfirmed";
 
 const CONSUMPTION_GRACE_MS = 400;
+const CLEANUP_TIMEOUT_MS = 1000;
+
+const boundedCleanup = async (cleanup: Promise<unknown>) => {
+  const timeout = Promise.withResolvers<undefined>();
+  const timer = setTimeout(
+    () => timeout.resolve(undefined),
+    CLEANUP_TIMEOUT_MS
+  );
+  try {
+    await Promise.race([cleanup, timeout.promise]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -157,7 +176,8 @@ export const normalizeMessage = (
   const content = Array.isArray(raw.content) ? raw.content : [];
   const message: RuntimeMessage = {
     id: str(raw.id),
-    requestId,
+    requestId:
+      requestId ?? (typeof raw.requestId === "string" ? raw.requestId : null),
     role,
     text: "",
     thinking: "",
@@ -273,7 +293,11 @@ const NOTIFICATION_EVENTS: Record<
 };
 /** Protocol rejections are definite; transport failures leave outcomes unknown. */
 const isDefiniteRejection = (error: unknown) =>
-  error instanceof Error && error.name === "ProtocolError";
+  error instanceof Error &&
+  error.name === "ProtocolError" &&
+  "metadata" in error &&
+  isRecord(error.metadata) &&
+  typeof error.metadata.code === "number";
 
 /**
  * Owns one agent's public SDK connection: one `ProcessTransport` and one
@@ -284,9 +308,19 @@ export class AgentRuntime {
   readonly options: AgentRuntimeOptions;
   readonly queue: NativeQueueTracker;
   #client: DroidClient | null = null;
+  #transport: DroidClientTransport | null = null;
   #sessionId: string | null = null;
   #unsubscribers: (() => void)[] = [];
   #closing = false;
+  #started = false;
+  #startupExpired = false;
+  #resourceVersion = 0;
+  #closeVersion = -1;
+  #closePromise: Promise<StopResult> | null = null;
+  readonly #restoredRequestIds = new Map<string, string | null>();
+  #model: AgentModelSettings | null = null;
+  #settingsVersion = 0;
+  readonly #models = new Map<string, ModelOption>();
 
   constructor(options: AgentRuntimeOptions) {
     this.options = options;
@@ -299,8 +333,75 @@ export class AgentRuntime {
     return this.#sessionId;
   }
 
+  get model() {
+    return this.#model;
+  }
+
   get connected() {
     return this.#client?.isConnected ?? false;
+  }
+
+  #observeTransport(transport: DroidClientTransport): DroidClientTransport {
+    return {
+      close: () => transport.close(),
+      get isConnected() {
+        return transport.isConnected;
+      },
+      onError: (handler) => transport.onError(handler),
+      onMessage: (handler) =>
+        transport.onMessage((message) => {
+          if (this.#closing) {
+            return;
+          }
+          // SDK 0.10's transcript schema strips requestId. Preserve only
+          // explicit wire identities before validation, never infer from text
+          // or assume a message ID is also its request ID.
+          if (message.type === "response" && isRecord(message.result)) {
+            const { session } = message.result;
+            if (isRecord(session) && Array.isArray(session.messages)) {
+              this.#captureRestoredIds(session.messages);
+            }
+          }
+          handler(message);
+        }),
+      send: (message) => transport.send(message),
+    };
+  }
+
+  #captureRestoredIds(messages: unknown[]) {
+    this.#restoredRequestIds.clear();
+    for (const raw of messages) {
+      if (!isRecord(raw) || typeof raw.id !== "string") {
+        continue;
+      }
+      const requestId =
+        typeof raw.requestId === "string" ? raw.requestId : null;
+      const previous = this.#restoredRequestIds.get(raw.id);
+      // Conflicting identities are not evidence of consumption.
+      this.#restoredRequestIds.set(
+        raw.id,
+        previous !== undefined && previous !== requestId ? null : requestId
+      );
+    }
+  }
+
+  #takeRestoredMessages(result: Record<string, unknown>) {
+    const session = isRecord(result.session) ? result.session : {};
+    const rawMessages: unknown[] = Array.isArray(session.messages)
+      ? session.messages
+      : [];
+    const messages = rawMessages
+      .map((raw) =>
+        normalizeMessage(
+          raw,
+          isRecord(raw)
+            ? (this.#restoredRequestIds.get(str(raw.id)) ?? null)
+            : null
+        )
+      )
+      .filter((message): message is RuntimeMessage => message !== null);
+    this.#restoredRequestIds.clear();
+    return messages;
   }
 
   async #createTransport(): Promise<DroidClientTransport> {
@@ -309,6 +410,7 @@ export class AgentRuntime {
     }
     const { supervisor, agentId, cwd } = this.options;
     const launcher = await supervisor.ensureLauncher();
+    this.#assertStarting();
     return new ProcessTransport({
       cwd,
       droidExecPath: launcher,
@@ -317,7 +419,10 @@ export class AgentRuntime {
         FACTORY_UPSTREAM_CLIENT_TYPE: "sdk",
         ...this.options.extraEnv,
       },
-      onSpawned: (child) => supervisor.register(agentId, child),
+      onSpawned: (child) => {
+        this.#resourceVersion += 1;
+        supervisor.register(agentId, child);
+      },
     });
   }
 
@@ -377,9 +482,16 @@ export class AgentRuntime {
   }
 
   #onNotification(raw: Record<string, unknown>) {
+    if (this.#closing) {
+      return;
+    }
     const params = isRecord(raw.params) ? raw.params : raw;
     const n = isRecord(params.notification) ? params.notification : params;
     const type = str(n.type);
+    if (type === "settings_updated") {
+      this.#captureSettings(n.settings);
+      return;
+    }
     if (type === "create_message") {
       this.#onCreateMessage(n);
       return;
@@ -402,56 +514,165 @@ export class AgentRuntime {
     if (!message) {
       return;
     }
-    if (message.role === "user") {
-      const matched = requestId ?? this.#matchConsumedByText(message.text);
-      if (matched) {
-        message.requestId = matched;
-        this.queue.consumed(matched);
-      }
+    if (message.role === "user" && message.requestId) {
+      this.queue.consumed(message.requestId);
     }
     this.options.onEvent({ message, type: "message" });
   }
 
-  /** Fallback when the runner omits the request ID: only an unambiguous match. */
-  #matchConsumedByText(text: string) {
-    const open = this.queue
-      .list()
-      .filter(
-        (entry) =>
-          (entry.state === "queued" ||
-            entry.state === "submitting" ||
-            entry.state === "removing") &&
-          entry.text === text
-      );
-    return open.length === 1 && open[0] ? open[0].id : null;
-  }
-
   async start(resumeSessionId?: string): Promise<RuntimeStartResult> {
-    if (this.#client) {
+    if (this.#started) {
       throw new Error("Runtime already started");
     }
-    this.#closing = false;
-    const transport = await this.#createTransport();
-    const client = new DroidClient({ transport });
-    this.#registerHandlers(client);
-    this.#client = client;
+    this.#assertStarting();
+    this.#started = true;
+    this.#restoredRequestIds.clear();
     try {
+      const transport = await this.#startupStage(async () => {
+        const created = await this.#createTransport();
+        this.#transport = created;
+        return created;
+      }, "transport creation");
+      // Adoption precedes cancellation checks: even a late factory result
+      // belongs to this runtime and invalidates earlier disposal evidence.
+      this.#assertStarting();
+      const client = new DroidClient({
+        sessionInitTimeout: SESSION_START_TIMEOUT_MS,
+        transport: this.#observeTransport(transport),
+      });
+      this.#client = client;
+      this.#registerHandlers(client);
       if (transport instanceof ProcessTransport) {
-        await transport.connect();
+        await this.#startupStage(
+          () => transport.connect(),
+          "process connection",
+          transport
+        );
+        this.#assertStarting();
       }
-      // App-owned MCP servers are independent: start them together.
-      const mcpServers = await Promise.all(
-        (this.options.mcpServers ?? []).map(
-          async (server) => server.config ?? (await server.start())
-        )
+      const mcpServers = await this.#startupStage(
+        () => this.#startMcpServers(),
+        "mission tool server startup"
       );
-      return resumeSessionId
-        ? await this.#load(client, resumeSessionId, mcpServers)
-        : await this.#initialize(client, mcpServers);
+      this.#assertStarting();
+      const result = await this.#startupStage(
+        () =>
+          resumeSessionId
+            ? this.#load(client, resumeSessionId, mcpServers)
+            : this.#initialize(client, mcpServers),
+        resumeSessionId ? "session loading" : "session initialization"
+      );
+      this.#assertStarting();
+      return result;
     } catch (error) {
+      const cancelled = this.#closing;
       await this.close();
+      if (cancelled) {
+        throw new Error("Runtime startup was cancelled", { cause: error });
+      }
       throw error;
     }
+  }
+
+  #assertStarting() {
+    if (this.#closing) {
+      throw new Error("Runtime startup was cancelled");
+    }
+  }
+
+  async #startupStage<T>(
+    effect: () => Promise<T>,
+    stage: string,
+    transport?: DroidClientTransport
+  ): Promise<T> {
+    const operation = effect().finally(async () => {
+      // Connect can finish after its first close, creating a managed process
+      // that the previous disposal never owned. Re-adopt it for another pass.
+      if (transport) {
+        this.#transport = transport;
+      }
+      this.#resourceVersion += 1;
+      // A factory may resolve after its deadline/close. Its resources still
+      // belong to us, not to a successor generation or an abandoned promise.
+      if (this.#startupExpired) {
+        await this.close();
+      }
+    });
+    const message = `Droid ${stage} timed out after 120 seconds. Check Droid sign-in and configured MCP servers (a slow or disconnected server can block initialization), then Resume to retry. No new mission turn was sent by this startup attempt.`;
+    try {
+      return await withDeadline(operation, SESSION_START_TIMEOUT_MS, message);
+    } catch (error) {
+      this.#startupExpired = true;
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new Error(message, { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  #captureSettings(raw: unknown) {
+    if (!isRecord(raw) || !("modelId" in raw || "reasoningEffort" in raw)) {
+      return;
+    }
+    const modelId =
+      typeof raw.modelId === "string" ? raw.modelId : this.#model?.modelId;
+    const model = modelId ? this.#models.get(modelId) : undefined;
+    const noEffort = model?.supportedReasoningEfforts.length === 0;
+    let { reasoningEffort } = raw;
+    if (
+      noEffort &&
+      (reasoningEffort === undefined || reasoningEffort === "none")
+    ) {
+      // The wire uses "none" in full settings; model-only patches can omit it.
+      reasoningEffort = null;
+    } else if (reasoningEffort === undefined) {
+      reasoningEffort =
+        modelId === this.#model?.modelId ? this.#model?.reasoningEffort : null;
+    }
+    const parsed = AgentModelSettingsSchema.safeParse({
+      modelId,
+      reasoningEffort,
+    });
+    if (parsed.success) {
+      this.#model = parsed.data;
+      this.#settingsVersion += 1;
+    }
+  }
+
+  #captureModels(raw: unknown) {
+    if (!Array.isArray(raw)) {
+      return;
+    }
+    for (const entry of raw) {
+      const model = toModelOption(entry);
+      if (model) {
+        this.#models.set(model.id, model);
+      }
+    }
+  }
+
+  async #startMcpServers() {
+    // Join every admitted start, including siblings of a failed server, so
+    // startup cannot settle before a late server has an owned cleanup pass.
+    const outcomes = await Promise.allSettled(
+      (this.options.mcpServers ?? []).map(async (server) => {
+        this.#assertStarting();
+        try {
+          return server.config ?? (await server.start());
+        } finally {
+          this.#resourceVersion += 1;
+          if (this.#startupExpired) {
+            await this.close();
+          }
+        }
+      })
+    );
+    return outcomes.map((outcome) => {
+      if (outcome.status === "rejected") {
+        throw outcome.reason;
+      }
+      return outcome.value;
+    });
   }
 
   async #initialize(
@@ -490,15 +711,18 @@ export class AgentRuntime {
       ...(disabledToolIds?.length ? { disabledToolIds } : {}),
       ...(enabledToolIds?.length ? { enabledToolIds } : {}),
     });
+    this.#assertStarting();
     const result: unknown = response.result;
     if (!isRecord(result) || typeof result.sessionId !== "string") {
       throw new Error("initializeSession returned no session ID");
     }
     this.#sessionId = result.sessionId;
+    this.#captureModels(result.availableModels);
+    this.#captureSettings(result.settings);
     const worktree = isRecord(result.worktree) ? str(result.worktree.path) : "";
     return {
       cwd: worktree || cwd,
-      messages: [],
+      messages: this.#takeRestoredMessages(result),
       pendingIds: undefined,
       queuedIds: undefined,
       sessionId: result.sessionId,
@@ -514,18 +738,15 @@ export class AgentRuntime {
     >
   ): Promise<RuntimeStartResult> {
     const response = await client.loadSession({ mcpServers, sessionId });
+    this.#assertStarting();
     const result: unknown = response.result;
     if (!isRecord(result)) {
       throw new Error("loadSession returned no result");
     }
     this.#sessionId = sessionId;
-    const session = isRecord(result.session) ? result.session : {};
-    const rawMessages: unknown[] = Array.isArray(session.messages)
-      ? session.messages
-      : [];
-    const messages = rawMessages
-      .map((raw) => normalizeMessage(raw, null))
-      .filter((message): message is RuntimeMessage => message !== null);
+    this.#captureModels(result.availableModels);
+    this.#captureSettings(result.settings);
+    const messages = this.#takeRestoredMessages(result);
     const queued: unknown[] | undefined = Array.isArray(result.queuedMessages)
       ? result.queuedMessages
       : undefined;
@@ -547,6 +768,48 @@ export class AgentRuntime {
       throw new Error("Agent runtime is not connected");
     }
     return this.#client;
+  }
+
+  /** Native in-place session settings: no interrupt, replacement or replay. */
+  async updateModel(choice: AgentModelSettings): Promise<AgentModelSettings> {
+    this.#assertStarting();
+    const client = this.#requireClient();
+    const model = this.#models.get(choice.modelId);
+    if (
+      choice.reasoningEffort !== null &&
+      model &&
+      !model.supportedReasoningEfforts.includes(choice.reasoningEffort)
+    ) {
+      throw new Error(
+        `${model.displayName} does not support ${choice.reasoningEffort} reasoning`
+      );
+    }
+    const reasoningEffort =
+      choice.reasoningEffort ?? model?.defaultReasoningEffort ?? null;
+    const desired = { modelId: choice.modelId, reasoningEffort };
+    const version = this.#settingsVersion;
+    await client.updateSessionSettings({
+      modelId: desired.modelId,
+      ...(reasoningEffort === null
+        ? {}
+        : { reasoningEffort: reasoningEffort as never }),
+    });
+    this.#assertStarting();
+    // Like the SDK session handle, prefer authoritative settings_updated
+    // notifications; older CLIs confirm the explicit fields with an empty ack.
+    if (version === this.#settingsVersion) {
+      if (
+        reasoningEffort === null &&
+        model?.supportedReasoningEfforts.length !== 0
+      ) {
+        throw new Error("Droid did not confirm its default model settings");
+      }
+      this.#model = desired;
+    }
+    if (!this.#model) {
+      throw new Error("Droid did not confirm its current model settings");
+    }
+    return this.#model;
   }
 
   /** Submits to the native queue; `id` is the stable SDK request ID. */
@@ -580,6 +843,15 @@ export class AgentRuntime {
   }
 
   async remove(id: string): Promise<RemoveOutcome> {
+    const release = this.queue.retain(id);
+    try {
+      return await this.#remove(id);
+    } finally {
+      release();
+    }
+  }
+
+  async #remove(id: string): Promise<RemoveOutcome> {
     const client = this.#requireClient();
     if (this.queue.get(id)?.state === "sent") {
       return "already_sent";
@@ -615,40 +887,84 @@ export class AgentRuntime {
     replacementId: string,
     text: string
   ): Promise<EditOutcome> {
-    const mode = this.queue.get(id)?.mode ?? "steer";
-    const removed = await this.remove(id);
-    if (removed === "already_sent") {
-      return "already_sent";
+    const release = this.queue.retain(id);
+    try {
+      const mode = this.queue.get(id)?.mode ?? "steer";
+      const removed = await this.#remove(id);
+      if (removed === "already_sent" || this.queue.get(id)?.state === "sent") {
+        return "already_sent";
+      }
+      if (removed === "unconfirmed") {
+        return "delete_unconfirmed";
+      }
+      await this.submit(replacementId, text, mode);
+      return "replaced";
+    } finally {
+      release();
     }
-    if (removed === "unconfirmed") {
-      return "delete_unconfirmed";
-    }
-    await this.submit(replacementId, text, mode);
-    return "replaced";
   }
 
   async interrupt() {
     await this.#requireClient().interruptSession();
   }
 
-  /** Closes the client, app-owned MCP servers, and confirms the group is gone. */
+  /** Bounds client/MCP cleanup and independently confirms process disposal. */
   async close(): Promise<StopResult> {
     this.#closing = true;
-    for (const unsubscribe of this.#unsubscribers.splice(0)) {
-      unsubscribe();
+    if (!this.#closePromise) {
+      this.#closeVersion = this.#resourceVersion;
+      this.#closePromise = this.#dispose();
     }
-    const client = this.#client;
-    this.#client = null;
-    if (client) {
+    const disposing = this.#closePromise;
+    const version = this.#closeVersion;
+    const [outcome] = await Promise.allSettled([disposing]);
+    if (version !== this.#resourceVersion) {
+      if (this.#closePromise === disposing) {
+        this.#closePromise = null;
+      }
+      return await this.close();
+    }
+    if (outcome.status === "rejected") {
+      if (this.#closePromise === disposing) {
+        this.#closePromise = null;
+      }
+      throw outcome.reason;
+    }
+    if (!outcome.value.stopped && this.#closePromise === disposing) {
+      this.#closePromise = null;
+    }
+    return outcome.value;
+  }
+
+  async #dispose(): Promise<StopResult> {
+    this.#closing = true;
+    this.#restoredRequestIds.clear();
+    for (const unsubscribe of this.#unsubscribers.splice(0)) {
       try {
-        await client.close();
+        unsubscribe();
       } catch {
-        // The supervisor below confirms the process state either way.
+        // A broken listener must not prevent process supervision.
       }
     }
-    await Promise.allSettled(
-      (this.options.mcpServers ?? []).map((server) => server.close())
-    );
-    return await this.options.supervisor.stop(this.options.agentId);
+    const client = this.#client;
+    const transport = this.#transport;
+    this.#client = null;
+    this.#transport = null;
+    const cleanup = Promise.allSettled([
+      Promise.resolve().then(() =>
+        client ? client.close() : transport?.close()
+      ),
+      ...(this.options.mcpServers ?? []).map((server) =>
+        Promise.resolve().then(() => server.close())
+      ),
+    ]);
+    // Start supervision immediately, independently of cooperative adapters.
+    const cleanupComplete = boundedCleanup(cleanup);
+    try {
+      return await this.options.supervisor.stop(this.options.agentId);
+    } finally {
+      // A rejected stop must not detach even the bounded cleanup lifetime.
+      await cleanupComplete;
+    }
   }
 }

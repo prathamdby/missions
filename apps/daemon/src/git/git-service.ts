@@ -14,15 +14,34 @@ import type {
   PullRequestState,
 } from "@missions/protocol/missions";
 import type { WorkspaceBinding } from "@missions/protocol/workspaces";
+import { WorkspaceBindingSchema } from "@missions/protocol/workspaces";
 
 import type { OperationJournal } from "../db/journal";
+import {
+  captureReview,
+  checkedGit,
+  reviewedTree,
+} from "../files/review-snapshot";
 import { workspaceChanges } from "../files/workspace-files";
 import { AppError, conflict, stale } from "../lib/app-error";
 import { git, redactUrl, run } from "../lib/exec";
 import type { MissionService } from "../missions/mission-service";
 import type { SettingsService } from "../settings/settings-service";
-import { cleanupBinding } from "../workspaces/workspace-service";
+import {
+  cleanupBinding,
+  planCleanup,
+  verifyBinding,
+} from "../workspaces/workspace-service";
+import { observeCleanup } from "./cleanup-recovery";
 import * as repo from "./repo";
+import { createReviewedCandidate } from "./reviewed-candidate";
+import {
+  installReviewedCommit,
+  repairReviewedIndex,
+  ReviewedCommitIntentSchema,
+  ReviewedCommitResultSchema,
+} from "./reviewed-commit";
+import type { ReviewedCommitIntent } from "./reviewed-commit";
 
 export interface GitServiceOptions {
   missions: MissionService;
@@ -47,6 +66,23 @@ const outcomeUnknown = (error: unknown) => !(error instanceof AppError);
 
 const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
 
+const pathIsLocal = (remote: string) =>
+  remote.startsWith("/") || remote.startsWith(".");
+
+/** gh's repository selector is not an SSH clone URL. */
+export const githubRepository = (remote: string) => {
+  const scp = /^(?:[^/@]+@)?(?<host>[^/:]+):(?<repo>[^/].*)$/u.exec(remote);
+  if (scp?.groups && !pathIsLocal(remote)) {
+    return `${scp.groups.host}/${scp.groups.repo?.replace(/\.git$/u, "")}`;
+  }
+  try {
+    const url = new URL(remote);
+    return `${url.host}/${url.pathname.replace(/^\/+/u, "").replace(/\.git$/u, "")}`;
+  } catch {
+    return remote;
+  }
+};
+
 const failure = (stderr: string, fallback: string) => {
   const line = stderr
     .split("\n")
@@ -64,6 +100,9 @@ interface GhPr {
   isDraft: boolean;
   updatedAt: string;
   headRefOid?: string;
+  headRefName?: string;
+  baseRefName?: string;
+  isCrossRepository?: boolean;
   statusCheckRollup?: {
     status?: string;
     conclusion?: string;
@@ -120,7 +159,7 @@ const prState = (pr: GhPr): PullRequestState => {
 };
 
 const PR_FIELDS =
-  "number,url,state,isDraft,updatedAt,headRefOid,statusCheckRollup";
+  "number,url,state,isDraft,updatedAt,headRefOid,headRefName,baseRefName,isCrossRepository,statusCheckRollup";
 
 /**
  * The reviewed publish lifecycle: commit, push, draft PR, status refresh and
@@ -169,7 +208,7 @@ export class GitService {
 
   async #ghJson<T>(binding: WorkspaceBinding, args: string[]): Promise<T> {
     const result = await run(this.#gh, args, {
-      cwd: binding.path,
+      cwd: (await repo.canonical(binding.path)) ?? binding.repoRoot,
       timeoutMs: this.#timeoutMs,
     });
     if (result.missing) {
@@ -191,107 +230,323 @@ export class GitService {
     return JSON.parse(result.stdout || "null") as T;
   }
 
-  /** A repeated operation whose outcome is unknown is checked, never re-run blindly. */
-  async #reconcileIfUnknown(
-    operationId: string,
-    check: () => Promise<{ done: boolean; result: unknown; note: string }>
-  ) {
-    const existing = this.#journal.get(operationId);
-    if (existing?.operation.status !== "unknown") {
-      return;
+  async #verifiedBinding(missionId: string) {
+    const value = this.#binding(missionId);
+    const problems = await verifyBinding(value.binding);
+    if (problems.length > 0) {
+      throw conflict(problems.join("; "));
     }
-    const outcome = await check();
-    this.#journal.reconcile(
-      operationId,
-      outcome.done ? "reconciled" : "failed",
-      outcome.result,
-      outcome.note
+    return value;
+  }
+
+  async #reconcile(
+    operationId: string,
+    kind: string,
+    missionId: string,
+    check: (detail: Record<string, unknown>) => Promise<unknown>
+  ) {
+    const existing = this.#journal.get(operationId, { kind, missionId });
+    if (existing?.operation.status !== "unknown") {
+      return existing;
+    }
+    // Missing evidence or failed lookups deliberately leave the outcome unknown.
+    const result = await check(existing.operation.detail);
+    if (result !== null) {
+      this.#journal.reconcile(
+        operationId,
+        "reconciled",
+        result,
+        "Verified the recorded original intent"
+      );
+    }
+    return this.#journal.get(operationId, { kind, missionId });
+  }
+
+  commit(missionId: string, input: CommitRequest): Promise<Mission> {
+    return this.#missions.withWorkspaceMutation(missionId, () =>
+      this.#commit(missionId, input)
     );
   }
 
-  // ------------------------------------------------------------------ commit
-
-  async commit(missionId: string, input: CommitRequest): Promise<Mission> {
-    const request = CommitRequestSchema.parse(input);
-    const { binding } = this.#binding(missionId);
-    await this.#reconcileIfUnknown(request.operationId, async () => {
-      const [currentHead, parent, subject] = await Promise.all([
-        repo.head(binding.path),
-        this.#git(binding, ["rev-parse", "--verify", "--quiet", "HEAD^"]),
-        this.#git(binding, ["log", "-1", "--format=%s"]),
-      ]);
-      const done =
-        parent.stdout.trim() === request.expectedHead &&
-        subject.stdout.trim() === firstLine(request.message);
-      return {
-        done,
-        note: done ? "Found the commit at HEAD" : "No matching commit at HEAD",
-        result: done ? { sha: currentHead } : null,
-      };
+  async #assertInstalled(
+    binding: WorkspaceBinding,
+    intent: ReviewedCommitIntent,
+    sha: string
+  ) {
+    const [head, branch, tree] = await Promise.all([
+      repo.head(binding.path),
+      repo.currentBranch(binding.path),
+      checkedGit(binding.path, ["rev-parse", `${sha}^{tree}`], {
+        timeoutMs: this.#timeoutMs,
+      }),
+    ]).catch((error: unknown) => {
+      throw new Error(
+        "Could not verify the installed commit around post-commit",
+        { cause: error }
+      );
     });
-    const { result, duplicate } = await this.#journal.run(
-      {
-        detail: { expectedHead: request.expectedHead },
-        id: request.operationId,
-        kind: "git.commit",
-        missionId,
-      },
-      async () => {
-        const currentHead = await repo.head(binding.path);
-        if (currentHead !== request.expectedHead) {
-          throw stale(
-            "HEAD moved since you reviewed the changes; review again"
-          );
-        }
-        const changes = await workspaceChanges(binding);
-        if (changes.hash !== request.expectedChangesHash) {
-          throw stale(
-            "The changes moved since you reviewed them; review again"
-          );
-        }
-        const uncommitted = changes.files.filter((file) => !file.committed);
-        // Files dirty before the mission may hold the user's own edits; they
-        // are committed only when the user reviewed them and opted in.
-        const included = request.includePreExisting
-          ? uncommitted
-          : uncommitted.filter((file) => !file.preExisting);
-        const paths = included.flatMap((file) =>
-          file.oldPath ? [file.oldPath, file.path] : [file.path]
+    if (head !== sha || branch !== intent.branch || tree !== intent.tree) {
+      throw new Error(
+        "The real commit ref or approved tree changed around post-commit; review the repository before publishing"
+      );
+    }
+  }
+
+  /** Installation is durable before admission; uncertain external hooks are never retried. */
+  async #finishCommit(
+    missionId: string,
+    binding: WorkspaceBinding,
+    intent: ReviewedCommitIntent,
+    sha: string
+  ) {
+    const identity = { kind: "git.post_commit", missionId };
+    const existing = intent.postCommitId
+      ? this.#journal.get(intent.postCommitId, identity)
+      : null;
+    if (existing) {
+      if (
+        existing.operation.detail.sha !== sha ||
+        existing.operation.detail.tree !== intent.tree ||
+        existing.operation.detail.branch !== intent.branch
+      ) {
+        throw conflict(
+          "The recorded post-commit belongs to another approved commit"
         );
-        if (paths.length === 0) {
-          throw conflict(
-            uncommitted.length > 0
-              ? "Only files changed before the mission started remain. Review them and include them to commit."
-              : "There is nothing to commit"
+      }
+      if (["intent", "unknown"].includes(existing.operation.status)) {
+        throw new Error(
+          "The post-commit hook outcome is unknown; it will not be run again automatically"
+        );
+      }
+      // Admission proves the real index was installed. A post-commit hook may
+      // subsequently stage unrelated bytes; recovery must not repair over them.
+      return;
+    }
+    await repairReviewedIndex(binding.path, intent, sha);
+    if (!intent.postCommitId) {
+      return;
+    }
+    await this.#assertInstalled(binding, intent, sha);
+    const index = await checkedGit(binding.path, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-path",
+      "index",
+    ]);
+    let knownExit: Error | undefined;
+    try {
+      await this.#journal.run(
+        {
+          detail: { branch: intent.branch, sha, tree: intent.tree },
+          id: intent.postCommitId,
+          ...identity,
+        },
+        async () => {
+          const result = await git(
+            binding.path,
+            ["hook", "run", "--ignore-missing", "post-commit"],
+            {
+              env: { GIT_EDITOR: ":", GIT_INDEX_FILE: index },
+              timeoutMs: this.#timeoutMs,
+            }
           );
+          if (result.code === null || result.missing) {
+            throw new Error(
+              "The post-commit hook did not finish; its outcome is unknown"
+            );
+          }
+          await this.#assertInstalled(binding, intent, sha);
+          if (!result.ok) {
+            knownExit = new Error(
+              `The post-commit hook exited with code ${result.code}; the approved commit remains installed`
+            );
+            throw knownExit;
+          }
+          return { code: result.code };
+        },
+        {
+          outcomeUnknown: (error) =>
+            knownExit === undefined || error !== knownExit,
         }
-        const added = await this.#git(binding, ["add", "-A", "--", ...paths]);
-        if (!added.ok) {
-          throw conflict(failure(added.stderr, "git add failed"));
+      );
+    } catch (error) {
+      if (knownExit === undefined || error !== knownExit) {
+        throw new TypeError(
+          `The installed commit's post-commit outcome is unknown: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      }
+      // Native Git does not undo or reject an installed commit for a known
+      // post-commit nonzero exit. Its failure remains visible in the journal.
+    }
+  }
+
+  async #commit(missionId: string, input: CommitRequest): Promise<Mission> {
+    const request = CommitRequestSchema.parse(input);
+    this.#journal.get(request.operationId, { kind: "git.commit", missionId });
+    const { binding } = this.#binding(missionId);
+    const existing = await this.#reconcile(
+      request.operationId,
+      "git.commit",
+      missionId,
+      async (detail) => {
+        const intent = ReviewedCommitIntentSchema.safeParse(detail);
+        const candidate = intent.success
+          ? this.#journal.get(intent.data.candidateId, {
+              kind: "git.commit_candidate",
+              missionId,
+            })
+          : null;
+        const recorded = ReviewedCommitResultSchema.safeParse(
+          candidate?.result
+        );
+        let sha =
+          typeof detail.approvedSha === "string" ? detail.approvedSha : null;
+        let message = typeof detail.message === "string" ? detail.message : "";
+        if (
+          recorded.success &&
+          candidate &&
+          ["succeeded", "reconciled"].includes(candidate.operation.status)
+        ) {
+          ({ sha, message } = recorded.data);
         }
-        const committed = await this.#git(binding, [
-          "commit",
-          "-q",
-          "-m",
-          request.message,
-          "--",
-          ...paths,
+        if (!sha) {
+          return null;
+        }
+        const contains = await this.#git(binding, [
+          "merge-base",
+          "--is-ancestor",
+          sha,
+          "HEAD",
         ]);
-        if (!committed.ok) {
-          throw conflict(
-            failure(committed.stderr || committed.stdout, "git commit failed")
+        if (contains.code !== 0 && contains.code !== 1) {
+          throw new Error(
+            "Could not determine whether the approved commit is present"
           );
         }
-        return { sha: await repo.head(binding.path) };
-      },
-      { outcomeUnknown }
+        if (!contains.ok) {
+          return null;
+        }
+        if (intent.success) {
+          const tree = await checkedGit(binding.path, [
+            "rev-parse",
+            `${sha}^{tree}`,
+          ]);
+          if (tree !== intent.data.tree) {
+            throw conflict(
+              "The recorded commit does not match the reviewed tree"
+            );
+          }
+          await this.#finishCommit(missionId, binding, intent.data, sha);
+        }
+        return { message, sha };
+      }
     );
-    const sha = (result as { sha: string | null } | null)?.sha;
-    if (!sha) {
+    let installed = false;
+    let effect: (
+      intent: Record<string, unknown>
+    ) => Promise<{ sha: string; message: string }> = () =>
+      Promise.reject(
+        conflict(`Operation ${request.operationId} has an unknown outcome`)
+      );
+    let detail: Record<string, unknown> = existing?.operation.detail ?? {};
+    if (!existing) {
+      await this.#verifiedBinding(missionId);
+      const snapshot = await captureReview(binding);
+      if (snapshot.branch !== binding.branch) {
+        throw stale("The checked-out branch moved since review; review again");
+      }
+      if (snapshot.head !== request.expectedHead) {
+        throw stale("HEAD moved since you reviewed the changes; review again");
+      }
+      if (snapshot.hash !== request.expectedChangesHash) {
+        throw stale("The changes moved since you reviewed them; review again");
+      }
+      const changes = await workspaceChanges(binding, snapshot);
+      const uncommitted = changes.files.filter((file) => !file.committed);
+      const included = request.includePreExisting
+        ? uncommitted
+        : uncommitted.filter((file) => !file.preExisting);
+      const paths = new Set(
+        included.flatMap((file) =>
+          file.oldPath ? [file.oldPath, file.path] : [file.path]
+        )
+      );
+      const entries = snapshot.entries.filter(
+        (entry) =>
+          paths.has(entry.path) &&
+          (request.includePreExisting ||
+            !binding.baselineDirtyFiles.includes(entry.path))
+      );
+      if (entries.length === 0) {
+        throw conflict(
+          uncommitted.length > 0
+            ? "Only files changed before the mission started remain. Review them and include them to commit."
+            : "There is nothing to commit"
+        );
+      }
+      const tree = await reviewedTree(binding.path, snapshot.head, entries);
+      const previousTree = snapshot.head
+        ? await checkedGit(binding.path, [
+            "rev-parse",
+            `${snapshot.head}^{tree}`,
+          ])
+        : null;
+      if (tree === previousTree) {
+        throw conflict("There is nothing to commit");
+      }
+      detail = {
+        ...request,
+        binding,
+        branch: snapshot.branch,
+        candidateId: `${request.operationId}:candidate`,
+        entries,
+        originalIndex: snapshot.index,
+        postCommitId: `${request.operationId}:post-commit`,
+        tree,
+      };
+      effect = async (recorded) => {
+        const intent = ReviewedCommitIntentSchema.parse(recorded);
+        const { result: candidate } = await this.#journal.run(
+          {
+            detail: intent,
+            id: intent.candidateId,
+            kind: "git.commit_candidate",
+            missionId,
+          },
+          (candidateIntent) =>
+            createReviewedCandidate(
+              binding.path,
+              ReviewedCommitIntentSchema.parse(candidateIntent)
+            ),
+          { outcomeUnknown }
+        );
+        await installReviewedCommit(
+          binding.path,
+          {
+            branch: intent.branch,
+            head: intent.expectedHead,
+            index: intent.originalIndex,
+          },
+          intent.entries,
+          candidate.sha
+        );
+        installed = true;
+        await this.#finishCommit(missionId, binding, intent, candidate.sha);
+        return candidate;
+      };
+    }
+    const { result } = await this.#journal.run(
+      { detail, id: request.operationId, kind: "git.commit", missionId },
+      effect,
+      // A later local validation error cannot mean that no commit was made.
+      { outcomeUnknown: (error) => installed || outcomeUnknown(error) }
+    );
+    if (!result?.sha) {
       return this.#missions.get(missionId);
     }
     return this.#missions.patch(missionId, (mission) =>
-      duplicate && mission.publish.commits.some((commit) => commit.sha === sha)
+      mission.publish.commits.some((commit) => commit.sha === result.sha)
         ? mission
         : {
             ...mission,
@@ -299,196 +554,331 @@ export class GitService {
               ...mission.publish,
               commits: [
                 ...mission.publish.commits,
-                { message: firstLine(request.message), sha },
+                {
+                  message: firstLine(
+                    result.message ?? String(detail.message ?? "")
+                  ),
+                  sha: result.sha,
+                },
               ],
             },
           }
     );
   }
 
-  // -------------------------------------------------------------------- push
-
-  async #remoteHead(binding: WorkspaceBinding, branch: string) {
+  async #remoteHead(binding: WorkspaceBinding, branch: string, remote: string) {
+    const target = await this.#remoteTarget(binding, remote);
     const result = await this.#git(binding, [
       "ls-remote",
-      "origin",
+      "--",
+      target,
       `refs/heads/${branch}`,
     ]);
-    return result.ok ? (result.stdout.split(/\s/u)[0] ?? null) || null : null;
+    if (!result.ok) {
+      throw new Error("Could not determine the remote branch head");
+    }
+    return (
+      result.stdout
+        .split("\n")
+        .find((line) => line.split(/\s/u)[1] === `refs/heads/${branch}`)
+        ?.split(/\s/u)[0] ?? null
+    );
   }
 
-  async push(missionId: string, request: PushRequest): Promise<Mission> {
-    const { binding } = this.#binding(missionId);
-    const branch = await repo.currentBranch(binding.path);
-    if (!branch) {
-      throw conflict(
-        "The mission folder is on a detached HEAD; check out a branch first"
+  async #remoteTarget(binding: WorkspaceBinding, identity: string) {
+    const configured = await this.#git(binding, [
+      "remote",
+      "get-url",
+      "origin",
+    ]);
+    if (!configured.ok || redactUrl(configured.stdout) !== identity) {
+      throw new Error(
+        "The origin remote identity changed; its original outcome is unknown"
       );
     }
-    if (binding.branch && branch !== binding.branch) {
-      throw conflict(`Expected branch ${binding.branch}, found ${branch}`);
+    // Credentials remain local and transient, never in the journal or response.
+    return configured.stdout;
+  }
+
+  async #trackPush(
+    binding: WorkspaceBinding,
+    branch: string,
+    remote: string,
+    sha: string
+  ) {
+    await this.#remoteTarget(binding, remote);
+    await checkedGit(binding.path, [
+      "show-ref",
+      "--verify",
+      `refs/heads/${branch}`,
+    ]);
+    await checkedGit(binding.path, [
+      "update-ref",
+      `refs/remotes/origin/${branch}`,
+      sha,
+    ]);
+    await checkedGit(binding.path, [
+      "config",
+      "--local",
+      "--replace-all",
+      `branch.${branch}.remote`,
+      "origin",
+    ]);
+    await checkedGit(binding.path, [
+      "config",
+      "--local",
+      "--replace-all",
+      `branch.${branch}.merge`,
+      `refs/heads/${branch}`,
+    ]);
+  }
+
+  push(missionId: string, request: PushRequest): Promise<Mission> {
+    return this.#missions.withWorkspaceMutation(missionId, () =>
+      this.#push(missionId, request)
+    );
+  }
+
+  async #push(missionId: string, request: PushRequest): Promise<Mission> {
+    this.#journal.get(request.operationId, { kind: "git.push", missionId });
+    const { binding } = this.#binding(missionId);
+    const existing = await this.#reconcile(
+      request.operationId,
+      "git.push",
+      missionId,
+      async (detail) => {
+        if (
+          typeof detail.branch !== "string" ||
+          typeof detail.remote !== "string" ||
+          typeof detail.expectedHead !== "string"
+        ) {
+          return null;
+        }
+        const remoteHead = await this.#remoteHead(
+          binding,
+          detail.branch,
+          detail.remote
+        );
+        if (remoteHead !== detail.expectedHead) {
+          return null;
+        }
+        await this.#trackPush(
+          binding,
+          detail.branch,
+          detail.remote,
+          detail.expectedHead
+        );
+        return { branch: detail.branch, remote: detail.remote };
+      }
+    );
+    let detail = existing?.operation.detail ?? {};
+    if (!existing) {
+      await this.#verifiedBinding(missionId);
+      const branch = await repo.currentBranch(binding.path);
+      const remote = await repo.remoteUrl(binding.path);
+      if (!branch) {
+        throw conflict(
+          "The mission folder is on a detached HEAD; check out a branch first"
+        );
+      }
+      if (!remote) {
+        throw conflict("The repository has no origin remote");
+      }
+      detail = { ...request, branch, remote };
     }
-    const remote = await repo.remoteUrl(binding.path);
-    if (!remote) {
-      throw conflict("The repository has no origin remote");
-    }
-    await this.#reconcileIfUnknown(request.operationId, async () => {
-      const remoteHead = await this.#remoteHead(binding, branch);
-      const done = remoteHead === request.expectedHead;
-      return {
-        done,
-        note: done
-          ? "Remote branch is at the reviewed head"
-          : `Remote branch is at ${remoteHead ?? "nothing"}`,
-        result: done ? { branch } : null,
-      };
-    });
     const { result } = await this.#journal.run(
-      {
-        detail: { branch, expectedHead: request.expectedHead },
-        id: request.operationId,
-        kind: "git.push",
-        missionId,
-      },
-      async () => {
-        if ((await repo.head(binding.path)) !== request.expectedHead) {
+      { detail, id: request.operationId, kind: "git.push", missionId },
+      async (intent) => {
+        const branch = String(intent.branch);
+        const remote = String(intent.remote);
+        const approvedSha = String(intent.expectedHead);
+        if ((await repo.head(binding.path)) !== approvedSha) {
           throw stale("HEAD moved since you approved the push; review again");
         }
+        const target = await this.#remoteTarget(binding, remote);
         const pushed = await this.#git(binding, [
           "push",
           "--porcelain",
-          "-u",
-          "origin",
-          `HEAD:refs/heads/${branch}`,
+          "--",
+          target,
+          `${approvedSha}:refs/heads/${branch}`,
         ]);
         if (!pushed.ok) {
-          const text = `${pushed.stdout}\n${pushed.stderr}`;
-          if (/rejected|non-fast-forward|fetch first/iu.test(text)) {
+          if (
+            /rejected|non-fast-forward|fetch first/iu.test(
+              `${pushed.stdout}\\n${pushed.stderr}`
+            )
+          ) {
             this.#missions.notify(
               missionId,
               "merge_conflict",
               "error",
               `The remote ${branch} has commits you do not have. Pull or rebase in a terminal, then push again.`
             );
-            throw conflict(
-              "The remote branch has new commits; integrate them before pushing"
-            );
           }
           throw conflict(failure(pushed.stderr, "git push failed"));
         }
-        return { branch };
+        try {
+          await this.#trackPush(binding, branch, remote, approvedSha);
+        } catch (error) {
+          throw new Error(
+            "The approved push succeeded but upstream tracking could not be settled",
+            { cause: error }
+          );
+        }
+        return { branch, remote };
       },
       { outcomeUnknown }
     );
-    if (!result) {
-      return this.#missions.get(missionId);
-    }
     return this.#missions.patch(missionId, (mission) => ({
       ...mission,
-      publish: { ...mission.publish, pushedBranch: branch, remote },
+      publish: {
+        ...mission.publish,
+        pushedBranch: result.branch,
+        remote: result.remote,
+      },
     }));
   }
 
-  // ------------------------------------------------------------ pull request
-
-  async #findPr(binding: WorkspaceBinding, branch: string) {
+  async #findPr(binding: WorkspaceBinding, intent: Record<string, unknown>) {
+    const { branch, base, remote, expectedHead } = intent;
+    if (
+      typeof branch !== "string" ||
+      typeof base !== "string" ||
+      typeof remote !== "string" ||
+      typeof expectedHead !== "string"
+    ) {
+      throw new TypeError("The recorded pull request intent is incomplete");
+    }
     const prs = await this.#ghJson<GhPr[]>(binding, [
       "pr",
       "list",
+      "--repo",
+      githubRepository(remote),
       "--head",
       branch,
+      "--base",
+      base,
       "--state",
-      "all",
+      "open",
       "--json",
       PR_FIELDS,
       "--limit",
-      "5",
+      "100",
     ]);
     return (
-      prs.find((pr) => pr.state.toUpperCase() === "OPEN") ?? prs[0] ?? null
+      prs.find(
+        (pr) =>
+          pr.state.toUpperCase() === "OPEN" &&
+          pr.headRefName === branch &&
+          pr.baseRefName === base &&
+          pr.headRefOid === expectedHead &&
+          pr.isCrossRepository === false
+      ) ?? null
     );
   }
 
-  async createPullRequest(
+  createPullRequest(
     missionId: string,
     request: CreatePullRequest
   ): Promise<Mission> {
+    return this.#missions.withWorkspaceMutation(missionId, () =>
+      this.#createPullRequest(missionId, request)
+    );
+  }
+
+  async #createPullRequest(
+    missionId: string,
+    request: CreatePullRequest
+  ): Promise<Mission> {
+    this.#journal.get(request.operationId, { kind: "github.pr", missionId });
     const { binding, mission } = this.#binding(missionId);
-    const branch = mission.publish.pushedBranch;
-    if (!branch) {
-      throw conflict("Push the branch before opening a pull request");
+    const existing = await this.#reconcile(
+      request.operationId,
+      "github.pr",
+      missionId,
+      async (detail) => await this.#findPr(binding, detail)
+    );
+    let detail = existing?.operation.detail ?? {};
+    if (!existing) {
+      await this.#verifiedBinding(missionId);
+      const branch = mission.publish.pushedBranch;
+      const { remote } = mission.publish;
+      const base = binding.baseRef;
+      if (!branch || !remote) {
+        throw conflict("Push the branch before opening a pull request");
+      }
+      if (!base || branch === base) {
+        throw conflict(
+          "The mission needs a separate branch and a known base for a pull request"
+        );
+      }
+      detail = { ...request, base, branch, remote };
     }
-    if (branch === binding.baseRef) {
-      throw conflict(
-        `The commits are on ${branch}, the base branch, so there is nothing to compare. Start the mission in a new worktree to open a pull request.`
-      );
-    }
-    await this.#reconcileIfUnknown(request.operationId, async () => {
-      const found = await this.#findPr(binding, branch);
-      return {
-        done: found !== null,
-        note: found ? `Found PR #${found.number}` : "No PR for the branch",
-        result: found,
-      };
-    });
     const { result } = await this.#journal.run(
-      {
-        detail: { branch },
-        id: request.operationId,
-        kind: "github.pr",
-        missionId,
-      },
-      async () => {
-        if ((await repo.head(binding.path)) !== request.expectedHead) {
+      { detail, id: request.operationId, kind: "github.pr", missionId },
+      async (intent) => {
+        const branch = String(intent.branch);
+        const remote = String(intent.remote);
+        const approvedSha = String(intent.expectedHead);
+        if ((await repo.head(binding.path)) !== approvedSha) {
           throw stale(
             "HEAD moved since you reviewed the pull request; review again"
           );
         }
-        // Adopting an existing PR keeps retries and parallel tabs from opening duplicates.
-        const existing = await this.#findPr(binding, branch);
-        if (existing && existing.state.toUpperCase() === "OPEN") {
-          return existing;
+        const verifyRemote = async () => {
+          if (
+            (await this.#remoteHead(binding, branch, remote)) !== approvedSha
+          ) {
+            throw stale(
+              "The remote branch moved since approval; push the reviewed head before opening a pull request"
+            );
+          }
+        };
+        await verifyRemote();
+        const found = await this.#findPr(binding, intent);
+        if (found) {
+          return found;
         }
-        const args = [
-          "pr",
-          "create",
-          "--draft",
-          "--title",
-          request.title,
-          "--body",
-          request.body,
-          "--head",
-          branch,
-        ];
-        if (binding.baseRef) {
-          args.push("--base", binding.baseRef);
-        }
-        const created = await run(this.#gh, args, {
-          cwd: binding.path,
-          timeoutMs: this.#timeoutMs,
-        });
+        await verifyRemote();
+        const created = await run(
+          this.#gh,
+          [
+            "pr",
+            "create",
+            "--repo",
+            githubRepository(remote),
+            "--draft",
+            "--title",
+            String(intent.title),
+            "--body",
+            String(intent.body),
+            "--head",
+            branch,
+            "--base",
+            String(intent.base),
+          ],
+          { cwd: binding.path, timeoutMs: this.#timeoutMs }
+        );
         if (created.code === null) {
           throw new Error("gh pr create did not finish");
         }
         if (!created.ok) {
           throw conflict(failure(created.stderr, "gh pr create failed"));
         }
-        const found = await this.#findPr(binding, branch);
-        if (!found) {
+        const readBack = await this.#findPr(binding, intent);
+        if (!readBack) {
           throw new Error(
             "The pull request was created but could not be read back"
           );
         }
-        return found;
+        return readBack;
       },
       { outcomeUnknown }
     );
-    if (!result) {
-      return this.#missions.get(missionId);
-    }
     return this.#missions.patch(missionId, (m) => ({
       ...m,
-      publish: { ...m.publish, pr: prState(result as GhPr) },
+      publish: { ...m.publish, pr: prState(result) },
     }));
   }
 
@@ -502,11 +892,13 @@ export class GitService {
       "pr",
       "view",
       String(pr.number),
+      ...(mission.publish.remote
+        ? ["--repo", githubRepository(mission.publish.remote)]
+        : []),
       "--json",
       PR_FIELDS,
     ]);
     const next = prState(view);
-    const mergedNow = next.state === "merged" && pr.state !== "merged";
     const updated = this.#missions.patch(missionId, (m) => ({
       ...m,
       publish: {
@@ -519,24 +911,42 @@ export class GitService {
       },
     }));
     if (
-      mergedNow &&
-      this.#settings.get().cleanupAfterMerge &&
-      updated.workspace?.owned
+      next.state !== "merged" ||
+      !this.#settings.get().cleanupAfterMerge ||
+      !updated.workspace?.owned ||
+      updated.publish.cleanup !== "eligible"
     ) {
-      return await this.#removeWorkspace(missionId, view.headRefOid ?? null);
+      return updated;
     }
-    return updated;
+    // Refresh itself remains readable while agents run; only the destructive
+    // transition requires the stopped-workspace interval.
+    try {
+      return await this.cleanup(missionId, {
+        action: "remove",
+        operationId: `auto-cleanup:${missionId}:${pr.number}:${view.headRefOid ?? "unknown"}`,
+      });
+    } catch (error) {
+      if (error instanceof AppError && error.code === "conflict") {
+        return this.#missions.get(missionId);
+      }
+      throw error;
+    }
   }
 
-  // ----------------------------------------------------------------- cleanup
-
-  async #removeWorkspace(missionId: string, mergedHead: string | null) {
+  async #removeWorkspace(
+    missionId: string,
+    mergedHead: string | null,
+    expectedHead?: string | null,
+    allowBranchDeletion?: boolean
+  ) {
     const mission = this.#missions.get(missionId);
     if (!mission.workspace) {
       return mission;
     }
     const outcome = await cleanupBinding(mission.workspace, {
+      allowBranchDeletion,
       deleteBranch: true,
+      expectedHead,
       mergedHead,
     });
     return this.#missions.patch(missionId, (m) => ({
@@ -550,52 +960,188 @@ export class GitService {
     }));
   }
 
-  async cleanup(missionId: string, input: CleanupRequest): Promise<Mission> {
+  cleanup(missionId: string, input: CleanupRequest): Promise<Mission> {
+    const existing = this.#journal.get(input.operationId, {
+      kind: "workspace.cleanup",
+      missionId,
+    });
+    const mission = this.#missions.get(missionId);
+    if (
+      existing &&
+      ["succeeded", "reconciled"].includes(existing.operation.status) &&
+      mission.publish.cleanup === "removed"
+    ) {
+      // A terminal replay is a read, not a new mutation of a removed folder.
+      return Promise.resolve(mission);
+    }
+    if (existing && ["intent", "unknown"].includes(existing.operation.status)) {
+      return this.#missions.withWorkspaceRecovery(
+        missionId,
+        input.operationId,
+        () => this.#recoverCleanup(missionId, input.operationId)
+      );
+    }
+    return this.#missions.withWorkspaceMutation(missionId, () =>
+      this.#cleanup(missionId, input)
+    );
+  }
+
+  async #recoverCleanup(
+    missionId: string,
+    operationId: string
+  ): Promise<Mission> {
+    const recorded = this.#journal.get(operationId, {
+      kind: "workspace.cleanup",
+      missionId,
+    });
+    if (
+      !recorded ||
+      !["intent", "unknown"].includes(recorded.operation.status)
+    ) {
+      throw conflict("Only an uncertain original cleanup can be reconciled");
+    }
+    const mission = this.#missions.get(missionId);
+    const original = WorkspaceBindingSchema.parse(
+      recorded.operation.detail.binding
+    );
+    if (
+      !mission.workspace ||
+      original.id !== mission.workspace.id ||
+      original.path !== mission.workspace.path ||
+      original.repoRoot !== mission.workspace.repoRoot ||
+      original.branch !== mission.workspace.branch
+    ) {
+      throw conflict(
+        "The workspace binding changed after the original cleanup intent"
+      );
+    }
+    if (recorded.operation.detail.action === "keep") {
+      if (mission.publish.cleanup !== "kept") {
+        throw conflict("The original keep outcome cannot be verified");
+      }
+      this.#journal.reconcile(
+        operationId,
+        "reconciled",
+        mission,
+        "Observed the original keep outcome"
+      );
+      return mission;
+    }
+    const observed = await observeCleanup(recorded.operation.detail);
+    const updated =
+      mission.status === "archived" && mission.publish.cleanup === "removed"
+        ? mission
+        : this.#missions.patch(missionId, (m) => ({
+            ...m,
+            publish: {
+              ...m.publish,
+              cleanup: "removed",
+              cleanupReason: observed.reason,
+            },
+            status: "archived",
+          }));
+    this.#journal.reconcile(
+      operationId,
+      "reconciled",
+      updated,
+      "Verified the original worktree registration and exact branch outcome"
+    );
+    return updated;
+  }
+
+  async #cleanup(
+    missionId: string,
+    input: CleanupRequest,
+    knownMergedHead?: string | null
+  ): Promise<Mission> {
     const request = CleanupRequestSchema.parse(input);
-    this.#binding(missionId);
+    this.#journal.get(request.operationId, {
+      kind: "workspace.cleanup",
+      missionId,
+    });
+    const { binding, mission } = this.#binding(missionId);
+    const existing = this.#journal.get(request.operationId, {
+      kind: "workspace.cleanup",
+      missionId,
+    });
+    let detail = existing?.operation.detail ?? {};
+    if (!existing) {
+      const mergedHead =
+        knownMergedHead === undefined && mission.publish.pr?.state === "merged"
+          ? await this.#mergedHead(mission)
+          : (knownMergedHead ?? null);
+      const plan =
+        request.action === "remove"
+          ? await planCleanup(binding, mergedHead)
+          : {};
+      detail = { ...request, binding, ...plan, mergedHead };
+    }
     const { result } = await this.#journal.run(
       {
-        detail: { action: request.action },
+        detail,
         id: request.operationId,
         kind: "workspace.cleanup",
         missionId,
       },
-      async () => {
-        if (request.alwaysAfterMerge) {
+      async (intent) => {
+        if (intent.alwaysAfterMerge) {
           this.#settings.update({ cleanupAfterMerge: true });
         }
-        if (request.action === "keep") {
+        if (intent.action === "keep") {
           return this.#missions.patch(missionId, (m) => ({
             ...m,
             publish: { ...m.publish, cleanup: "kept", cleanupReason: null },
           }));
         }
-        const mission = this.#missions.get(missionId);
-        const mergedHead =
-          mission.publish.pr?.state === "merged"
-            ? await this.#mergedHead(mission)
-            : null;
-        return await this.#removeWorkspace(missionId, mergedHead);
-      }
+        const blockedReason = intent.cleanupBlockedReason;
+        if (typeof blockedReason === "string") {
+          return this.#missions.patch(missionId, (m) => ({
+            ...m,
+            publish: {
+              ...m.publish,
+              cleanup: "blocked",
+              cleanupReason: blockedReason,
+            },
+          }));
+        }
+        const original = WorkspaceBindingSchema.parse(intent.binding);
+        if (
+          original.id !== binding.id ||
+          original.path !== binding.path ||
+          original.repoRoot !== binding.repoRoot
+        ) {
+          throw conflict(
+            "The workspace binding changed after cleanup was approved"
+          );
+        }
+        return await this.#removeWorkspace(
+          missionId,
+          typeof intent.mergedHead === "string" ? intent.mergedHead : null,
+          typeof intent.expectedHead === "string" ? intent.expectedHead : null,
+          intent.branchDeletionExpected === true
+        );
+      },
+      { outcomeUnknown }
     );
-    return result ?? this.#missions.get(missionId);
+    return result;
   }
 
   async #mergedHead(mission: Mission) {
     if (!(mission.publish.pr && mission.workspace)) {
       return null;
     }
-    try {
-      const view = await this.#ghJson<GhPr>(mission.workspace, [
-        "pr",
-        "view",
-        String(mission.publish.pr.number),
-        "--json",
-        "headRefOid",
-      ]);
-      return view.headRefOid ?? null;
-    } catch {
-      return null;
-    }
+    const view = await this.#ghJson<GhPr>(mission.workspace, [
+      "pr",
+      "view",
+      String(mission.publish.pr.number),
+      ...(mission.publish.remote
+        ? ["--repo", githubRepository(mission.publish.remote)]
+        : []),
+      "--json",
+      "headRefOid,state",
+    ]);
+    return view.state.toUpperCase() === "MERGED"
+      ? (view.headRefOid ?? null)
+      : null;
   }
 }

@@ -2,7 +2,7 @@ import { ApiErrorSchema } from "@missions/protocol/errors";
 import { OPERATION_HEADER, PROXY_PREFIX } from "@missions/protocol/http";
 import type { z } from "zod";
 
-import { ApiRequestError } from "@/lib/api/api-error";
+import { ApiRequestError } from "./api-error";
 
 export type Query = Record<string, number | string | null | undefined>;
 

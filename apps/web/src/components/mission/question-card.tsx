@@ -6,8 +6,7 @@ import type { ReactNode } from "react";
 
 import { ChatCard } from "@/components/mission/chat-cards";
 import { CloseIcon } from "@/components/mission/icons";
-import { useMission } from "@/components/mission/mission-context";
-import { reportMutationError } from "@/components/mission/report-error";
+import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
@@ -16,8 +15,6 @@ import {
   RadioGroup,
   RadioGroupItem,
 } from "@/components/ui/selection";
-import { api } from "@/lib/api/endpoints";
-import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { answerLabel, parseOption } from "@/lib/mission/questions";
 import { cn } from "@/lib/utils";
 
@@ -322,26 +319,22 @@ const Tabs = ({
 );
 
 const PendingQuestions = ({ question }: { question: Question }) => {
-  const { applyLocal, missionId, refresh } = useMission();
   const [step, setStep] = useState(0);
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
   const items = question.questions;
   const item = items[step];
 
-  const answer = useSingleFlightMutation({
-    mutationFn: () =>
-      api.answerQuestion(missionId, question.id, {
-        answers: items.map((entry) => ({
-          answer: answerOf(entry, drafts[entry.index] ?? initialDraft(entry)),
-          index: entry.index,
-        })),
-        cancelled: false,
-        epoch: question.epoch,
-      }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not send your answers"),
-    onSuccess: (value) => applyLocal({ kind: "question", value }),
-  });
+  const answer = useMissionCommand("question", "Could not send your answers");
+  const submitAnswers = () =>
+    answer.mutate({
+      answers: items.map((entry) => ({
+        answer: answerOf(entry, drafts[entry.index] ?? initialDraft(entry)),
+        index: entry.index,
+      })),
+      cancelled: false,
+      epoch: question.epoch,
+      questionId: question.id,
+    });
 
   if (!item) {
     return null;
@@ -388,7 +381,7 @@ const PendingQuestions = ({ question }: { question: Question }) => {
           <Button
             data-testid="question-submit"
             disabled={!items.every(answered) || answer.isPending}
-            onClick={() => answer.mutate()}
+            onClick={submitAnswers}
             variant="primary"
           >
             {answer.isPending ? "Sending…" : "Send answers"}

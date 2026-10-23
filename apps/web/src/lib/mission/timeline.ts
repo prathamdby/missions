@@ -1,4 +1,5 @@
 import type {
+  Agent,
   Assignment,
   PermissionRequest,
   PlanRevision,
@@ -8,6 +9,7 @@ import type {
 
 import { previewText } from "../live/mission-state";
 import type { PreviewKind, StreamingPreview } from "../live/mission-state";
+import { toolCardKind } from "./tool-output";
 
 export interface ToolCall {
   call: TranscriptItem | null;
@@ -57,6 +59,8 @@ type CardEntry = Extract<
 >;
 
 interface TimelineInput {
+  planAgentId?: string;
+  planInFlight?: boolean;
   assignments?: readonly Assignment[];
   permissions: readonly PermissionRequest[];
   plans: readonly PlanRevision[];
@@ -188,6 +192,26 @@ const transcriptEntries = (items: readonly TranscriptItem[]) => {
   return out;
 };
 
+const planPosition = (input: TimelineInput, plan: PlanRevision) => {
+  let at = plan.createdAt;
+  const [nextPlan] = input.plans
+    .filter((candidate) => candidate.revision > plan.revision)
+    .toSorted((a, b) => a.revision - b.revision);
+  const cutoff = plan.decidedAt ?? nextPlan?.createdAt;
+  for (const item of input.transcript) {
+    if (
+      input.planAgentId &&
+      item.agentId === input.planAgentId &&
+      item.kind === "assistant" &&
+      item.createdAt > at &&
+      (!cutoff || item.createdAt < cutoff)
+    ) {
+      at = item.createdAt;
+    }
+  }
+  return at;
+};
+
 const cardEntries = (input: TimelineInput) => {
   const latestPlan = Math.max(0, ...input.plans.map((plan) => plan.revision));
   const cards: { at: string; entry: CardEntry }[] = [
@@ -209,16 +233,18 @@ const cardEntries = (input: TimelineInput) => {
         request,
       },
     })),
-    ...input.plans.map((plan) => ({
-      at: plan.createdAt,
-      entry: {
-        agentId: null,
-        id: `plan:${plan.id}`,
-        kind: "plan" as const,
-        latest: plan.revision === latestPlan,
-        plan,
-      },
-    })),
+    ...input.plans
+      .filter((plan) => !(plan.status === "proposed" && input.planInFlight))
+      .map((plan) => ({
+        at: planPosition(input, plan),
+        entry: {
+          agentId: null,
+          id: `plan:${plan.id}`,
+          kind: "plan" as const,
+          latest: plan.revision === latestPlan,
+          plan,
+        },
+      })),
     ...input.plans.flatMap((plan) =>
       plan.status === "approved" && plan.decidedAt
         ? [
@@ -262,7 +288,11 @@ export const buildTimeline = (input: TimelineInput): TimelineEntry[] => {
   const out: TimelineEntry[] = [];
   let next = 0;
   for (const { at, entry } of transcript) {
-    while (next < cards.length && (cards[next]?.at ?? "") <= at) {
+    while (
+      next < cards.length &&
+      ((cards[next]?.at ?? "") < at ||
+        ((cards[next]?.at ?? "") === at && cards[next]?.entry.kind !== "plan"))
+    ) {
       const card = cards[next];
       if (card) {
         out.push(card.entry);
@@ -286,4 +316,68 @@ export const buildTimeline = (input: TimelineInput): TimelineEntry[] => {
     });
   }
   return out;
+};
+
+export type TranscriptRow =
+  | { entry: TimelineEntry; id: string; kind: "entry" }
+  | { groups: ToolCall[][]; id: string; kind: "tools"; tail: boolean }
+  | {
+      calls: ToolCall[];
+      card: "command" | "edit" | "ran";
+      id: string;
+      kind: "card";
+    };
+
+/** Worker narration and tool calls live in their assignment card, as in Paper S22. */
+const WORKER_HIDDEN = new Set<TimelineEntry["kind"]>([
+  "assistant",
+  "preview",
+  "thinking",
+  "tools",
+]);
+
+/**
+ * Folds consecutive tool groups from one agent into a single run. Lone
+ * commands and edits break out as their own cards.
+ */
+export const transcriptRows = (
+  entries: readonly TimelineEntry[],
+  running: boolean,
+  agents: Readonly<Record<string, Pick<Agent, "role">>> = {}
+): TranscriptRow[] => {
+  const rows: TranscriptRow[] = [];
+  for (const entry of entries) {
+    if (
+      entry.agentId !== null &&
+      WORKER_HIDDEN.has(entry.kind) &&
+      agents[entry.agentId]?.role === "worker"
+    ) {
+      continue;
+    }
+    const last = rows.at(-1);
+    if (entry.kind !== "tools") {
+      rows.push({ entry, id: entry.id, kind: "entry" });
+      continue;
+    }
+    const card = toolCardKind(entry.calls, running);
+    if (card) {
+      rows.push({ calls: entry.calls, card, id: entry.id, kind: "card" });
+      continue;
+    }
+    if (last?.kind === "tools" && last.id.startsWith(`${entry.agentId}|`)) {
+      last.groups.push(entry.calls);
+      continue;
+    }
+    rows.push({
+      groups: [entry.calls],
+      id: `${entry.agentId}|${entry.id}`,
+      kind: "tools",
+      tail: false,
+    });
+  }
+  const lastRow = rows.at(-1);
+  if (lastRow?.kind === "tools") {
+    lastRow.tail = true;
+  }
+  return rows;
 };

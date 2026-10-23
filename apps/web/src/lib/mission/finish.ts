@@ -1,15 +1,11 @@
 import type { Changes } from "@missions/protocol/files";
 import type { Mission, MissionStatus } from "@missions/protocol/missions";
 
-const PUBLISHABLE: ReadonlySet<MissionStatus> = new Set([
-  "completed",
-  "paused",
-  "interrupted",
-  "failed",
-]);
+import { missionCapabilities } from "./capabilities";
 
 /** The daemon archives only missions that finished or stopped. */
-export const canArchive = (status: MissionStatus) => PUBLISHABLE.has(status);
+export const canArchive = (status: MissionStatus) =>
+  missionCapabilities(status).archive;
 
 export type FinishStep =
   /** Uncommitted changes wait for review and a commit. */
@@ -41,7 +37,7 @@ export const finishState = (
   changes: Changes | undefined
 ): FinishState => {
   const idle = { pending: [], preExisting: [] };
-  if (!PUBLISHABLE.has(mission.status) || !mission.workspace) {
+  if (!missionCapabilities(mission.status).publish || !mission.workspace) {
     return { ...idle, step: "none" };
   }
   const { publish } = mission;

@@ -1,10 +1,10 @@
 import type { DaemonEvent } from "@missions/protocol/events";
-import type { MissionSummary } from "@missions/protocol/missions";
+import type { Mission, MissionSummary } from "@missions/protocol/missions";
 import type { CloneJob, Project } from "@missions/protocol/projects";
 import type { Settings } from "@missions/protocol/settings";
-import type { QueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
-import { queryKeys } from "@/lib/api/query-keys";
+import { queryKeys } from "../api/query-keys";
 
 export const upsertById = <T extends { id: string }>(
   list: readonly T[] | undefined,
@@ -18,53 +18,174 @@ export const upsertById = <T extends { id: string }>(
     : [...list, item];
 };
 
-/** Writes a global (missionId: null) event into the query cache. */
+/**
+ * Cancellation is synchronous in QueryClient, even when a transport ignores
+ * AbortSignal. Cancel before projecting/invalidation so late reads cannot
+ * overwrite a newer event, and active readers restart from authoritative data.
+ */
+const invalidate = (client: QueryClient, queryKey?: QueryKey) => {
+  void client.cancelQueries({ queryKey });
+  void client.invalidateQueries({ queryKey });
+};
+
+const project = <T>(
+  client: QueryClient,
+  queryKey: QueryKey,
+  update: (current: T | undefined) => T | undefined
+) => {
+  void client.cancelQueries({ exact: true, queryKey });
+  client.setQueryData<T>(queryKey, update);
+  if (client.getQueryData(queryKey) === undefined) {
+    void client.invalidateQueries({ exact: true, queryKey });
+  }
+};
+
+const missionVersions = new WeakMap<
+  QueryClient,
+  Map<
+    string,
+    {
+      revision: number | undefined;
+      updatedAt: string;
+    }
+  >
+>();
+
+/** Shared by creation, mission sessions, and global events. Inserts as well as updates. */
+export const upsertMissionSummary = (
+  client: QueryClient,
+  mission: MissionSummary | Mission
+): boolean => {
+  let versions = missionVersions.get(client);
+  if (!versions) {
+    versions = new Map();
+    missionVersions.set(client, versions);
+  }
+  const previous = versions.get(mission.id);
+  const revision = "revision" in mission ? mission.revision : undefined;
+  const cached = client
+    .getQueryData<MissionSummary[]>(queryKeys.missions)
+    ?.find((entry) => entry.id === mission.id);
+  if (
+    (previous &&
+      revision !== undefined &&
+      previous.revision !== undefined &&
+      revision <= previous.revision) ||
+    (revision === undefined &&
+      previous &&
+      mission.updatedAt <= previous.updatedAt) ||
+    (cached && cached.updatedAt > mission.updatedAt)
+  ) {
+    return false;
+  }
+  versions.set(mission.id, { revision, updatedAt: mission.updatedAt });
+  const summary: MissionSummary = {
+    createdAt: mission.createdAt,
+    id: mission.id,
+    projectId: mission.projectId,
+    status: mission.status,
+    title: mission.title,
+    updatedAt: mission.updatedAt,
+  };
+  const wasMissing = client.getQueryData(queryKeys.missions) === undefined;
+  project<MissionSummary[]>(client, queryKeys.missions, (list) =>
+    upsertById(list ?? [], summary)
+  );
+  if (wasMissing) {
+    invalidate(client, queryKeys.missions);
+  }
+  invalidate(client, queryKeys.pullRequests);
+  invalidate(client, ["project", mission.projectId]);
+  invalidate(client, ["mission", mission.id]);
+  return true;
+};
+
+/** Every query in this tab is daemon-owned, including inactive and infinite-stale reads. */
+export const recoverQueryResources = (client: QueryClient) =>
+  invalidate(client);
+
+export const invalidateMissionResources = (
+  client: QueryClient,
+  missionId: string
+) => {
+  for (const queryKey of [
+    ["mission", missionId],
+    ["project"],
+    queryKeys.missions,
+    queryKeys.pullRequests,
+    queryKeys.grants,
+  ]) {
+    invalidate(client, queryKey);
+  }
+};
+
+export const applyMissionEvent = (client: QueryClient, event: DaemonEvent) => {
+  if (event.type === "mission.updated") {
+    upsertMissionSummary(client, event.data.mission);
+  }
+  if (event.type === "workspace.changed" && event.missionId) {
+    invalidate(client, ["mission", event.missionId]);
+    invalidate(client, ["project"]);
+  }
+  if (event.type === "permission.updated") {
+    invalidate(client, queryKeys.grants);
+  }
+  if (event.type === "operation.updated") {
+    invalidate(client, queryKeys.pullRequests);
+  }
+};
+
+/** Writes a global event into the query cache and expires dependent reads. */
 export const applyGlobalEvent = (client: QueryClient, event: DaemonEvent) => {
   switch (event.type) {
     case "project.updated": {
-      client.setQueryData<Project[]>(queryKeys.projects, (list) =>
+      project<Project[]>(client, queryKeys.projects, (list) =>
         upsertById(list, event.data.project)
       );
+      invalidate(client, ["project", event.data.project.id]);
       break;
     }
     case "project.removed": {
-      client.setQueryData<Project[]>(queryKeys.projects, (list) =>
-        list?.filter((project) => project.id !== event.data.projectId)
+      project<Project[]>(client, queryKeys.projects, (list) =>
+        list?.filter((entry) => entry.id !== event.data.projectId)
       );
-      client.invalidateQueries({ queryKey: queryKeys.missions });
+      for (const queryKey of [
+        ["project", event.data.projectId],
+        queryKeys.missions,
+        queryKeys.pullRequests,
+        queryKeys.grants,
+      ]) {
+        invalidate(client, queryKey);
+      }
       break;
     }
     case "clone.updated": {
-      client.setQueryData<CloneJob>(
+      project<CloneJob>(
+        client,
         queryKeys.cloneJob(event.data.job.id),
-        event.data.job
+        () => event.data.job
       );
       if (event.data.job.status === "succeeded") {
-        client.invalidateQueries({ queryKey: queryKeys.projects });
+        invalidate(client, queryKeys.projects);
+        invalidate(client, ["project"]);
+        invalidate(client, ["fs"]);
       }
       break;
     }
     case "settings.updated": {
-      client.setQueryData<Settings>(queryKeys.settings, event.data.settings);
-      break;
-    }
-    case "mission.updated": {
-      const { mission } = event.data;
-      client.setQueryData<MissionSummary[]>(queryKeys.missions, (list) =>
-        list?.map((entry) =>
-          entry.id === mission.id
-            ? {
-                ...entry,
-                status: mission.status,
-                title: mission.title,
-                updatedAt: mission.updatedAt,
-              }
-            : entry
-        )
-      );
+      project<Settings>(client, queryKeys.settings, () => event.data.settings);
+      for (const queryKey of [
+        queryKeys.models,
+        queryKeys.connection,
+        ["github"],
+        queryKeys.grants,
+      ]) {
+        invalidate(client, queryKey);
+      }
       break;
     }
     default: {
+      applyMissionEvent(client, event);
       break;
     }
   }

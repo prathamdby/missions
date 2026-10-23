@@ -27,3 +27,17 @@ export const cloneCommand = (source: CloneSource, destination: string) =>
   source.kind === "github"
     ? `gh repo clone ${source.repo} ${destination}`
     : `git clone ${source.url} ${destination}`;
+
+const REMOTE_PREFIX = /^[a-z]+:\/\/|^[\w.-]+@/u;
+const SSH_REMOTE = /^(?:ssh:\/\/)?[\w.-]+@[\w.-]+[:/].+/u;
+const HTTPS_REMOTE = /^https?:\/\/[\w.-]+(?::\d+)?\/.+/u;
+
+export const remoteLabel = (url: string) =>
+  url.replace(REMOTE_PREFIX, "").replace(":", "/").replace(GIT_SUFFIX, "");
+
+export const remoteKind = (url: string): "https" | "ssh" | null => {
+  if (SSH_REMOTE.test(url)) {
+    return "ssh";
+  }
+  return HTTPS_REMOTE.test(url) ? "https" : null;
+};

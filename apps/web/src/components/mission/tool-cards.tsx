@@ -4,15 +4,15 @@ import { ChatCard } from "@/components/mission/chat-cards";
 import { PenSquareIcon, TerminalIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
+import { DiffRow } from "@/components/ui/diff-row";
+import type { ToolCall } from "@/lib/mission/timeline";
 import {
   argumentOf,
+  elapsedOf,
   inputOf,
   relativeTo,
   stringField,
   toolNameOf,
-} from "@/components/mission/tool-group";
-import type { ToolCall } from "@/lib/mission/timeline";
-import {
   DIFF_LINES,
   editDiff,
   exitCodeOf,
@@ -21,7 +21,7 @@ import {
   passedCount,
   runTime,
 } from "@/lib/mission/tool-output";
-import type { DiffLine, LineTone } from "@/lib/mission/tool-output";
+import type { LineTone } from "@/lib/mission/tool-output";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -30,46 +30,6 @@ const TONES: Record<LineTone, string> = {
   secondary: "text-text-secondary",
   success: "text-success",
   warning: "text-warning",
-};
-
-const EDIT_TOOLS = new Set(["Create", "Edit", "MultiEdit"]);
-
-/** A lone command that failed or is still running reads as a card (Paper I9X). */
-export const isCommandCard = (calls: readonly ToolCall[], running: boolean) => {
-  const [only] = calls;
-  if (calls.length !== 1 || !only || toolNameOf(only) !== "Execute") {
-    return false;
-  }
-  return only.result === null ? running : only.result.isError;
-};
-
-/** A lone command that succeeded reads as one "Ran" row (Paper I9X). */
-export const isRanRow = (calls: readonly ToolCall[]) => {
-  const [only] = calls;
-  return (
-    calls.length === 1 &&
-    only !== undefined &&
-    toolNameOf(only) === "Execute" &&
-    only.result !== null &&
-    !only.result.isError
-  );
-};
-
-/** Edits with their input render as diff cards (Paper I9X). */
-export const isEditGroup = (calls: readonly ToolCall[]) =>
-  calls.length > 0 &&
-  calls.every(
-    (call) =>
-      EDIT_TOOLS.has(toolNameOf(call)) &&
-      editDiff(toolNameOf(call), inputOf(call)).length > 0
-  );
-
-const elapsedOf = (call: ToolCall, now: number) => {
-  const start = Date.parse(
-    call.call?.createdAt ?? call.result?.createdAt ?? ""
-  );
-  const end = call.result ? Date.parse(call.result.createdAt) : now;
-  return Number.isNaN(start) ? 0 : end - start;
 };
 
 const STOP_UNSUPPORTED =
@@ -170,16 +130,6 @@ export const RanRow = ({ call }: { call: ToolCall }) => {
   );
 };
 
-const ROW_TONES: Record<DiffLine["kind"], string> = {
-  add: "bg-diff-add",
-  del: "bg-diff-del",
-};
-
-const GUTTER_TONES: Record<DiffLine["kind"], string> = {
-  add: "border-l-2 border-success bg-diff-add-gutter text-success",
-  del: "border-l-2 border-danger bg-diff-del-gutter text-danger",
-};
-
 export const EditCard = ({ call }: { call: ToolCall }) => {
   const { live } = useMission();
   const name = toolNameOf(call);
@@ -211,27 +161,15 @@ export const EditCard = ({ call }: { call: ToolCall }) => {
       </header>
       <div className="flex flex-col overflow-x-auto bg-surface py-xs">
         {shown.map((line, index) => (
-          <div
-            className={cn(
-              "flex h-5 shrink-0 items-center",
-              ROW_TONES[line.kind]
-            )}
+          <DiffRow
+            kind={line.kind}
             // Diff lines can repeat; their order is their identity.
             // oxlint-disable-next-line no-array-index-key
             key={index}
+            variant="tool"
           >
-            <span
-              className={cn(
-                "flex h-5 w-9.5 shrink-0 items-center justify-end pr-md font-mono text-2xs leading-lg select-none",
-                GUTTER_TONES[line.kind]
-              )}
-            >
-              {line.kind === "add" ? "+" : "−"}
-            </span>
-            <span className="pl-lg font-mono text-2xs leading-lg whitespace-pre text-syntax-text">
-              {line.text}
-            </span>
-          </div>
+            {line.text}
+          </DiffRow>
         ))}
         {diff.length > shown.length ? (
           <span className="pt-xs pl-lg font-mono text-2xs leading-lg text-text-tertiary">

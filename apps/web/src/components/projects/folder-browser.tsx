@@ -38,10 +38,7 @@ import { errorMessage } from "@/lib/api/api-error";
 import { useFsBrowse, useProjects } from "@/lib/api/queries";
 import { projectLabel, tildePath } from "@/lib/format";
 
-import { joinPath } from "./clone-target";
-
-const PROTOCOL = /^[a-z]+:\/\/|^git@/u;
-const GIT_SUFFIX = /\.git$/u;
+import { joinPath, remoteLabel } from "./clone-target";
 
 interface Place {
   icon: (props: IconProps) => ReactNode;
@@ -81,9 +78,6 @@ const commonPrefix = (names: readonly string[]) => {
   }
   return first.slice(0, end);
 };
-
-const remoteLabel = (url: string) =>
-  url.replace(PROTOCOL, "").replace(":", "/").replace(GIT_SUFFIX, "");
 
 const PathField = ({
   current,

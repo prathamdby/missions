@@ -11,11 +11,7 @@ const API = "/api/daemon/v1";
 export const MODEL = { modelId: "scripted", reasoningEffort: null };
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync(
-    "git",
-    ["-c", "user.name=E2E", "-c", "user.email=e2e@example.invalid", ...args],
-    { cwd, stdio: "pipe" }
-  ).toString();
+  execFileSync("git", args, { cwd, stdio: "pipe" }).toString();
 
 /** A throwaway repository with one commit on `main`. */
 export const gitRepo = (name: string) => {

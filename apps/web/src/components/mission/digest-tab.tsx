@@ -1,6 +1,5 @@
 "use client";
 
-import type { PermissionDecision } from "@missions/protocol/missions";
 import { useMemo } from "react";
 import type { ReactNode } from "react";
 
@@ -11,9 +10,8 @@ import {
 } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { DotLoader, Meta, PanelSection } from "@/components/mission/panel-kit";
-import { reportMutationError } from "@/components/mission/report-error";
-import { api } from "@/lib/api/endpoints";
-import { useSingleFlightMutation } from "@/lib/api/use-operation";
+import { usePermissionDecision } from "@/components/mission/use-permission-decision";
+import { Markdown } from "@/components/ui/markdown";
 import { shortAge } from "@/lib/format";
 import { buildDigest } from "@/lib/mission/digest";
 import type { DigestItem, DigestNeed } from "@/lib/mission/digest";
@@ -29,21 +27,10 @@ const smallButton =
   "flex h-6.5 cursor-pointer items-center rounded-sm px-control text-xs leading-sm font-medium tracking-tight transition-colors duration-fast disabled:cursor-not-allowed disabled:opacity-disabled";
 
 const NeedActions = ({ need }: { need: DigestNeed }) => {
-  const { applyLocal, missionId, refresh } = useMission();
-  const decide = useSingleFlightMutation({
-    mutationFn: (decision: PermissionDecision) => {
-      if (need.kind !== "permission") {
-        throw new Error("Only permission requests take a decision here");
-      }
-      return api.decidePermission(missionId, need.request.id, {
-        decision,
-        epoch: need.request.epoch,
-      });
-    },
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not send your decision"),
-    onSuccess: (value) => applyLocal({ kind: "permission", value }),
-  });
+  const { live, showAgent } = useMission();
+  const decide = usePermissionDecision(
+    need.kind === "permission" ? need.request : null
+  );
   if (need.kind === "permission") {
     return (
       <div className="mt-md flex gap-sm">
@@ -80,11 +67,22 @@ const NeedActions = ({ need }: { need: DigestNeed }) => {
           smallButton,
           "bg-accent text-on-accent hover:bg-accent-hover"
         )}
-        onClick={() =>
-          document
-            .querySelector(`[data-testid="${target}"]`)
-            ?.scrollIntoView({ behavior: "smooth", block: "center" })
-        }
+        onClick={() => {
+          const agentId =
+            need.kind === "question"
+              ? need.question.agentId
+              : Object.values(live.agents).find(
+                  (agent) => agent.role === "orchestrator"
+                )?.id;
+          if (agentId) {
+            showAgent(agentId);
+          }
+          requestAnimationFrame(() =>
+            document
+              .querySelector(`[data-testid="${target}"]`)
+              ?.scrollIntoView({ behavior: "smooth", block: "center" })
+          );
+        }}
         type="button"
       >
         {need.kind === "plan" ? "Review plan" : "Answer"}
@@ -129,15 +127,13 @@ const NeedCard = ({ need }: { need: DigestNeed }) => {
       <span className="flex h-4 w-5 shrink-0 items-center justify-center">
         <span className="size-2 rounded-full bg-warning" />
       </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-xs">
+      <div className="flex min-w-0 flex-1 flex-col gap-xs">
         <span className="text-sm leading-sm font-medium tracking-tight text-text">
           {title}
         </span>
-        <span className="text-xs leading-sm font-book tracking-tight text-text-tertiary">
-          {detail}
-        </span>
+        <Markdown appearance="panel">{detail}</Markdown>
         <NeedActions need={need} />
-      </span>
+      </div>
       <Age at={need.at} />
     </li>
   );
@@ -155,14 +151,12 @@ const ItemRow = ({ item }: { item: DigestItem }) => (
     <span className="flex h-4 w-5 shrink-0 items-center justify-center">
       {ITEM_ICON[item.icon]}
     </span>
-    <span className="flex min-w-0 flex-1 flex-col gap-xs">
+    <div className="flex min-w-0 flex-1 flex-col gap-xs">
       <span className="text-sm leading-sm font-medium tracking-tight text-text">
         {item.title}
       </span>
-      <span className="line-clamp-2 text-xs leading-sm font-book tracking-tight text-text-tertiary">
-        {item.detail}
-      </span>
-    </span>
+      <Markdown appearance="panel">{item.detail}</Markdown>
+    </div>
     <Age at={item.at} />
   </li>
 );

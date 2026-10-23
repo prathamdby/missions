@@ -1,4 +1,24 @@
 import type { DiffHunk } from "@missions/protocol/files";
+import type { Assignment } from "@missions/protocol/missions";
+
+/** Build once for the complete handoff collection, never once per file row. */
+export const fileAuthors = (
+  assignments: Readonly<Record<string, Assignment>>,
+  labels: Readonly<Record<string, string>>
+): Record<string, string> => {
+  const authors: Record<string, string> = {};
+  for (const assignment of Object.values(assignments).toSorted((a, b) =>
+    a.updatedAt.localeCompare(b.updatedAt)
+  )) {
+    const author = assignment.workerAgentId
+      ? (labels[assignment.workerAgentId] ?? "Worker")
+      : "Worker";
+    for (const path of assignment.handoff?.filesChanged ?? []) {
+      authors[path] = author;
+    }
+  }
+  return authors;
+};
 
 const HUNK_HEADER =
   /^@@ -(?<old>\d+)(?:,\d+)? \+(?<new>\d+)(?:,(?<count>\d+))? @@/u;

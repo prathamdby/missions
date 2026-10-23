@@ -116,7 +116,7 @@ const sectionVariants = cva("flex shrink-0 flex-col", {
       /** Forms: 16px top, 20px sides and bottom. */
       form: "gap-field px-gutter pt-xl pb-gutter",
       /** Centered empty and error states. */
-      hero: "items-center gap-xl px-[40px] pt-section pb-3xl text-center",
+      hero: "items-center gap-xl px-dialog-hero pt-section pb-3xl text-center",
       none: "",
       /** Failure reports: form padding with roomier gaps (OBV). */
       report: "gap-xl px-gutter pt-xl pb-gutter",

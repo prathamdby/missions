@@ -2,6 +2,8 @@ import type { Agent, MissionStatus } from "@missions/protocol/missions";
 
 import type { BadgeTone } from "@/components/ui/badge";
 
+import { missionCapabilities } from "./mission/capabilities";
+
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
@@ -73,31 +75,12 @@ export const MISSION_STATUS: Record<MissionStatus, StatusMeta> = {
   stop_failed: { label: "Stop failed", tone: "danger" },
 };
 
-const ACTIVE: ReadonlySet<MissionStatus> = new Set([
-  "setting_up",
-  "exploring",
-  "running",
-  "pausing",
-]);
-
-export const isMissionActive = (status: MissionStatus) => ACTIVE.has(status);
-
-const PAUSABLE: ReadonlySet<MissionStatus> = new Set([
-  "setting_up",
-  "exploring",
-  "awaiting_approval",
-  "running",
-]);
-
-const RESUMABLE: ReadonlySet<MissionStatus> = new Set([
-  "failed",
-  "interrupted",
-  "paused",
-  "stop_failed",
-]);
-
-export const canPause = (status: MissionStatus) => PAUSABLE.has(status);
-export const canResume = (status: MissionStatus) => RESUMABLE.has(status);
+export const isMissionActive = (status: MissionStatus) =>
+  missionCapabilities(status).active;
+export const canPause = (status: MissionStatus) =>
+  missionCapabilities(status).pause;
+export const canResume = (status: MissionStatus) =>
+  missionCapabilities(status).resume;
 
 /** "Orchestrator", "Worker 1", "Worker 2" in creation order. */
 export const agentLabels = (agents: readonly Agent[]) => {

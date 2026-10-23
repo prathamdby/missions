@@ -1,7 +1,7 @@
 "use client";
 
 import type { Mission } from "@missions/protocol/missions";
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { ReactNode } from "react";
 
 import {
@@ -26,16 +26,20 @@ import {
   optionRow,
   selectedRow,
 } from "@/components/mission/question-card";
-import { reportMutationError } from "@/components/mission/report-error";
+import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { useMissionControl } from "@/components/mission/use-mission-control";
 import { Button } from "@/components/ui/button";
 import { ProgressBar } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/selection";
-import { api } from "@/lib/api/endpoints";
-import { useSingleFlightMutation } from "@/lib/api/use-operation";
-import { formatDuration, isMissionActive, secondsUntil } from "@/lib/format";
+import {
+  canResume,
+  formatDuration,
+  isMissionActive,
+  secondsUntil,
+} from "@/lib/format";
 import type { LiveNotice } from "@/lib/live/mission-state";
-import { groupTodos } from "@/lib/mission/overview";
+import { missionCapabilities } from "@/lib/mission/capabilities";
+import { todoProgress } from "@/lib/mission/overview";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -64,11 +68,11 @@ const ResumeButton = ({
   label: string;
   variant?: "primary" | "secondary";
 }) => {
-  const { resume, resuming } = useMissionControl();
+  const { resume, resuming, pending } = useMissionControl();
   return (
     <Button
       data-testid="banner-resume"
-      disabled={resuming}
+      disabled={pending}
       onClick={resume}
       variant={variant}
     >
@@ -251,21 +255,17 @@ const RETRY_BLOCKED =
 
 /** Retrying a blocked worker goes through the Orchestrator, which owns dispatch. */
 const RetryBlockedButton = () => {
-  const { missionId, refresh } = useMission();
-  const retry = useSingleFlightMutation({
-    mutationFn: () =>
-      api.submitMessage(missionId, {
-        mode: "steer",
-        operationId: crypto.randomUUID(),
-        text: RETRY_BLOCKED,
-      }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not ask for a retry"),
-  });
+  const occurrence = useId();
+  const retry = useMissionCommand(
+    "message",
+    "Could not ask for a retry",
+    undefined,
+    occurrence
+  );
   return (
     <Button
       disabled={retry.isPending || retry.isSuccess}
-      onClick={() => retry.mutate()}
+      onClick={() => retry.mutate({ mode: "steer", text: RETRY_BLOCKED })}
       data-testid="blocked-retry"
       variant="primary"
     >
@@ -276,8 +276,7 @@ const RetryBlockedButton = () => {
 
 /** Paper V69: an agent is blocked by its environment. */
 const BlockedCard = ({ mission }: { mission: Mission }) => {
-  const resumable =
-    mission.status === "interrupted" || mission.status === "stop_failed";
+  const resumable = canResume(mission.status);
   const stopFailed = mission.status === "stop_failed";
   return (
     <ChatCard label="Blocked" testId="blocked-card" tone="danger">
@@ -324,13 +323,11 @@ const BlockedCard = ({ mission }: { mission: Mission }) => {
 /** Paper WFC: the mission failed. */
 const FailedCard = ({ mission }: { mission: Mission }) => {
   const { agentLabels, live } = useMission();
-  const groups = groupTodos(live.todos, live.agents);
-  const stopIndex = groups.main.findIndex(
-    (todo) => todo.status !== "completed"
-  );
+  const { items: todos } = todoProgress(live.todos, live.agents);
+  const stopIndex = todos.findIndex((todo) => todo.status !== "completed");
   const title =
-    stopIndex !== -1 && groups.main.length > 0
-      ? `Mission stopped at todo ${stopIndex + 1} of ${groups.main.length}`
+    stopIndex !== -1 && todos.length > 0
+      ? `Mission stopped at todo ${stopIndex + 1} of ${todos.length}`
       : "Mission stopped";
   const failed = Object.values(live.assignments)
     .filter((assignment) => assignment.status === "failed")
@@ -440,20 +437,21 @@ const MergeConflictCard = ({
   notice: LiveNotice;
   onDismiss: () => void;
 }) => {
-  const { live, missionId, refresh } = useMission();
+  const { live } = useMission();
   const [choice, setChoice] = useState<string>("droids");
   const base = live.mission.workspace?.baseRef ?? "main";
-  const steer = useSingleFlightMutation({
-    mutationFn: () =>
-      api.submitMessage(missionId, {
-        mode: "steer",
-        operationId: crypto.randomUUID(),
-        text: `The push was rejected because the remote moved ahead. Rebase the mission branch on ${base}, resolve the conflicts, re-run the checks, and push again.`,
-      }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not message the Orchestrator"),
-    onSuccess: onDismiss,
-  });
+  const canMessage = missionCapabilities(live.mission.status).message;
+  const steer = useMissionCommand(
+    "message",
+    "Could not message the Orchestrator",
+    onDismiss,
+    `notice:${notice.seq}`
+  );
+  const resolve = () =>
+    steer.mutate({
+      mode: "steer",
+      text: `The push was rejected because the remote moved ahead. Rebase the mission branch on ${base}, resolve the conflicts, re-run the checks, and push again.`,
+    });
   return (
     <ChatCard label="Merge conflict" testId="merge-conflict-card">
       <ChatCardHeader
@@ -495,8 +493,13 @@ const MergeConflictCard = ({
       <ChatCardFooter>
         <span className="flex-1" />
         <Button
-          disabled={steer.isPending}
-          onClick={() => (choice === "droids" ? steer.mutate() : onDismiss())}
+          disabled={steer.isPending || (choice === "droids" && !canMessage)}
+          title={
+            !canMessage && choice === "droids"
+              ? "Resolve the conflict yourself, resume a stopped mission, or start a follow-up mission."
+              : undefined
+          }
+          onClick={() => (choice === "droids" ? resolve() : onDismiss())}
           variant="primary"
         >
           Continue

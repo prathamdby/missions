@@ -14,18 +14,33 @@ const control =
   "shrink-0 cursor-pointer outline-none transition-[background-color,box-shadow] duration-base ease-out focus-visible:shadow-focus disabled:cursor-not-allowed";
 
 export const Switch = ({
+  appearance = "default",
   className,
   ...props
-}: ComponentProps<typeof SwitchPrimitive.Root>) => (
+}: ComponentProps<typeof SwitchPrimitive.Root> & {
+  /** Paper settings: flat thumb, unchanged disabled colors, fast track transition. */
+  appearance?: "default" | "settings";
+}) => (
   <SwitchPrimitive.Root
+    aria-disabled={appearance === "settings" ? props.disabled : undefined}
     className={cn(
-      control,
-      "group/switch inline-flex h-4.5 w-8 items-center rounded-full bg-surface-active p-2xs shadow-[inset_0_0_0_1px_var(--color-border)] disabled:bg-surface disabled:shadow-[inset_0_0_0_1px_var(--color-border)] data-[state=checked]:bg-accent data-[state=checked]:shadow-none",
+      appearance === "settings"
+        ? "flex h-4.5 w-3xl shrink-0 cursor-pointer items-center rounded-full p-2xs transition-colors duration-fast aria-disabled:cursor-not-allowed data-[state=checked]:justify-end data-[state=checked]:bg-accent data-[state=unchecked]:bg-surface-active data-[state=unchecked]:ring-1 data-[state=unchecked]:ring-border data-[state=unchecked]:ring-inset"
+        : cn(
+            control,
+            "group/switch inline-flex h-4.5 w-8 items-center rounded-full bg-surface-active p-2xs shadow-[inset_0_0_0_1px_var(--color-border)] disabled:bg-surface disabled:shadow-[inset_0_0_0_1px_var(--color-border)] data-[state=checked]:bg-accent data-[state=checked]:shadow-none"
+          ),
       className
     )}
     {...props}
   >
-    <SwitchPrimitive.Thumb className="block size-3.5 rounded-full bg-text-secondary shadow-[0_1px_2px_var(--color-shadow)] transition-transform duration-base ease-out group-disabled/switch:bg-text-disabled data-[state=checked]:translate-x-3.5 data-[state=checked]:bg-text" />
+    <SwitchPrimitive.Thumb
+      className={
+        appearance === "settings"
+          ? "size-3.5 rounded-full data-[state=checked]:bg-text data-[state=unchecked]:bg-text-secondary"
+          : "block size-3.5 rounded-full bg-text-secondary shadow-[0_1px_2px_var(--color-shadow)] transition-transform duration-base ease-out group-disabled/switch:bg-text-disabled data-[state=checked]:translate-x-3.5 data-[state=checked]:bg-text"
+      }
+    />
   </SwitchPrimitive.Root>
 );
 

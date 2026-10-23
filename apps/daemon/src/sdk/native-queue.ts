@@ -31,13 +31,21 @@ const TERMINAL: ReadonlySet<QueueItemState> = new Set([
   "discarded",
   "failed",
 ]);
+const TERMINAL_RETENTION = 256;
 
 export class NativeQueueTracker {
   readonly #entries = new Map<string, NativeQueueEntry>();
   readonly #onChange: (entry: NativeQueueEntry) => void;
+  readonly #terminalLimit: number;
+  readonly #terminal = new Set<string>();
+  readonly #retained = new Map<string, number>();
 
-  constructor(onChange: (entry: NativeQueueEntry) => void) {
+  constructor(
+    onChange: (entry: NativeQueueEntry) => void,
+    terminalLimit = TERMINAL_RETENTION
+  ) {
     this.#onChange = onChange;
+    this.#terminalLimit = terminalLimit;
   }
 
   get(id: string) {
@@ -52,6 +60,41 @@ export class NativeQueueTracker {
   hydrate(entries: NativeQueueEntry[]) {
     for (const entry of entries) {
       this.#entries.set(entry.id, { ...entry });
+      this.#trackTerminal(entry);
+    }
+  }
+
+  /** Protect identities participating in an in-flight adapter operation. */
+  retain(id: string) {
+    this.#retained.set(id, (this.#retained.get(id) ?? 0) + 1);
+    return () => {
+      const count = (this.#retained.get(id) ?? 1) - 1;
+      if (count === 0) {
+        this.#retained.delete(id);
+      } else {
+        this.#retained.set(id, count);
+      }
+      this.#prune();
+    };
+  }
+
+  #trackTerminal(entry: NativeQueueEntry) {
+    this.#terminal.delete(entry.id);
+    if (TERMINAL.has(entry.state)) {
+      this.#terminal.add(entry.id);
+    }
+    this.#prune();
+  }
+
+  #prune() {
+    for (const id of this.#terminal) {
+      if (this.#terminal.size <= this.#terminalLimit) {
+        break;
+      }
+      if (!this.#retained.has(id)) {
+        this.#terminal.delete(id);
+        this.#entries.delete(id);
+      }
     }
   }
 
@@ -62,6 +105,7 @@ export class NativeQueueTracker {
     }
     Object.assign(entry, patch);
     this.#onChange({ ...entry });
+    this.#trackTerminal(entry);
     return entry;
   }
 
@@ -74,6 +118,7 @@ export class NativeQueueTracker {
       text,
     };
     this.#entries.set(id, entry);
+    this.#trackTerminal(entry);
     this.#onChange({ ...entry });
   }
 
@@ -179,12 +224,14 @@ export class NativeQueueTracker {
     const queued = new Set(snapshot.queuedIds);
     const pending = new Set(snapshot.pendingIds);
     for (const entry of this.list()) {
+      if (snapshot.consumedIds.has(entry.id)) {
+        this.consumed(entry.id);
+        continue;
+      }
       if (TERMINAL.has(entry.state)) {
         continue;
       }
-      if (snapshot.consumedIds.has(entry.id)) {
-        this.#update(entry.id, { state: "sent" });
-      } else if (queued.has(entry.id)) {
+      if (queued.has(entry.id)) {
         if (entry.state !== "queued") {
           this.#update(entry.id, { error: null, state: "queued" });
         }

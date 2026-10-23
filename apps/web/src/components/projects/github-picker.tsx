@@ -1,7 +1,7 @@
 "use client";
 
 import type { GithubAuthStatus, GithubRepo } from "@missions/protocol/projects";
-import { useId, useState } from "react";
+import { useId } from "react";
 import type { FormEvent, ReactNode } from "react";
 
 import { Avatar } from "@/components/ui/avatar";
@@ -42,18 +42,18 @@ import { ListOption, Listbox } from "@/components/ui/list-row";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { errorMessage } from "@/lib/api/api-error";
-import { useGithubAuth, useGithubRepos, useProjects } from "@/lib/api/queries";
+import { useGithubRepos, useProjects } from "@/lib/api/queries";
+import type { useGithubAuth } from "@/lib/api/queries";
 import { formatAgo, shortAge } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
 import { useNow } from "@/lib/use-now";
 
-import { cloneCommand, joinPath } from "./clone-target";
+import type { GithubDraft } from "./add-project-session";
+import { cloneCommand, joinPath, remoteLabel } from "./clone-target";
 
 const SEARCH_DEBOUNCE_MS = 300;
 const ALL_OWNERS = "";
 const OWNER_SEPARATORS = /[-_.]/gu;
-const REMOTE_PREFIX = /^[a-z]+:\/\/|^git@/u;
-const GIT_SUFFIX = /\.git$/u;
 
 const GITHUB_DESCRIPTION =
   "Listed with your GitHub CLI login. Missions never stores tokens.";
@@ -62,17 +62,10 @@ const ownerOf = (repo: GithubRepo) => repo.nameWithOwner.split("/")[0] ?? "";
 const nameOf = (repo: GithubRepo) =>
   repo.nameWithOwner.split("/").slice(1).join("/");
 
-const remoteSlug = (url: string) =>
-  url
-    .replace(REMOTE_PREFIX, "")
-    .replace(":", "/")
-    .replace(GIT_SUFFIX, "")
-    .toLowerCase();
-
 const useAddedRepos = () => {
   const projects = useProjects();
   const slugs = (projects.data ?? []).flatMap((project) =>
-    project.remoteUrl ? [remoteSlug(project.remoteUrl)] : []
+    project.remoteUrl ? [remoteLabel(project.remoteUrl).toLowerCase()] : []
   );
   return (repo: GithubRepo) => {
     const wanted = `/${repo.nameWithOwner.toLowerCase()}`;
@@ -312,6 +305,8 @@ const pickTarget = (
 };
 
 interface RepoPickerProps {
+  draft: GithubDraft;
+  onChangeDraft: (draft: GithubDraft) => void;
   error: string | null;
   onChangeParent: () => void;
   onClone: (repo: string) => void;
@@ -322,6 +317,8 @@ interface RepoPickerProps {
 
 /** NAA: search the signed-in account's repositories and clone one. */
 const RepoPicker = ({
+  draft,
+  onChangeDraft,
   error,
   onChangeParent,
   onClone,
@@ -331,9 +328,12 @@ const RepoPicker = ({
 }: RepoPickerProps) => {
   const now = useNow(60_000);
   const destinationId = useId();
-  const [search, setSearch] = useState("");
-  const [owner, setOwner] = useState(ALL_OWNERS);
-  const [chosen, setChosen] = useState<string | null>(null);
+  const { search, owner, chosen } = draft;
+  const setSearch = (value: string) =>
+    onChangeDraft({ ...draft, search: value });
+  const setOwner = (value: string) => onChangeDraft({ ...draft, owner: value });
+  const setChosen = (value: string) =>
+    onChangeDraft({ ...draft, chosen: value });
   const query = useDebounced(search.trim(), SEARCH_DEBOUNCE_MS);
   const repos = useGithubRepos(query, true);
   const isAdded = useAddedRepos();
@@ -461,6 +461,9 @@ const RepoPicker = ({
 };
 
 interface GithubPickerProps {
+  auth: ReturnType<typeof useGithubAuth>;
+  draft: GithubDraft;
+  onChangeDraft: (draft: GithubDraft) => void;
   error: string | null;
   onChangeParent: () => void;
   onClone: (repo: string) => void;
@@ -471,6 +474,9 @@ interface GithubPickerProps {
 
 /** NAA when gh is signed in, NNV when it is not. */
 export const GithubPicker = ({
+  auth,
+  draft,
+  onChangeDraft,
   error,
   onChangeParent,
   onClone,
@@ -478,8 +484,6 @@ export const GithubPicker = ({
   parent,
   pending,
 }: GithubPickerProps) => {
-  const auth = useGithubAuth();
-
   if (auth.isPending) {
     return (
       <>
@@ -512,6 +516,8 @@ export const GithubPicker = ({
 
   return (
     <RepoPicker
+      draft={draft}
+      onChangeDraft={onChangeDraft}
       error={error}
       onChangeParent={onChangeParent}
       onClone={onClone}

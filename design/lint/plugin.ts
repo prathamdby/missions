@@ -49,6 +49,14 @@ const SIZING_UTILITY =
 const NUMERIC = /^\d+(?:\.\d+)?$/u;
 const HALF_STEP = /^\d+(?:\.5)?$/u;
 const ARBITRARY = /^[[(]/u;
+const SAFE_AREA_PADDING =
+  /^\[max\(env\(safe-area-inset-(?<edge>top|right|bottom|left)\),var\(--spacing-(?<token>[a-z0-9-]+)\)\)\]$/u;
+const EDGE_PADDING: Record<string, string> = {
+  bottom: "pb",
+  left: "pl",
+  right: "pr",
+  top: "pt",
+};
 const VARIABLE_REFERENCE = /(?:var\(\s*|\()(?<name>--[\w-]+)/gu;
 const WHITESPACE = /\s+/u;
 
@@ -97,6 +105,15 @@ const spacingProblem = (cls: string): string | null => {
   if (value === "auto" && kind === "m") {
     return null;
   }
+  // Device insets may raise a named padding floor, never introduce raw values.
+  const safeArea = SAFE_AREA_PADDING.exec(value)?.groups;
+  if (
+    safeArea &&
+    utility === EDGE_PADDING[safeArea.edge ?? ""] &&
+    spacingNames.has(safeArea.token ?? "")
+  ) {
+    return null;
+  }
   if (NUMERIC.test(value) || value === "px") {
     const px = value === "px" ? 1 : Number(value) * spacingBasePx;
     const named = spacingTokens.get(`${px}px`);
@@ -104,8 +121,8 @@ const spacingProblem = (cls: string): string | null => {
       ? `"${cls}" uses the numeric spacing scale. Use "${utility}-${named}" (${px}px) from the Paper scale.`
       : `"${cls}" is ${px}px, which is off the Paper spacing scale. Use one of: ${scaleList()}.`;
   }
-  // Padding is already reported by shadcn/no-arbitrary-values; margin and gaps pass its layout allowance.
-  if (ARBITRARY.test(value) && kind !== "p") {
+  // Authored primitives allow arbitrary appearance, but spacing still uses names.
+  if (ARBITRARY.test(value)) {
     return `"${cls}" uses an arbitrary spacing value. Use one of: ${scaleList()}.`;
   }
   return null;

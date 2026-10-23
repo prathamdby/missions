@@ -1,26 +1,25 @@
 "use client";
 
-import type { Autonomy, DeliveryMode } from "@missions/protocol/common";
+import type { DeliveryMode } from "@missions/protocol/common";
 import type { MissionStatus } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useId, useMemo, useSyncExternalStore } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 
 import { ArrowUpIcon, AtIcon, PaperclipIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { QueueTray, useVisibleQueue } from "@/components/mission/queue-tray";
 import { reportMutationError } from "@/components/mission/report-error";
+import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { AutonomyChip } from "@/components/missions/autonomy-chip";
 import { Textarea } from "@/components/ui/input";
 import { Kbd, KbdSizeContext } from "@/components/ui/kbd";
 import { Hint } from "@/components/ui/tooltip";
-import { api } from "@/lib/api/endpoints";
-import {
-  useOperationIds,
-  useSingleFlightMutation,
-} from "@/lib/api/use-operation";
 import { nextAutonomy } from "@/lib/autonomy";
 import { canResume, isMissionActive } from "@/lib/format";
+import { missionCapabilities } from "@/lib/mission/capabilities";
+import { MessageDraft } from "@/lib/mission/message-draft";
+import type { MessageDelivery } from "@/lib/mission/message-draft";
 
 const UNSUPPORTED = "Attachments and mentions are not supported yet.";
 
@@ -70,52 +69,43 @@ const QueueHints = () => (
  * Alt+Enter queues (delivered when the turn ends) while agents are working.
  */
 export const MissionComposer = () => {
-  const { applyLocal, live, missionId, refresh } = useMission();
+  const { commands, live, refresh } = useMission();
   const { mission } = live;
-  const [text, setText] = useState("");
+  const draft = useMemo(() => new MessageDraft(), []);
+  const text = useSyncExternalStore(
+    draft.subscribe,
+    draft.snapshot,
+    draft.snapshot
+  );
   const hintId = useId();
-  const ops = useOperationIds();
   const working = isMissionActive(mission.status);
-  const archived = mission.status === "archived";
+  const capabilities = missionCapabilities(mission.status);
+  const disabled = !capabilities.message;
   const queued = useVisibleQueue().length > 0;
 
   // Not single-flight: a second message typed while the first is in flight
   // is a separate intent and must not be dropped.
   const send = useMutation({
-    mutationFn: (input: { mode: DeliveryMode; text: string }) =>
-      api.submitMessage(missionId, {
-        ...input,
-        operationId: ops.idFor(`${input.mode}:${input.text}`),
-      }),
-    onError: (error, input) => {
-      ops.release(error);
-      setText((current) => current || input.text);
-      reportMutationError(error, refresh, "Message not sent");
-    },
-    onSuccess: (value) => {
-      ops.settle();
-      applyLocal({ kind: "queue", value });
+    mutationFn: (delivery: MessageDelivery) =>
+      commands.run("message", delivery.input, delivery.occurrence),
+    onError: (error, delivery) => {
+      draft.restore(delivery);
+      return reportMutationError(error, refresh, "Message not sent");
     },
   });
 
-  const autonomy = useSingleFlightMutation({
-    mutationFn: (value: Autonomy) =>
-      api.updateMission(missionId, {
-        autonomy: value,
-        expectedRevision: mission.revision,
-      }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not change autonomy"),
-    onSuccess: (value) => applyLocal({ kind: "mission", value }),
-  });
+  const autonomy = useMissionCommand("update", "Could not change autonomy");
+  const changeAutonomy = (value: typeof mission.autonomy) =>
+    autonomy.mutate({ autonomy: value, expectedRevision: mission.revision });
 
   const submit = (mode: DeliveryMode) => {
-    const trimmed = text.trim();
-    if (!trimmed || archived) {
+    if (disabled) {
       return;
     }
-    setText("");
-    send.mutate({ mode, text: trimmed });
+    const delivery = draft.take(mode);
+    if (delivery) {
+      send.mutate(delivery);
+    }
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -127,7 +117,9 @@ export const MissionComposer = () => {
       submit(event.altKey && working ? "queue" : "steer");
     } else if (event.key === "Tab" && event.shiftKey) {
       event.preventDefault();
-      autonomy.mutate(nextAutonomy(mission.autonomy));
+      if (capabilities.update) {
+        changeAutonomy(nextAutonomy(mission.autonomy));
+      }
     }
   };
 
@@ -144,8 +136,8 @@ export const MissionComposer = () => {
           aria-label="Message the Orchestrator"
           data-composer-input=""
           data-testid="composer-input"
-          disabled={archived}
-          onChange={(event) => setText(event.target.value)}
+          disabled={mission.status === "archived"}
+          onChange={(event) => draft.change(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={placeholderFor(mission.status)}
           rows={1}
@@ -159,8 +151,8 @@ export const MissionComposer = () => {
           <ToolbarIcon icon={<PaperclipIcon />} label="Attach files" />
           <ToolbarIcon icon={<AtIcon />} label="Mention a file" />
           <AutonomyChip
-            disabled={archived || autonomy.isPending}
-            onChange={(value) => autonomy.mutate(value)}
+            disabled={!capabilities.update || autonomy.isPending}
+            onChange={changeAutonomy}
             value={mission.autonomy}
           />
           <span className="flex-1" />
@@ -170,7 +162,7 @@ export const MissionComposer = () => {
               aria-disabled={!text.trim()}
               className="flex size-7 cursor-pointer items-center justify-center rounded-full bg-accent text-on-accent transition-colors duration-fast hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-surface-overlay disabled:text-text-disabled aria-disabled:cursor-not-allowed"
               data-testid="composer-send"
-              disabled={archived}
+              disabled={disabled}
               onClick={() => submit("steer")}
               type="button"
             >

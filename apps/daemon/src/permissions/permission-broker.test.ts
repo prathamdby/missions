@@ -57,6 +57,31 @@ const setup = (overrides: Partial<AgentContext> = {}) => {
 };
 
 describe(classifyToolUse, () => {
+  it.each([
+    ["git -C '/repo with spaces' push origin main", "publish"],
+    ["git -c core.quotePath=false -C /w commit -m x", "vcs"],
+    ["git --git-dir=/w/.git --work-tree /w reset --hard", "vcs"],
+    ["git -C/w -ccore.quotePath=false status", "execute"],
+    ["git --unsupported-option status", "publish"],
+    ["git -c alias.ship='!git push' ship", "publish"],
+    ["gh --repo owner/repo pr create --fill", "publish"],
+    ["gh -Rowner/repo pr merge", "publish"],
+    ["gh --hostname github.example api /repos/a/b -X DELETE", "publish"],
+    ["gh api /repos/a/b -f name=value", "publish"],
+    ["gh api /repos/a/b --field=name=value", "publish"],
+    ["gh api /repos/a/b --method=PATCH", "publish"],
+    ["gh api /repos/a/b --method GET", "execute"],
+    ["gh -R owner/repo pr view 3", "execute"],
+    ["git status && git -C /w push", "publish"],
+    ["sh -c 'git -C /w push'", "publish"],
+    ['bash -c "git -c core.quotePath=false commit -m x"', "vcs"],
+    ["gh --unknown-global foo pr list", "publish"],
+  ])("classifies %s as %s", (command, category) => {
+    expect(classifyToolUse(exec(command), "/w", "missions").category).toBe(
+      category
+    );
+  });
+
   it("detects publishing and history-changing git commands", () => {
     expect(
       classifyToolUse(exec("git push origin main"), "/w", "missions").category
@@ -100,6 +125,125 @@ describe(classifyToolUse, () => {
 });
 
 describe(PermissionBroker, () => {
+  it("does not share grants between semantically different quoted whitespace", async () => {
+    const { broker, grants, lastPending } = setup({ autonomy: "off" });
+    const first = broker.ask("a", [exec('printf "%s" "two  spaces"')]);
+    broker.decide(lastPending()?.id ?? "", "always_allow", 1);
+    await expect(first).resolves.toMatchObject({ approved: true });
+    expect(grants[0]?.normalizedRequest).toBe(
+      'exec:v2:printf "%s" "two  spaces"'
+    );
+    const second = broker.ask("a", [exec('printf "%s" "two spaces"')]);
+    expect(broker.pending("m1")).toHaveLength(1);
+    broker.decide(lastPending()?.id ?? "", "deny", 1);
+    await expect(second).resolves.toMatchObject({ approved: false });
+  });
+
+  it("does not reuse legacy whitespace-collapsed command grants", async () => {
+    const { broker, grants, lastPending } = setup({ autonomy: "off" });
+    const command = 'printf "%s" "two spaces"';
+    grants.push({
+      action: "Execute",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      id: "legacy",
+      normalizedRequest: command,
+      projectId: "p1",
+      role: "worker",
+      workspacePath: "/w",
+    });
+    const pending = broker.ask("a", [exec(command)]);
+    expect(broker.pending("m1")).toHaveLength(1);
+    broker.decide(lastPending()?.id ?? "", "deny", 1);
+    await expect(pending).resolves.toMatchObject({ approved: false });
+  });
+
+  it("rejects execution-capable tools on read-only assignments before grants and autonomy", async () => {
+    const { broker, ctx, grants, leases, lastPending } = setup({
+      autonomy: "off",
+    });
+    const command = exec("echo hi", "low");
+    const first = broker.ask("a", [command]);
+    broker.decide(lastPending()?.id ?? "", "always_allow", 1);
+    await first;
+    expect(grants).toHaveLength(1);
+    ctx.canWrite = false;
+    ctx.autonomy = "high";
+    const executionCapableUses = [
+      command,
+      create("/w/x"),
+      {
+        confirmationType: "mcp_tool",
+        details: {
+          actualToolName: "execute",
+          impactLevel: "low",
+          serverName: "external",
+          type: "mcp_tool",
+        },
+        input: {},
+        toolName: "external",
+        toolUseId: "mcp",
+      },
+    ];
+    await Promise.all(
+      executionCapableUses.map(async (use) => {
+        await expect(broker.ask("a", [use])).resolves.toMatchObject({
+          approved: false,
+          reason: "This assignment is read-only",
+        });
+      })
+    );
+    await expect(
+      broker.ask("a", [
+        {
+          confirmationType: "read",
+          details: {},
+          input: {},
+          toolName: "Read",
+          toolUseId: "read",
+        },
+      ])
+    ).resolves.toMatchObject({ approved: true });
+    expect(leases).toHaveLength(0);
+  });
+
+  it("does not let global options or an old grant bypass the publish gate", async () => {
+    const { broker, grants, lastPending } = setup({ autonomy: "high" });
+    const command = "git -C /w push origin main";
+    grants.push({
+      action: "Execute",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      id: "old",
+      normalizedRequest: `exec:v2:${command}`,
+      projectId: "p1",
+      role: "worker",
+      workspacePath: "/w",
+    });
+    const pending = broker.ask("a", [exec(command, "low")]);
+    expect(lastPending()).toMatchObject({
+      allowAlways: false,
+      kind: "publish",
+    });
+    broker.decide(lastPending()?.id ?? "", "deny", 1);
+    await expect(pending).resolves.toMatchObject({ approved: false });
+  });
+
+  it("rechecks current plan and capabilities after a pending approval", async () => {
+    const { broker, ctx, lastPending } = setup({ autonomy: "off" });
+    const pending = broker.ask("a", [create("/w/x")]);
+    ctx.canWrite = false;
+    expect(() =>
+      broker.decide(lastPending()?.id ?? "", "always_allow", 1)
+    ).toThrow(/earlier run/u);
+    await expect(pending).resolves.toMatchObject({ approved: false });
+    ctx.canWrite = true;
+    const second = broker.ask("a", [create("/w/x")]);
+    ctx.planApproved = false;
+    expect(() =>
+      broker.decide(lastPending()?.id ?? "", "approve_once", 1)
+    ).toThrow(/earlier run/u);
+    await expect(second).resolves.toMatchObject({ approved: false });
+  });
+
   it("blocks writes before plan approval even at High autonomy", async () => {
     const { broker } = setup({ autonomy: "high", planApproved: false });
     await expect(broker.ask("a", [create("/w/x")])).resolves.toMatchObject({

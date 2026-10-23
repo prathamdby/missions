@@ -13,7 +13,7 @@ const kbdVariants = cva(
     defaultVariants: { size: "md", surface: "overlay" },
     variants: {
       size: {
-        md: "h-5 min-w-5 px-[5px] leading-xs text-text-secondary shadow-[inset_0_-1px_0_var(--color-shadow),0_0_0_1px_var(--color-border)]",
+        md: "h-5 min-w-5 px-tight leading-xs text-text-secondary shadow-[inset_0_-1px_0_var(--color-shadow),0_0_0_1px_var(--color-border)]",
         sm: "h-4.5 min-w-4.5 px-xs leading-xs text-text-secondary shadow-[inset_0_-1px_0_var(--color-shadow),0_0_0_1px_var(--color-border)]",
         xs: "h-4 min-w-4 px-xs leading-[12px] text-text-tertiary shadow-[0_0_0_1px_var(--color-border)]",
       },

@@ -1,7 +1,6 @@
 "use client";
 
 import type { Changes } from "@missions/protocol/files";
-import type { Mission } from "@missions/protocol/missions";
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
@@ -26,16 +25,16 @@ import {
 import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
 import { reportMutationError } from "@/components/mission/report-error";
+import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { Button } from "@/components/ui/button";
+import { Input, Textarea } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { api } from "@/lib/api/endpoints";
 import { useChanges, useGithubAuth } from "@/lib/api/queries";
 import { queryKeys } from "@/lib/api/query-keys";
-import {
-  useOperationIds,
-  useSingleFlightMutation,
-} from "@/lib/api/use-operation";
+import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration } from "@/lib/format";
+import type { MissionCommandInputs } from "@/lib/mission/commands";
 import { displayStatus } from "@/lib/mission/display-status";
 import {
   canArchive,
@@ -43,32 +42,25 @@ import {
   defaultPrBody,
   finishState,
 } from "@/lib/mission/finish";
-import { groupTodos } from "@/lib/mission/overview";
+import { todoProgress } from "@/lib/mission/overview";
 import { checksLabel, prRef } from "@/lib/mission/pr";
 
-const fieldClass =
-  "w-full rounded-sm bg-surface px-lg py-control text-sm leading-chat font-book tracking-tight text-text outline-none ring-1 ring-border placeholder:text-text-tertiary focus-visible:ring-border-strong";
-
 /** One mutation per finish intent, sharing ID reuse, refetch, and conflict handling. */
-const useFinishMutation = <T,>(
-  title: string,
-  intent: (input: T) => string,
-  run: (operationId: string, input: T) => Promise<Mission>
+const useFinishMutation = <
+  K extends "commit" | "push" | "pullRequest" | "cleanup",
+>(
+  kind: K,
+  title: string
 ) => {
-  const { applyLocal, missionId, refresh } = useMission();
+  const { commands, missionId, refresh } = useMission();
   const queryClient = useQueryClient();
-  const ops = useOperationIds();
   return useSingleFlightMutation({
-    mutationFn: (input: T) => run(ops.idFor(intent(input)), input),
-    onError: (error) => {
-      ops.release(error);
-      queryClient.invalidateQueries({ queryKey: queryKeys.changes(missionId) });
-      reportMutationError(error, refresh, title);
-    },
-    onSuccess: (mission) => {
-      ops.settle();
-      applyLocal({ kind: "mission", value: mission });
-      queryClient.invalidateQueries({ queryKey: queryKeys.changes(missionId) });
+    mutationFn: (input: MissionCommandInputs[K]) => commands.run(kind, input),
+    onError: (error) => reportMutationError(error, refresh, title),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.changes(missionId),
+      });
     },
   });
 };
@@ -111,23 +103,12 @@ const CommitCard = ({
   pending: Changes["files"];
   preExisting: Changes["files"];
 }) => {
-  const { live, missionId, showPanel } = useMission();
+  const { live, showPanel } = useMission();
   const [message, setMessage] = useState(() =>
     defaultCommitMessage(live.mission)
   );
   const [includePreExisting, setIncludePreExisting] = useState(false);
-  const commit = useFinishMutation(
-    "Could not commit",
-    () => `commit:${changes.hash}`,
-    (operationId, input: { includePreExisting: boolean; message: string }) =>
-      api.commit(missionId, {
-        expectedChangesHash: changes.hash,
-        expectedHead: changes.head,
-        includePreExisting: input.includePreExisting,
-        message: input.message,
-        operationId,
-      })
-  );
+  const commit = useFinishMutation("commit", "Could not commit");
   const included = includePreExisting ? [...pending, ...preExisting] : pending;
   const additions = included.reduce((sum, file) => sum + file.additions, 0);
   const deletions = included.reduce((sum, file) => sum + file.deletions, 0);
@@ -148,12 +129,14 @@ const CommitCard = ({
           <span className="text-xs leading-sm font-medium text-text-secondary">
             Commit message
           </span>
-          <textarea
-            className={`${fieldClass} min-h-20 resize-y font-mono text-xs leading-md`}
+          <Textarea
             data-testid="commit-message"
+            mono
             onChange={(event) => setMessage(event.target.value)}
             rows={3}
+            size="sm"
             value={message}
+            variant="publish"
           />
         </label>
         {preExisting.length > 0 ? (
@@ -173,7 +156,12 @@ const CommitCard = ({
           data-testid="commit-submit"
           disabled={commit.isPending || blocked || !message.trim()}
           onClick={() =>
-            commit.mutate({ includePreExisting, message: message.trim() })
+            commit.mutate({
+              expectedChangesHash: changes.hash,
+              expectedHead: changes.head,
+              includePreExisting,
+              message: message.trim(),
+            })
           }
           title={
             blocked
@@ -193,14 +181,9 @@ const CommitCard = ({
 };
 
 const PushCard = ({ head }: { head: string | null }) => {
-  const { live, missionId } = useMission();
+  const { live } = useMission();
   const { publish, workspace } = live.mission;
-  const push = useFinishMutation(
-    "Could not push",
-    () => `push:${head ?? ""}`,
-    (operationId) =>
-      api.push(missionId, { expectedHead: head ?? "", operationId })
-  );
+  const push = useFinishMutation("push", "Could not push");
   const latest = publish.commits.at(-1);
   return (
     <ChatCard label="Push branch" testId="push-card">
@@ -226,7 +209,7 @@ const PushCard = ({ head }: { head: string | null }) => {
         <Button
           data-testid="push-submit"
           disabled={push.isPending || !head}
-          onClick={() => push.mutate(undefined)}
+          onClick={() => push.mutate({ expectedHead: head ?? "" })}
           variant="primary"
         >
           {push.isPending ? "Pushing…" : "Push"}
@@ -237,21 +220,14 @@ const PushCard = ({ head }: { head: string | null }) => {
 };
 
 const CreatePrCard = ({ head }: { head: string | null }) => {
-  const { live, missionId } = useMission();
+  const { live } = useMission();
   const { mission } = live;
   const auth = useGithubAuth();
   const [title, setTitle] = useState(mission.title);
   const [body, setBody] = useState(() => defaultPrBody(mission));
   const create = useFinishMutation(
-    "Could not open the pull request",
-    () => `pr:${head ?? ""}`,
-    (operationId, input: { body: string; title: string }) =>
-      api.createPullRequest(missionId, {
-        body: input.body,
-        expectedHead: head ?? "",
-        operationId,
-        title: input.title,
-      })
+    "pullRequest",
+    "Could not open the pull request"
   );
   const signedOut = auth.data !== undefined && auth.data.state !== "signed_in";
   const base = mission.workspace?.baseRef ?? "main";
@@ -277,23 +253,23 @@ const CreatePrCard = ({ head }: { head: string | null }) => {
           <span className="text-xs leading-sm font-medium text-text-secondary">
             Title
           </span>
-          <input
-            className={fieldClass}
+          <Input
             data-testid="pr-title"
             onChange={(event) => setTitle(event.target.value)}
             value={title}
+            variant="publish"
           />
         </label>
         <label className="flex flex-col gap-sm">
           <span className="text-xs leading-sm font-medium text-text-secondary">
             Description
           </span>
-          <textarea
-            className={`${fieldClass} min-h-24 resize-y`}
+          <Textarea
             data-testid="pr-body"
             onChange={(event) => setBody(event.target.value)}
             rows={4}
             value={body}
+            variant="publish"
           />
         </label>
         <GithubGuidance />
@@ -304,7 +280,13 @@ const CreatePrCard = ({ head }: { head: string | null }) => {
           disabled={
             create.isPending || !head || !title.trim() || signedOut || onBase
           }
-          onClick={() => create.mutate({ body, title: title.trim() })}
+          onClick={() =>
+            create.mutate({
+              body,
+              expectedHead: head ?? "",
+              title: title.trim(),
+            })
+          }
           variant="primary"
         >
           {create.isPending ? "Opening…" : "Create draft pull request"}
@@ -415,14 +397,12 @@ const PrCard = ({ changes }: { changes: Changes | undefined }) => {
 };
 
 const CleanupCard = () => {
-  const { live, missionId } = useMission();
+  const { live } = useMission();
   const { mission } = live;
   const [always, setAlways] = useState(false);
   const cleanup = useFinishMutation(
-    "Could not clean up the worktree",
-    (input: { action: "keep" | "remove"; alwaysAfterMerge: boolean }) =>
-      `cleanup:${input.action}`,
-    (operationId, input) => api.cleanup(missionId, { ...input, operationId })
+    "cleanup",
+    "Could not clean up the worktree"
   );
   const { cleanup: state, cleanupReason } = mission.publish;
   if (state === "blocked") {
@@ -501,10 +481,7 @@ const STAT_LABELS = [
 const CompleteCard = ({ changes }: { changes: Changes | undefined }) => {
   const { live } = useMission();
   const { mission } = live;
-  const groups = groupTodos(live.todos, live.agents);
-  const todos =
-    groups.main.length > 0 ? groups.main : Object.values(live.todos).flat();
-  const done = todos.filter((todo) => todo.status === "completed").length;
+  const { items: todos, done } = todoProgress(live.todos, live.agents);
   const status = displayStatus(live);
   const values: Record<(typeof STAT_LABELS)[number], string> = {
     Agents: String(Object.keys(live.agents).length),
@@ -553,24 +530,9 @@ const CompleteCard = ({ changes }: { changes: Changes | undefined }) => {
 };
 
 const ArchiveRow = () => {
-  const { applyLocal, live, missionId, refresh } = useMission();
-  const ops = useOperationIds();
+  const { live } = useMission();
   const { revision, status } = live.mission;
-  const archive = useSingleFlightMutation({
-    mutationFn: () =>
-      api.archiveMission(missionId, {
-        expectedRevision: revision,
-        operationId: ops.idFor(`archive:${revision}`),
-      }),
-    onError: (error) => {
-      ops.release(error);
-      reportMutationError(error, refresh, "Could not archive");
-    },
-    onSuccess: (value) => {
-      ops.settle();
-      applyLocal({ kind: "mission", value });
-    },
-  });
+  const archive = useMissionCommand("archive", "Could not archive");
   if (!canArchive(status)) {
     return null;
   }
@@ -579,7 +541,7 @@ const ArchiveRow = () => {
       <Button
         data-testid="archive-mission"
         disabled={archive.isPending}
-        onClick={() => archive.mutate()}
+        onClick={() => archive.mutate({ expectedRevision: revision })}
         variant="secondary"
       >
         <DownloadIcon className="text-text-secondary" />

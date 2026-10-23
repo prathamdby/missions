@@ -66,7 +66,10 @@ export const registerMissionRoutes = (app: Hono, missions: MissionService) => {
     reply(
       c,
       MissionSchema,
-      missions.update(id(c), await parseBody(c, UpdateMissionRequestSchema))
+      await missions.update(
+        id(c),
+        await parseBody(c, UpdateMissionRequestSchema)
+      )
     )
   );
   app.get(routes.missionSnapshot(M), (c) =>

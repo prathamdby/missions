@@ -18,7 +18,7 @@ import {
   WorkspaceLine,
 } from "@/components/mission/transcript";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api/endpoints";
+import { errorMessage } from "@/lib/api/api-error";
 import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration, isMissionActive } from "@/lib/format";
 import { deliveredRequestIds, showGoalBubble } from "@/lib/mission/queue";
@@ -30,21 +30,21 @@ const PAGE_SIZE = 100;
 const STICK_THRESHOLD_PX = 96;
 
 const EarlierMessages = ({ onLoaded }: { onLoaded: () => void }) => {
-  const { live, missionId, prependTranscript, refresh } = useMission();
-  const oldest = Math.min(
-    ...Object.values(live.transcript).map((item) => item.seq)
-  );
+  const { loadOlder, refresh, sessionError } = useMission();
   const load = useSingleFlightMutation({
-    mutationFn: () => api.missionTranscript(missionId, oldest, PAGE_SIZE),
+    mutationFn: async () => {
+      if (!(await loadOlder(PAGE_SIZE))) {
+        throw new Error(
+          "Earlier messages were not loaded. Reconnect and try again."
+        );
+      }
+    },
     onError: (error) =>
       reportMutationError(error, refresh, "Could not load earlier messages"),
-    onSuccess: (page) => {
-      onLoaded();
-      prependTranscript(page.items, page.nextCursor !== null);
-    },
+    onSuccess: onLoaded,
   });
   return (
-    <div className="flex justify-center">
+    <div className="flex flex-col items-center gap-sm">
       <Button
         disabled={load.isPending}
         onClick={() => load.mutate()}
@@ -53,6 +53,11 @@ const EarlierMessages = ({ onLoaded }: { onLoaded: () => void }) => {
       >
         {load.isPending ? "Loading…" : "Load earlier messages"}
       </Button>
+      {load.isError ? (
+        <p className="text-xs leading-sm text-danger" role="alert">
+          {errorMessage(sessionError ?? load.error)}
+        </p>
+      ) : null}
     </div>
   );
 };
@@ -73,14 +78,16 @@ const turnStart = (transcript: readonly TranscriptItem[], fallback: string) => {
 
 /** Paper QAU working line: accent loader, phase, and how long this turn has run. */
 const WorkingLine = ({
+  agentId,
   transcript,
 }: {
+  agentId?: string;
   transcript: readonly TranscriptItem[];
 }) => {
   const { live } = useMission();
   const now = useNow();
   const working = Object.values(live.agents).some(
-    (agent) => agent.status === "working"
+    (agent) => agent.status === "working" && (!agentId || agent.id === agentId)
   );
   if (!(working && isMissionActive(live.mission.status))) {
     return null;
@@ -102,41 +109,64 @@ const WorkingLine = ({
 };
 
 /** Paper FQQ chat column: transcript, inline state cards, and the composer. */
-export const ChatColumn = () => {
+export const ChatColumn = ({ agentId }: { agentId?: string }) => {
   const { live, missionId } = useMission();
+  const worker = agentId ? live.agents[agentId]?.role === "worker" : false;
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const preserveFrom = useRef<number | null>(null);
+  const observedHeight = useRef<number | null>(null);
 
   const transcript = useMemo(
-    () => Object.values(live.transcript),
-    [live.transcript]
+    () =>
+      Object.values(live.transcript).filter(
+        (item) => !agentId || item.agentId === agentId
+      ),
+    [agentId, live.transcript]
   );
   const entries = useMemo(
     () =>
       buildTimeline({
-        assignments: Object.values(live.assignments),
+        assignments: worker ? [] : Object.values(live.assignments),
         permissions: Object.values(live.permissions),
-        plans: Object.values(live.plans),
+        planAgentId: worker ? undefined : agentId,
+        planInFlight:
+          !worker &&
+          !!agentId &&
+          ["working", "starting"].includes(live.agents[agentId]?.status ?? ""),
+        plans: worker ? [] : Object.values(live.plans),
         previews: Object.values(live.previews),
         questions: Object.values(live.questions),
         transcript,
-      }),
+      }).filter(
+        (entry) =>
+          !agentId ||
+          entry.agentId === agentId ||
+          (!worker &&
+            (entry.agentId === null ||
+              entry.kind === "permission" ||
+              entry.kind === "question"))
+      ),
     [
       live.assignments,
+      live.agents,
       live.permissions,
       live.plans,
       live.previews,
       live.questions,
       transcript,
+      agentId,
+      worker,
     ]
   );
-  const goalBubble = showGoalBubble(
-    missionId,
-    deliveredRequestIds(transcript),
-    live.transcriptHasMore
-  );
+  const goalBubble =
+    !worker &&
+    showGoalBubble(
+      missionId,
+      deliveredRequestIds(transcript),
+      live.transcriptHasMore
+    );
 
   // Every height change (new output, cards that load later, older pages
   // prepended) arrives here before paint: keep the bottom pinned, or keep the
@@ -147,13 +177,16 @@ export const ChatColumn = () => {
     if (!(element && inner)) {
       return;
     }
+    observedHeight.current = element.scrollHeight;
     const observer = new ResizeObserver(() => {
+      const height = element.scrollHeight;
       if (preserveFrom.current !== null) {
-        element.scrollTop = element.scrollHeight - preserveFrom.current;
+        element.scrollTop = height - preserveFrom.current;
         preserveFrom.current = null;
       } else if (pinned.current) {
-        element.scrollTop = element.scrollHeight;
+        element.scrollTop = height;
       }
+      observedHeight.current = height;
     });
     observer.observe(inner);
     return () => observer.disconnect();
@@ -177,29 +210,44 @@ export const ChatColumn = () => {
           aria-live="polite"
           aria-relevant="additions"
           ref={content}
-          className="mx-auto flex min-h-full w-full max-w-chat min-w-0 flex-col justify-end gap-section pt-section pb-2xl max-md:pt-xl"
+          className="mx-auto flex min-h-full w-full max-w-chat min-w-0 flex-col justify-end gap-lg pt-md pb-2xl"
         >
           {live.transcriptHasMore ? (
             <EarlierMessages
               onLoaded={() => {
                 const element = scroller.current;
-                preserveFrom.current = element
-                  ? element.scrollHeight - element.scrollTop
-                  : null;
+                // The session applies the page before resolving loadOlder.
+                // The observer still holds the pre-page height until paint,
+                // including any output/scrolling that happened during the fetch.
+                preserveFrom.current =
+                  element && observedHeight.current !== null
+                    ? observedHeight.current - element.scrollTop
+                    : null;
               }}
             />
           ) : null}
           {goalBubble ? <UserMessage text={live.mission.goal} /> : null}
           {goalBubble ? <WorkspaceLine /> : null}
           <Transcript entries={entries} running={running} />
-          <WorkingLine transcript={transcript} />
-          <MissionBanners />
-          <FinishFlow />
-          <PublishNotices />
+          <WorkingLine agentId={agentId} transcript={transcript} />
+          {worker ? null : (
+            <>
+              <MissionBanners />
+              <FinishFlow />
+              <PublishNotices />
+            </>
+          )}
         </div>
       </div>
       <div className="flex justify-center px-3xl pb-gutter max-md:px-md max-md:pb-md">
-        <MissionComposer />
+        {worker ? (
+          <p className="py-lg text-xs leading-sm text-text-tertiary">
+            Read-only agent conversation. Send instructions through the
+            Orchestrator.
+          </p>
+        ) : (
+          <MissionComposer />
+        )}
       </div>
     </div>
   );

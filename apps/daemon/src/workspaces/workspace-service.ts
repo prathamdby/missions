@@ -24,6 +24,8 @@ export interface WorkspaceServiceOptions {
 
 export interface CleanupOptions {
   deleteBranch: boolean;
+  allowBranchDeletion?: boolean;
+  expectedHead?: string | null;
   /** Head of a remotely merged PR; allows deleting a squash-merged branch at that exact head. */
   mergedHead?: string | null;
 }
@@ -109,7 +111,10 @@ export class WorkspaceService {
         throw badRequest("That folder is not a worktree of this repository");
       }
     }
-    const entries = (await repo.status(target)) ?? [];
+    const entries = await repo.status(target);
+    if (entries === null) {
+      throw conflict("Could not read the checkout status");
+    }
     if (entries.length > 0 && !request.acknowledgeDirty) {
       throw new AppError(
         "conflict",
@@ -125,7 +130,13 @@ export class WorkspaceService {
       // Pull requests target the repository's default branch, not the branch
       // the user happens to have checked out.
       baseRef: project.defaultBranch ?? branch,
-      baselineDirtyFiles: entries.map((entry) => entry.path),
+      baselineDirtyFiles: [
+        ...new Set(
+          entries.flatMap((entry) =>
+            entry.oldPath ? [entry.path, entry.oldPath] : [entry.path]
+          )
+        ),
+      ],
       branch,
       mode: request.mode,
       owned: false,
@@ -218,58 +229,160 @@ export const verifyBinding = async (
   if (common !== binding.repoRoot) {
     problems.push("The mission folder now belongs to a different repository");
   }
-  if (binding.branch && branch !== binding.branch) {
+  if (branch !== binding.branch) {
     problems.push(
-      `Expected branch ${binding.branch}, found ${branch ?? "a detached HEAD"}`
+      `Expected branch ${binding.branch ?? "a detached HEAD"}, found ${branch ?? "a detached HEAD"}`
     );
   }
   return problems;
 };
 
+const cleanupInspection = async (
+  binding: WorkspaceBinding,
+  expectedHead?: string | null
+): Promise<{ main: string; head: string } | string> => {
+  if (!binding.owned) {
+    return "Missions did not create this folder, so it is kept";
+  }
+  const problems = await verifyBinding(binding);
+  if (problems.length > 0) {
+    return problems.join("; ");
+  }
+  const entries = await repo.status(binding.path);
+  if (entries === null) {
+    return "Could not read the worktree status";
+  }
+  if (entries.length > 0) {
+    return "The worktree has uncommitted changes, so it is kept";
+  }
+  const localHead = await repo.head(binding.path);
+  if (
+    !localHead ||
+    (expectedHead !== undefined && localHead !== expectedHead)
+  ) {
+    return "The worktree HEAD moved or could not be verified";
+  }
+  if (binding.branch) {
+    const branchHead = await git(binding.path, [
+      "rev-parse",
+      "--verify",
+      `refs/heads/${binding.branch}`,
+    ]);
+    if (!branchHead.ok || branchHead.stdout !== localHead) {
+      return "The stored branch no longer points at the worktree HEAD";
+    }
+  }
+  const trees = await repo.worktrees(binding.path);
+  const main = trees.find((tree) => tree.isMain)?.path;
+  if (!main || (await repo.canonical(main)) === binding.path) {
+    return "Refusing to remove the main checkout";
+  }
+  const latestProblems = await verifyBinding(binding);
+  if (
+    (await repo.commonDir(main)) !== binding.repoRoot ||
+    latestProblems.length > 0 ||
+    (await repo.head(binding.path)) !== localHead
+  ) {
+    return "The worktree identity changed during cleanup";
+  }
+  return { head: localHead, main };
+};
+
+/** Immutable deletion decision, recorded before removing either folder or ref. */
+export const planCleanup = async (
+  binding: WorkspaceBinding,
+  mergedHead: string | null
+) => {
+  const inspected = await cleanupInspection(binding);
+  if (typeof inspected === "string") {
+    return {
+      branchDeletionExpected: false,
+      branchOid: null,
+      cleanupBlockedReason: inspected,
+      expectedHead: null,
+    };
+  }
+  const merged = await git(inspected.main, [
+    "merge-base",
+    "--is-ancestor",
+    inspected.head,
+    "HEAD",
+  ]);
+  if (merged.code !== 0 && merged.code !== 1) {
+    throw conflict("Could not verify whether the cleanup branch is merged");
+  }
+  const trees = await repo.worktrees(inspected.main);
+  const otherCheckout = trees.some(
+    (tree) => tree.path !== binding.path && tree.branch === binding.branch
+  );
+  return {
+    branchDeletionExpected:
+      Boolean(binding.branch) &&
+      !otherCheckout &&
+      (merged.ok || mergedHead === inspected.head),
+    branchOid: binding.branch ? inspected.head : null,
+    cleanupBlockedReason: null,
+    expectedHead: inspected.head,
+  };
+};
+
+const deleteReviewedBranch = async (
+  binding: WorkspaceBinding,
+  main: string,
+  localHead: string,
+  mergedHead?: string | null
+): Promise<CleanupResult> => {
+  const merged = await git(main, [
+    "merge-base",
+    "--is-ancestor",
+    localHead,
+    "HEAD",
+  ]);
+  const trees = await repo.worktrees(main);
+  const checkedOut = trees.some((tree) => tree.branch === binding.branch);
+  if (!checkedOut && (merged.ok || mergedHead === localHead)) {
+    // The expected OID makes deletion atomic even if an external Git client
+    // advances the ref after the worktree inspection.
+    const deleted = await git(main, [
+      "update-ref",
+      "-d",
+      `refs/heads/${binding.branch}`,
+      localHead,
+    ]);
+    if (deleted.code === null && !deleted.missing) {
+      throw new Error("Branch deletion did not finish; its outcome is unknown");
+    }
+    return {
+      branchDeleted: deleted.ok,
+      reason: deleted.ok ? null : deleted.stderr,
+      removed: true,
+    };
+  }
+  return {
+    branchDeleted: false,
+    reason: "The branch has commits that are not merged, so it is kept",
+    removed: true,
+  };
+};
+
+/** Caller holds the stopped-runtime workspace mutation interval. */
 export const cleanupBinding = async (
   binding: WorkspaceBinding,
   options: CleanupOptions
 ): Promise<CleanupResult> => {
-  if (!binding.owned) {
-    return {
-      branchDeleted: false,
-      reason: "Missions did not create this folder, so it is kept",
-      removed: false,
-    };
+  const inspected = await cleanupInspection(binding, options.expectedHead);
+  if (typeof inspected === "string") {
+    return { branchDeleted: false, reason: inspected, removed: false };
   }
-  if (!existsSync(binding.path)) {
-    return {
-      branchDeleted: false,
-      reason: "The worktree folder is already gone",
-      removed: false,
-    };
+  const removed = await git(inspected.main, [
+    "worktree",
+    "remove",
+    "--",
+    binding.path,
+  ]);
+  if (removed.code === null && !removed.missing) {
+    throw new Error("Worktree removal did not finish; its outcome is unknown");
   }
-  const entries = await repo.status(binding.path);
-  if (entries === null) {
-    return {
-      branchDeleted: false,
-      reason: "Could not read the worktree status",
-      removed: false,
-    };
-  }
-  if (entries.length > 0) {
-    return {
-      branchDeleted: false,
-      reason: "The worktree has uncommitted changes, so it is kept",
-      removed: false,
-    };
-  }
-  const localHead = await repo.head(binding.path);
-  const trees = await repo.worktrees(binding.path);
-  const main = trees.find((w) => w.isMain)?.path;
-  if (!main || (await repo.canonical(main)) === binding.path) {
-    return {
-      branchDeleted: false,
-      reason: "Refusing to remove the main checkout",
-      removed: false,
-    };
-  }
-  const removed = await git(main, ["worktree", "remove", "--", binding.path]);
   if (!removed.ok) {
     return {
       branchDeleted: false,
@@ -280,21 +393,17 @@ export const cleanupBinding = async (
   if (!(options.deleteBranch && binding.branch)) {
     return { branchDeleted: false, reason: null, removed: true };
   }
-  const safe = await git(main, ["branch", "-d", "--", binding.branch]);
-  if (safe.ok) {
-    return { branchDeleted: true, reason: null, removed: true };
-  }
-  if (options.mergedHead && options.mergedHead === localHead) {
-    const forced = await git(main, ["branch", "-D", "--", binding.branch]);
+  if (options.allowBranchDeletion === false) {
     return {
-      branchDeleted: forced.ok,
-      reason: forced.ok ? null : forced.stderr,
+      branchDeleted: false,
+      reason: "The branch has commits that are not merged, so it is kept",
       removed: true,
     };
   }
-  return {
-    branchDeleted: false,
-    reason: "The branch has commits that are not merged, so it is kept",
-    removed: true,
-  };
+  return await deleteReviewedBranch(
+    binding,
+    inspected.main,
+    inspected.head,
+    options.mergedHead
+  );
 };

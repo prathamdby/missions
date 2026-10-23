@@ -42,6 +42,20 @@ export const PullRequestStateSchema = z.object({
 });
 export type PullRequestState = z.infer<typeof PullRequestStateSchema>;
 
+export const PullRequestSummarySchema = z.object({
+  missionId: IdSchema,
+  missionTitle: z.string(),
+  pr: PullRequestStateSchema,
+  projectId: IdSchema,
+  updatedAt: TimestampSchema,
+});
+export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
+
+export const PullRequestListSchema = z.object({
+  pullRequests: z.array(PullRequestSummarySchema),
+});
+export type PullRequestList = z.infer<typeof PullRequestListSchema>;
+
 export const PublishStateSchema = z.object({
   cleanup: z.enum(["none", "eligible", "removed", "kept", "blocked"]),
   cleanupReason: z.string().nullable(),

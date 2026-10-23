@@ -57,14 +57,16 @@ export const TooltipContent = ({
 /** Wraps a focusable child with a short hover and focus hint. */
 export const Hint = ({
   children,
+  disabled = false,
   label,
   side = "top",
 }: {
   children: ReactNode;
+  disabled?: boolean;
   label: ReactNode;
   side?: "bottom" | "left" | "right" | "top";
 }) => (
-  <Tooltip>
+  <Tooltip open={disabled ? false : undefined}>
     <TooltipTrigger asChild>{children}</TooltipTrigger>
     <TooltipContent side={side}>{label}</TooltipContent>
   </Tooltip>

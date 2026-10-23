@@ -1,22 +1,28 @@
 "use client";
 
-import { errorMessage, isStaleError } from "@/lib/api/api-error";
-import { toast } from "@/lib/toast-store";
+import { errorMessage, isStaleError } from "../../lib/api/api-error";
+import { toast } from "../../lib/toast-store";
 
 /**
  * Shared mutation failure handling: a stale revision or epoch means someone
  * else acted first, so reload instead of showing a raw conflict.
  */
-export const reportMutationError = (
+export const reportMutationError = async (
   error: unknown,
   refresh: () => Promise<boolean>,
   title: string
 ) => {
   if (isStaleError(error)) {
-    refresh();
+    let refreshed: boolean;
+    try {
+      refreshed = await refresh();
+    } catch {
+      refreshed = false;
+    }
     toast({
-      description:
-        "It changed before your action arrived. Showing the latest state.",
+      description: refreshed
+        ? "It changed before your action arrived. Showing the latest state."
+        : "It changed before your action arrived. Reconnect to load the latest state before retrying.",
       title: "Already updated",
       tone: "info",
     });

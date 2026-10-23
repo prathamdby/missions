@@ -1,6 +1,12 @@
 "use client";
 
-import type { DiffHunk, DiffLine, FileDiff } from "@missions/protocol/files";
+import type {
+  Changes,
+  ComparisonMode,
+  DiffHunk,
+  DiffLine,
+  FileDiff,
+} from "@missions/protocol/files";
 import { useState } from "react";
 
 import {
@@ -8,6 +14,14 @@ import {
   ChevronsUpDownIcon,
 } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
+import { DiffRow } from "@/components/ui/diff-row";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/api-error";
 import { useChanges } from "@/lib/api/queries";
@@ -21,40 +35,16 @@ const STATUS_LABEL: Partial<Record<FileDiff["status"], string>> = {
   untracked: "New",
 };
 
-const ROW: Record<DiffLine["kind"], string> = {
-  add: "bg-diff-add",
-  context: "",
-  del: "bg-diff-del",
-};
-
-const GUTTER: Record<DiffLine["kind"], string> = {
-  add: "border-l-2 border-success bg-diff-add-gutter text-success",
-  context: "text-diff-line-number",
-  del: "border-l-2 border-danger bg-diff-del-gutter text-danger",
-};
-
 const Line = ({ line }: { line: DiffLine }) => (
-  <div
-    className={cn("flex h-5 min-w-max shrink-0 items-center", ROW[line.kind])}
+  <DiffRow
+    kind={line.kind}
+    lineNumber={
+      line.kind === "del" ? line.oldNumber : (line.newNumber ?? line.oldNumber)
+    }
+    variant="file"
   >
-    <span
-      className={cn(
-        "flex h-5 w-9.5 shrink-0 items-center justify-end pr-md font-mono text-2xs leading-lg select-none",
-        GUTTER[line.kind]
-      )}
-    >
-      {line.kind === "del"
-        ? line.oldNumber
-        : (line.newNumber ?? line.oldNumber)}
-    </span>
-    <span className="sr-only">
-      {line.kind === "add" ? "Added: " : ""}
-      {line.kind === "del" ? "Removed: " : ""}
-    </span>
-    <span className="pr-lg pl-lg font-mono text-2xs leading-lg whitespace-pre text-syntax-text">
-      {line.text}
-    </span>
-  </div>
+    {line.text}
+  </DiffRow>
 );
 
 const Gap = ({ lines }: { lines: number }) => (
@@ -166,9 +156,11 @@ const FileCard = ({
 const OPEN_FILES = 2;
 
 /** Paper HJD: totals, then one collapsible diff card per file. */
-export const ChangesTab = () => {
-  const { live, missionId } = useMission();
-  const changes = useChanges(missionId, live.workspaceSeq);
+const ChangeResults = ({
+  changes,
+}: {
+  changes: ReturnType<typeof useChanges>;
+}) => {
   if (changes.isPending) {
     return (
       <div className="flex flex-col gap-md">
@@ -216,6 +208,54 @@ export const ChangesTab = () => {
           />
         ))}
       </ul>
+    </>
+  );
+};
+
+const COMPARE_LABELS: Record<ComparisonMode, string> = {
+  branch: "Branch vs default",
+  last_commit: "Last commit",
+  uncommitted: "Uncommitted",
+};
+
+const ComparisonNote = ({ data }: { data?: Changes }) => {
+  const comparison = data?.comparison;
+  return comparison ? (
+    <p className="font-mono text-2xs leading-xs text-text-tertiary">
+      {comparison.from} → {comparison.to}
+      {comparison.mergeBase ? " · merge-base comparison" : ""}
+    </p>
+  ) : null;
+};
+
+export const ChangesTab = () => {
+  const { live, missionId } = useMission();
+  const [mode, setMode] = useState<ComparisonMode>("uncommitted");
+  const changes = useChanges(missionId, live.workspaceSeq, true, mode);
+  return (
+    <>
+      <Select
+        onValueChange={(value) => setMode(value as ComparisonMode)}
+        value={mode}
+      >
+        <SelectTrigger
+          appearance="thinking"
+          aria-label="Compare changes"
+          className="w-full"
+        >
+          <span>Compare</span>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent appearance="thinking" className="w-full">
+          {(["uncommitted", "branch", "last_commit"] as const).map((value) => (
+            <SelectItem appearance="thinking" key={value} value={value}>
+              {COMPARE_LABELS[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <ComparisonNote data={changes.data} />
+      <ChangeResults changes={changes} />
     </>
   );
 };

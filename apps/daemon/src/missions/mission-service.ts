@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 
 import type {
   AnswerQuestionRequest,
@@ -21,6 +23,7 @@ import type { DeliveryMode, Role } from "@missions/protocol/common";
 import type { EventBody } from "@missions/protocol/events";
 import type {
   Agent,
+  AgentModelSettings,
   AgentStatus,
   Assignment,
   Mission,
@@ -37,14 +40,15 @@ import type { OperationJournal } from "../db/journal";
 import type { Store } from "../db/store";
 import type { Emit, EventLog } from "../events/event-log";
 import type { ArtifactStore } from "../files/artifact-store";
+import type { SharedFiles } from "../files/shared-files";
 import { mediaTypeOf, resolveWorkspacePath } from "../files/workspace-files";
 import { AppError, conflict, notFound, stale } from "../lib/app-error";
 import { errorMessage } from "../lib/async";
 import { PermissionBroker } from "../permissions/permission-broker";
 import type { AgentContext } from "../permissions/permission-broker";
 import { StaleDecisionError } from "../permissions/stale-decision-error";
+import { ProcessRecordRepository } from "../processes/process-record-repository";
 import type {
-  ProcessRecord,
   ProcessSupervisor,
   StopResult,
 } from "../processes/process-supervisor";
@@ -60,6 +64,7 @@ import type {
   RuntimeStartResult,
 } from "../sdk/agent-runtime";
 import type { NativeQueueEntry, NativeQueueTracker } from "../sdk/native-queue";
+import { nativeTodos } from "../sdk/native-todos";
 import {
   createRoleToolServer,
   DISABLED_TOOL_IDS,
@@ -69,7 +74,9 @@ import {
   WORKER_PROMPT,
 } from "../sdk/role-tools";
 import type { RoleToolHandlers, TodoInput } from "../sdk/role-tools";
+import type { ModelCatalog } from "../settings/models";
 import type { SettingsService } from "../settings/settings-service";
+import { WorkspaceOperationGate } from "../workspaces/workspace-operation-gate";
 import { verifyBinding } from "../workspaces/workspace-service";
 import type { WorkspaceService } from "../workspaces/workspace-service";
 import { WriteLeaseRegistry } from "../workspaces/write-lease";
@@ -96,6 +103,7 @@ import {
   itemsFromMessage,
   textItemId,
   toolCallItem,
+  toolItemId,
   toolResultItem,
 } from "./transcript";
 import type { NewTranscriptItem } from "./transcript";
@@ -104,6 +112,8 @@ import type { NewTranscriptItem } from "./transcript";
 export interface RuntimeHandle {
   readonly queue: NativeQueueTracker;
   readonly sessionId: string | null;
+  readonly model: AgentModelSettings | null;
+  updateModel: (choice: AgentModelSettings) => Promise<AgentModelSettings>;
   start: (resumeSessionId?: string) => Promise<RuntimeStartResult>;
   submit: (id: string, text: string, mode: DeliveryMode) => Promise<void>;
   changeMode: (id: string, mode: DeliveryMode) => Promise<void>;
@@ -126,23 +136,35 @@ export interface MissionServiceOptions {
   projects: ProjectService;
   workspaces: WorkspaceService;
   settings: SettingsService;
+  models: ModelCatalog;
   supervisor: ProcessSupervisor;
+  processRecords?: ProcessRecordRepository;
   artifacts: ArtifactStore;
+  sharedFiles: SharedFiles;
   createRuntime?: RuntimeFactory;
   now?: () => Date;
 }
 
 interface LiveAgent {
   runtime: RuntimeHandle;
-  /** Mission epoch the runtime was started in; events from older epochs are ignored. */
+  id: string;
+  agentId: string;
+  missionId: string;
+  workspace: string;
   epoch: number;
+  phase: "starting" | "ready" | "retiring";
+  started: Promise<RuntimeStartResult>;
+  ready: Promise<RuntimeHandle>;
+  retirement?: Promise<StopResult>;
+  toolCalls: Map<string, { name: string; input: Record<string, unknown> }>;
+  operations: Set<Promise<unknown>>;
+  fenced: PromiseWithResolvers<undefined>;
 }
 
 interface PendingQuestion {
   resolve: (answer: AskUserAnswer) => void;
 }
 
-const PROCESS_PREFIX = "process:";
 const WRITE_TOOLS = new Set([
   "Edit",
   "Create",
@@ -170,13 +192,18 @@ const ENDED_STATUSES = new Set<Mission["status"]>([
 ]);
 
 const isDefiniteFailure = (error: unknown) => error instanceof AppError;
+const sameModel = (a: AgentModelSettings, b: AgentModelSettings) =>
+  a.modelId === b.modelId && a.reasoningEffort === b.reasoningEffort;
 
-/** Interrupt, then delete every native queued entry so nothing is delivered after a stop. */
-const drainNative = async (runtime: RuntimeHandle) => {
+/** Cooperative cleanup only; callers bound it and confirm process shutdown separately. */
+const drainNative = async (runtime: RuntimeHandle, signal: AbortSignal) => {
   try {
     await runtime.interrupt();
   } catch {
     // Already idle or disconnected; queue deletion below still runs.
+  }
+  if (signal.aborted) {
+    return;
   }
   const open = runtime.queue
     .list()
@@ -198,7 +225,10 @@ export class MissionService {
   readonly #projects: ProjectService;
   readonly #workspaces: WorkspaceService;
   readonly #settings: SettingsService;
+  readonly #models: ModelCatalog;
+  readonly #modelUpdates = new Set<string>();
   readonly #supervisor: ProcessSupervisor;
+  readonly #processRecords: ProcessRecordRepository;
   readonly #createRuntime: RuntimeFactory;
   readonly #now: () => Date;
   readonly broker: PermissionBroker;
@@ -206,15 +236,15 @@ export class MissionService {
   readonly #live = new Map<string, LiveAgent>();
   readonly #questions = new Map<string, PendingQuestion>();
   readonly #deltas: DeltaCoalescer;
-  readonly #starting = new Map<string, Promise<RuntimeHandle>>();
+  readonly #workspaceGate = new WorkspaceOperationGate();
+  readonly #tasks = new Set<Promise<unknown>>();
+  #closing = false;
+  #shutdownPromise: Promise<void> | null = null;
+  readonly #shutdownFailures = new Set<unknown>();
   /** Queue items with a remove or edit in flight; a second change must wait. */
   readonly #queueBusy = new Set<string>();
   readonly #artifacts: ArtifactStore;
-  /** Tool inputs awaiting their result, for artifact detection. */
-  readonly #toolCalls = new Map<
-    string,
-    { name: string; input: Record<string, unknown> }
-  >();
+  readonly #sharedFiles: SharedFiles;
 
   constructor(options: MissionServiceOptions) {
     this.#store = options.store;
@@ -223,14 +253,18 @@ export class MissionService {
     this.#projects = options.projects;
     this.#workspaces = options.workspaces;
     this.#settings = options.settings;
+    this.#models = options.models;
     this.#supervisor = options.supervisor;
+    this.#processRecords =
+      options.processRecords ?? new ProcessRecordRepository(options.store);
     this.#artifacts = options.artifacts;
+    this.#sharedFiles = options.sharedFiles;
     this.#createRuntime =
       options.createRuntime ??
       ((runtimeOptions) => new AgentRuntime(runtimeOptions));
     this.#now = options.now ?? (() => new Date());
-    this.leases = new WriteLeaseRegistry((_workspace, holder) =>
-      this.#onLeaseChange(holder)
+    this.leases = new WriteLeaseRegistry((workspace, holder) =>
+      this.#onLeaseChange(workspace, holder)
     );
     this.broker = new PermissionBroker({
       acquireWriteLease: (agentId, signal) => {
@@ -253,7 +287,7 @@ export class MissionService {
     });
     this.#deltas = new DeltaCoalescer((itemId, delta) => {
       const agent = this.#store.getAgent(delta.agentId);
-      if (agent) {
+      if (agent && this.#isCurrent(agent.id)?.live.id === delta.generation) {
         this.#log.publish(agent.missionId, {
           data: {
             agentId: delta.agentId,
@@ -341,9 +375,8 @@ export class MissionService {
     const at = this.#iso();
     const next = {
       ...mission,
-      endedAt: ENDED_STATUSES.has(mission.status)
-        ? (mission.endedAt ?? at)
-        : null,
+      endedAt:
+        mission.endedAt ?? (ENDED_STATUSES.has(mission.status) ? at : null),
       revision: mission.revision + 1,
       updatedAt: at,
     };
@@ -432,7 +465,7 @@ export class MissionService {
         type: "permission.updated",
       });
     });
-    if (request.agentId) {
+    if (request.agentId && this.#isCurrent(request.agentId)) {
       this.#patchAgent(request.agentId, {
         status: request.status === "pending" ? "waiting_permission" : "working",
       });
@@ -477,6 +510,10 @@ export class MissionService {
   // ------------------------------------------------------- broker context
 
   #workspaceOf(agentId: string) {
+    const owner = this.#live.get(agentId);
+    if (owner) {
+      return owner.workspace;
+    }
     const agent = this.#store.getAgent(agentId);
     const mission = agent ? this.#store.getMission(agent.missionId) : null;
     return mission?.workspace?.path ?? null;
@@ -491,41 +528,166 @@ export class MissionService {
     }
     return {
       autonomy: mission.autonomy,
+      canWrite:
+        agent.role === "orchestrator" ||
+        (agent.assignmentId !== null &&
+          this.#store.assignments.get(agent.assignmentId)?.needsWrite === true),
       epoch: mission.epoch,
-      fenced: FENCED.has(mission.status) || live.epoch !== mission.epoch,
+      fenced:
+        this.#closing ||
+        FENCED.has(mission.status) ||
+        live.phase === "retiring" ||
+        live.epoch !== mission.epoch,
       missionId: mission.id,
-      planApproved: this.#store.plans.list(mission.id, ["approved"]).length > 0,
+      planApproved: this.#latestPlan(mission.id)?.status === "approved",
       projectId: mission.projectId,
       role: agent.role,
       workspacePath: mission.workspace.path,
     };
   }
 
-  #onLeaseChange(holder: string | null) {
-    const holderAgent = holder ? this.#store.getAgent(holder) : null;
-    const missionId = holderAgent?.missionId;
-    const agents = missionId ? this.#store.listAgents(missionId) : [];
-    for (const agent of agents) {
-      const holds = agent.id === holder;
-      if (agent.holdsWriteLease !== holds) {
-        this.#saveAgent({ ...agent, holdsWriteLease: holds });
+  #latestPlan(missionId: string) {
+    return this.#store.plans
+      .list(missionId)
+      .toSorted((a, b) => b.revision - a.revision)[0];
+  }
+
+  #onLeaseChange(workspace: string, holder: string | null) {
+    for (const mission of this.#store.listMissions()) {
+      for (const agent of this.#store.listAgents(mission.id)) {
+        if (this.#workspaceOf(agent.id) !== workspace) {
+          continue;
+        }
+        const holdsWriteLease = agent.id === holder;
+        if (agent.holdsWriteLease !== holdsWriteLease) {
+          this.#saveAgent({ ...agent, holdsWriteLease });
+        }
       }
     }
-    for (const live of this.#live.keys()) {
-      const agent = this.#store.getAgent(live);
-      if (
-        agent?.holdsWriteLease &&
-        agent.id !== holder &&
-        !agents.some((a) => a.id === agent.id)
-      ) {
-        this.#saveAgent({ ...agent, holdsWriteLease: false });
+  }
+
+  #workspaceForOperation(missionId: string) {
+    this.#requireOpen();
+    const { workspace } = this.get(missionId);
+    if (!workspace) {
+      throw conflict("The mission has no workspace");
+    }
+    return workspace;
+  }
+
+  #requireOpen() {
+    if (this.#closing) {
+      throw conflict("The daemon is stopping");
+    }
+  }
+
+  /** Both mutation and recovery exclude every execution owner of the workspace. */
+  async #requireWorkspaceQuiescent(canonical: string): Promise<void> {
+    this.#requireOpen();
+    if ([...this.#live.values()].some((live) => live.workspace === canonical)) {
+      throw conflict("Agent execution still owns this workspace");
+    }
+    const occupiedWorkspaces = this.#store
+      .listMissions()
+      .flatMap((mission) =>
+        (mission.status === "stop_failed" || ACTIVE.has(mission.status)) &&
+        mission.workspace
+          ? [mission.workspace.path]
+          : []
+      );
+    const occupiedCanonical = await Promise.all(
+      occupiedWorkspaces.map((workspace) =>
+        realpath(workspace).catch(() => workspace)
+      )
+    );
+    this.#requireOpen();
+    if (
+      occupiedWorkspaces.includes(canonical) ||
+      occupiedCanonical.includes(canonical)
+    ) {
+      throw conflict("Agent processes still own this workspace");
+    }
+  }
+
+  #requireCleanupRecovery(missionId: string, operationId: string) {
+    const existing = this.#journal.get(operationId, {
+      kind: "workspace.cleanup",
+      missionId,
+    });
+    if (
+      !existing ||
+      (existing.operation.status !== "unknown" &&
+        existing.operation.status !== "intent") ||
+      existing.operation.detail.action !== "remove"
+    ) {
+      throw conflict("Only an uncertain workspace removal can be recovered");
+    }
+  }
+
+  /** Excludes execution admission for the complete external mutation interval. */
+  async withWorkspaceMutation<T>(
+    missionId: string,
+    effect: () => Promise<T>
+  ): Promise<T> {
+    const workspace = this.#workspaceForOperation(missionId);
+    return await this.#own(
+      this.#workspaceGate.run(workspace.path, async (canonical) => {
+        this.#requireOpen();
+        if (!ARCHIVABLE.has(this.get(missionId).status)) {
+          throw conflict("Stop the mission before publishing");
+        }
+        await this.#requireWorkspaceQuiescent(canonical);
+        return await effect();
+      })
+    );
+  }
+
+  /** Observe a previously uncertain removal and settle metadata; never initiate deletion. */
+  async withWorkspaceRecovery<T>(
+    missionId: string,
+    operationId: string,
+    effect: () => Promise<T>
+  ): Promise<T> {
+    const workspace = this.#workspaceForOperation(missionId);
+    this.#requireCleanupRecovery(missionId, operationId);
+    return await this.#own(
+      this.#workspaceGate.runRecovery(workspace.path, async (canonical) => {
+        await this.#requireWorkspaceQuiescent(canonical);
+        // A queued recovery must not replay after another holder settled its intent.
+        this.#requireCleanupRecovery(missionId, operationId);
+        return await effect();
+      })
+    );
+  }
+
+  #own<T>(task: Promise<T>): Promise<T> {
+    this.#tasks.add(task);
+    void this.#observeTask(task);
+    return task;
+  }
+
+  async #observeTask(task: Promise<unknown>): Promise<void> {
+    try {
+      await task;
+    } catch (error) {
+      if (this.#closing) {
+        this.#shutdownFailures.add(error);
       }
+    } finally {
+      this.#tasks.delete(task);
     }
   }
 
   // ------------------------------------------------------------- creation
 
-  async create(input: CreateMissionRequest): Promise<MissionSnapshot> {
+  create(input: CreateMissionRequest): Promise<MissionSnapshot> {
+    if (this.#closing) {
+      return Promise.reject(conflict("The daemon is stopping"));
+    }
+    return this.#own(this.#create(input));
+  }
+
+  async #create(input: CreateMissionRequest): Promise<MissionSnapshot> {
     const request = CreateMissionRequestSchema.parse(input);
     const project = this.#projects.get(request.projectId);
     const { result } = await this.#journal.run(
@@ -596,7 +758,7 @@ export class MissionService {
       }
     );
     const { missionId } = result as { missionId: string };
-    void this.#launch(missionId);
+    this.#own(this.#launch(missionId));
     return this.snapshot(missionId);
   }
 
@@ -649,16 +811,30 @@ export class MissionService {
 
   async #launch(missionId: string) {
     const mission = this.get(missionId);
+    if (this.#closing || FENCED.has(mission.status)) {
+      return;
+    }
     const orchestrator = this.#store
       .listAgents(missionId)
       .find((agent) => agent.role === "orchestrator");
     const goal = this.#store.queue.get(`${missionId}:goal`);
-    if (!(orchestrator && goal)) {
+    if (
+      !(orchestrator && goal) ||
+      goal.state !== "submitting" ||
+      orchestrator.sessionId
+    ) {
       return;
     }
+    let attempted = false;
     try {
       const runtime = await this.#ensureRuntime(orchestrator.id);
-      await runtime.submit(goal.id, goal.text, "steer");
+      this.#requireRuntime(orchestrator.id, runtime);
+      if (this.#store.queue.get(goal.id)?.state === "submitting") {
+        attempted = true;
+        await this.#execute(orchestrator.id, runtime, () =>
+          runtime.submit(goal.id, goal.text, "steer")
+        );
+      }
     } catch (error) {
       const stuck = this.#store.queue.get(goal.id);
       if (stuck && stuck.state === "submitting") {
@@ -666,15 +842,23 @@ export class MissionService {
           ...stuck,
           error: errorMessage(error),
           revision: stuck.revision + 1,
-          state: "unknown",
+          state: attempted ? "unknown" : "failed",
           updatedAt: this.#iso(),
         });
       }
-      this.#fail(
-        mission.id,
-        "environment",
-        `Could not start the Orchestrator: ${errorMessage(error)}`
-      );
+      if (!FENCED.has(this.get(mission.id).status)) {
+        const stopped = await this.#stopMission(mission.id, "interrupted");
+        if (
+          stopped.epoch === mission.epoch + 1 &&
+          stopped.status === "interrupted"
+        ) {
+          this.#fail(
+            mission.id,
+            "environment",
+            `Could not start the Orchestrator: ${errorMessage(error)}`
+          );
+        }
+      }
     }
   }
 
@@ -687,7 +871,7 @@ export class MissionService {
       ...mission,
       lastError: { code, message, retryAfterMs: null },
       status:
-        mission.status === "exploring" && code === "environment"
+        !this.#latestPlan(missionId) && code === "environment"
           ? "failed"
           : "interrupted",
     }));
@@ -696,67 +880,148 @@ export class MissionService {
 
   // ------------------------------------------------------------- runtimes
 
-  #ensureRuntime(agentId: string): Promise<RuntimeHandle> {
-    const live = this.#live.get(agentId);
-    if (live) {
-      return Promise.resolve(live.runtime);
-    }
-    const pending = this.#starting.get(agentId);
-    if (pending) {
-      return pending;
-    }
-    const started = this.#startRuntime(agentId).finally(() =>
-      this.#starting.delete(agentId)
-    );
-    this.#starting.set(agentId, started);
-    return started;
-  }
-
-  async #startRuntime(agentId: string): Promise<RuntimeHandle> {
+  async #ensureRuntime(agentId: string): Promise<RuntimeHandle> {
     const agent = this.#store.getAgent(agentId);
     const mission = agent ? this.get(agent.missionId) : null;
     if (!(agent && mission?.workspace)) {
       throw notFound("Agent");
     }
-    const runtime = this.#createRuntime({
+    const live = await this.#workspaceGate.run(
+      mission.workspace.path,
+      (workspace) => {
+        if (this.#closing || FENCED.has(this.get(mission.id).status)) {
+          throw conflict("Resume the mission before starting agents");
+        }
+        const existing = this.#live.get(agentId);
+        if (existing?.phase === "retiring") {
+          throw conflict("The previous agent execution has not stopped");
+        }
+        return (
+          existing ?? this.#startRuntime(agent, this.get(mission.id), workspace)
+        );
+      }
+    );
+    const runtime = await live.ready;
+    this.#requireRuntime(agentId, runtime);
+    return runtime;
+  }
+
+  #startRuntime(agent: Agent, mission: Mission, workspace: string): LiveAgent {
+    const agentId = agent.id;
+    // Callbacks capture this owner, never whichever runtime later occupies agentId.
+    const live = {
       agentId,
-      cwd: mission.workspace.path,
+      epoch: mission.epoch,
+      fenced: Promise.withResolvers<undefined>(),
+      id: randomUUID(),
+      missionId: mission.id,
+      operations: new Set(),
+      phase: "starting" as const,
+      toolCalls: new Map(),
+      workspace,
+    } as LiveAgent;
+    live.runtime = this.#createRuntime({
+      agentId,
+      cwd: workspace,
       disabledToolIds: DISABLED_TOOL_IDS,
       enabledToolIds: ENABLED_TOOL_IDS,
       mcpServers: [
-        createRoleToolServer(agent.role, agentId, this.#roleHandlers()),
+        createRoleToolServer(agent.role, agentId, this.#roleHandlers(live)),
       ],
       modelId: agent.model.modelId,
-      onAskUser: (ask) => this.#askUser(ask),
-      onEvent: (event) => this.#onAgentEvent(agentId, event),
+      onAskUser: (ask) =>
+        ask.agentId === agentId && this.#isCurrent(agentId, live)
+          ? this.#askUser(ask)
+          : Promise.resolve({ answers: [], cancelled: true }),
+      onEvent: (event) => this.#onAgentEvent(live, event),
       onPermission: async (ask) => {
-        const result = await this.broker.ask(ask.agentId, ask.toolUses);
-        return result.approved;
+        if (ask.agentId !== agentId || !this.#isCurrent(agentId, live)) {
+          return false;
+        }
+        const result = await this.broker.ask(agentId, ask.toolUses);
+        return result.approved && this.#isCurrent(agentId, live) !== null;
       },
       reasoningEffort: agent.model.reasoningEffort,
       role: agent.role,
       supervisor: this.#supervisor,
-      systemPrompt:
-        agent.role === "orchestrator" ? ORCHESTRATOR_PROMPT : WORKER_PROMPT,
+      systemPrompt: `${agent.role === "orchestrator" ? ORCHESTRATOR_PROMPT : WORKER_PROMPT}\nPersistent shared mission files: ${this.#sharedFiles.root(mission.id)}. Read AGENTS.md and CREW.md there; use plans/, handoffs/, results/, and errors/ for shared knowledge, not repository code. Native TodoWrite also updates your sidebar checklist.`,
     });
-    const live: LiveAgent = { epoch: mission.epoch, runtime };
     this.#live.set(agentId, live);
+    live.started = this.#sharedFiles
+      .ensure(mission.id)
+      .then(async () => await live.runtime.start(agent.sessionId ?? undefined));
+    live.ready = this.#finishStart(live, agent);
+    return live;
+  }
+
+  async #finishStart(live: LiveAgent, agent: Agent): Promise<RuntimeHandle> {
     try {
-      const started = await runtime.start(agent.sessionId ?? undefined);
-      if (agent.sessionId) {
-        this.#reconcileQueue(agent, runtime, started);
+      const started = await live.started;
+      if (!this.#isCurrent(agent.id, live)) {
+        throw conflict("Agent startup was cancelled");
       }
-      this.#patchAgent(agentId, {
+      // PATCH during initialization only records a desired choice. Reconcile
+      // before ready resolves, so the first goal cannot use the old model.
+      if (agent.role === "orchestrator") {
+        const desired = this.get(agent.missionId).orchestrator;
+        const native = live.runtime.model;
+        const differs =
+          native &&
+          (native.modelId !== desired.modelId ||
+            (desired.reasoningEffort !== null &&
+              native.reasoningEffort !== desired.reasoningEffort));
+        if (!sameModel(desired, agent.model) || differs) {
+          await this.#reconcileStartingModel(live, desired);
+        }
+      }
+      live.phase = "ready";
+      if (agent.sessionId) {
+        this.#reconcileQueue(agent, live.runtime, started);
+      }
+      for (const message of started.messages) {
+        this.#onAgentEvent(live, { message, type: "message" });
+      }
+      this.#patchAgent(agent.id, {
         sessionId: started.sessionId,
         status: "idle",
       });
-      return runtime;
+      return live.runtime;
     } catch (error) {
-      this.#live.delete(agentId);
-      this.#patchAgent(agentId, { status: "failed" });
-      await runtime.close().catch(() => null);
+      await this.#closeRuntime(agent.id, live);
       throw error;
     }
+  }
+
+  async #reconcileStartingModel(
+    live: LiveAgent,
+    desired: AgentModelSettings
+  ): Promise<void> {
+    const effective = await this.#models.resolve(desired, "Orchestrator");
+    this.#requireCurrent(live.agentId, live);
+    const confirmed = await live.runtime.updateModel(effective);
+    this.#requireCurrent(live.agentId, live);
+    if (!sameModel(confirmed, effective)) {
+      throw conflict(
+        "Droid did not accept the requested model settings; review the mission and retry"
+      );
+    }
+    this.#patchAgent(live.agentId, { model: confirmed });
+    const latest = this.get(live.missionId).orchestrator;
+    if (!sameModel(desired, latest)) {
+      await this.#reconcileStartingModel(live, latest);
+    }
+  }
+
+  #requireRuntime(agentId: string, runtime: RuntimeHandle) {
+    const current = this.#isCurrent(agentId);
+    if (
+      !current ||
+      current.live.runtime !== runtime ||
+      current.live.phase !== "ready"
+    ) {
+      throw conflict("The agent execution is no longer running");
+    }
+    return current;
   }
 
   /** After load, mirrored entries are compared with native state and never resubmitted. */
@@ -765,24 +1030,26 @@ export class MissionService {
     runtime: RuntimeHandle,
     started: RuntimeStartResult
   ) {
-    const open = this.#store.queue
+    const consumedIds = new Set(
+      started.messages
+        .map((message) => message.requestId)
+        .filter((id): id is string => id !== null)
+    );
+    const mirrored = this.#store.queue
       .list(agent.missionId)
       .filter(
-        (item) => item.agentId === agent.id && !TERMINAL_QUEUE.has(item.state)
+        (item) =>
+          item.agentId === agent.id &&
+          (!TERMINAL_QUEUE.has(item.state) || consumedIds.has(item.id))
       );
     runtime.queue.hydrate(
-      open.map((item) => ({
+      mirrored.map((item) => ({
         error: item.error,
         id: item.id,
         mode: item.mode,
         state: item.state,
         text: item.text,
       }))
-    );
-    const consumedIds = new Set(
-      started.messages
-        .map((message) => message.requestId)
-        .filter((id): id is string => id !== null)
     );
     runtime.queue.reconcile({
       consumedIds,
@@ -791,34 +1058,192 @@ export class MissionService {
     });
   }
 
-  async #closeRuntime(agentId: string): Promise<StopResult> {
-    const live = this.#live.get(agentId);
-    this.#live.delete(agentId);
-    this.leases.forget(agentId);
-    if (!live) {
-      return { stopped: true, survivors: [] };
+  #closeRuntime(
+    agentId: string,
+    owner = this.#live.get(agentId)
+  ): Promise<StopResult> {
+    if (!owner) {
+      return Promise.resolve({ stopped: true, survivors: [] });
     }
-    return await live.runtime.close();
+    if (owner.retirement) {
+      return owner.retirement;
+    }
+    const starting = owner.phase === "starting";
+    owner.phase = "retiring";
+    owner.fenced.resolve(undefined);
+    this.#deltas.dropGeneration(owner.id);
+    owner.toolCalls.clear();
+    // Settle pending decisions before another execution can occupy this agent ID.
+    const errors: unknown[] = [];
+    try {
+      this.#invalidateAgentDecisions(owner);
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      this.#cancelQuestions(owner.missionId, agentId);
+    } catch (error) {
+      errors.push(error);
+    }
+    owner.retirement = this.#own(this.#disposeRuntime(owner, starting, errors));
+    return owner.retirement;
+  }
+
+  #invalidateAgentDecisions(owner: LiveAgent) {
+    // The owner is fenced first. Deciding any of its pending requests now makes
+    // the broker settle them as stale without granting authority to a successor.
+    try {
+      for (const request of this.broker.pending(owner.missionId)) {
+        if (request.agentId !== owner.agentId) {
+          continue;
+        }
+        try {
+          this.broker.decide(request.id, "deny", request.epoch);
+        } catch (error) {
+          if (!(error instanceof StaleDecisionError)) {
+            throw error;
+          }
+        }
+      }
+    } finally {
+      this.leases.cancelWaits(owner.agentId);
+    }
+  }
+
+  async #disposeRuntime(
+    owner: LiveAgent,
+    starting: boolean,
+    errors: unknown[]
+  ): Promise<StopResult> {
+    // Yield the role-tool reply; retirement remains owned and publish stays fenced.
+    await yieldImmediate();
+    const controller = new AbortController();
+    const cooperative = drainNative(owner.runtime, controller.signal).catch(
+      () => {
+        // A fenced SDK failure is uncertain delivery, not a reason to delay supervision.
+      }
+    );
+    // A responsive runner may acknowledge deletion, but a blocked interrupt or
+    // delete never owns the lifetime of process-confirming close.
+    await Promise.race([cooperative, yieldImmediate()]);
+    let result = await MissionService.#confirmRuntimeClosed(owner, errors);
+    if (starting) {
+      await owner.started.catch(() => null);
+      // Startup may have registered a late process after close began.
+      result = await MissionService.#confirmRuntimeClosed(owner, errors);
+    }
+    controller.abort();
+    await Promise.allSettled(owner.operations);
+    try {
+      for (const entry of owner.runtime.queue.list()) {
+        this.#syncQueue(owner.agentId, entry);
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      this.#patchAgent(owner.agentId, {
+        holdsWriteLease: result.stopped
+          ? false
+          : (this.#store.getAgent(owner.agentId)?.holdsWriteLease ?? false),
+        status: result.stopped ? "stopped" : "failed",
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+    if (result.stopped) {
+      try {
+        this.leases.forget(owner.agentId);
+      } catch (error) {
+        errors.push(error);
+      }
+      if (this.#live.get(owner.agentId) === owner) {
+        this.#live.delete(owner.agentId);
+      }
+    } else {
+      try {
+        this.#mutateMission(owner.missionId, (mission) => ({
+          ...mission,
+          lastError: {
+            code: "stop_failed",
+            message: `Agent execution could not stop: ${result.survivors.join(", ")}`,
+            retryAfterMs: null,
+          },
+          status: "stop_failed",
+        }));
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Agent execution cleanup failed");
+    }
+    return result;
+  }
+
+  static async #confirmRuntimeClosed(
+    owner: LiveAgent,
+    errors: unknown[]
+  ): Promise<StopResult> {
+    try {
+      return await owner.runtime.close();
+    } catch (error) {
+      errors.push(error);
+      return { stopped: false, survivors: [] };
+    }
+  }
+
+  #execute<T>(
+    agentId: string,
+    runtime: RuntimeHandle,
+    effect: () => Promise<T>
+  ): Promise<T> {
+    const { live } = this.#requireRuntime(agentId, runtime);
+    const task = Promise.race([
+      effect(),
+      live.fenced.promise.then(() => {
+        throw new Error(
+          "Agent execution stopped before the runner confirmed the operation"
+        );
+      }),
+    ]);
+    live.operations.add(task);
+    void task.then(
+      () => live.operations.delete(task),
+      () => live.operations.delete(task)
+    );
+    return task;
   }
 
   // --------------------------------------------------------- agent events
 
-  #isCurrent(agentId: string) {
+  #isCurrent(agentId: string, owner = this.#live.get(agentId)) {
+    if (this.#closing) {
+      return null;
+    }
     const live = this.#live.get(agentId);
     const agent = this.#store.getAgent(agentId);
     const mission = agent ? this.#store.getMission(agent.missionId) : null;
-    return live && agent && mission && live.epoch === mission.epoch
-      ? { agent, mission }
+    return !this.#closing &&
+      owner &&
+      live === owner &&
+      live.phase !== "retiring" &&
+      agent &&
+      mission &&
+      !FENCED.has(mission.status) &&
+      live.epoch === mission.epoch
+      ? { agent, live, mission }
       : null;
   }
 
-  #onAgentEvent(agentId: string, event: AgentEvent) {
-    if (event.type === "queue") {
-      this.#syncQueue(agentId, event.entry);
+  #onAgentEvent(live: LiveAgent, event: AgentEvent) {
+    const { agentId } = live;
+    const current = this.#isCurrent(agentId, live);
+    if (!current) {
       return;
     }
-    const current = this.#isCurrent(agentId);
-    if (!current) {
+    if (event.type === "queue") {
+      this.#syncQueue(agentId, event.entry);
       return;
     }
     const { agent, mission } = current;
@@ -831,21 +1256,36 @@ export class MissionService {
           textItemId(agentId, event.messageId, kind),
           agentId,
           kind,
-          event.delta
+          event.delta,
+          live.id
         );
         break;
       }
       case "message": {
+        for (const use of event.message.toolUses) {
+          this.#recordToolCall(live, use.id, {
+            input: use.input,
+            name: use.name,
+          });
+        }
         const items = itemsFromMessage(base, event.message).map((entry) =>
           entry.kind === "user" && isSystemRequest(entry.requestId)
             ? { ...entry, kind: "system" as const }
             : entry
         );
         this.#appendTranscript(mission.id, items);
+        for (const result of event.message.toolResults) {
+          this.#afterToolResult(
+            live,
+            mission.id,
+            result.toolUseId,
+            result.isError
+          );
+        }
         break;
       }
       case "tool_call": {
-        this.#toolCalls.set(event.toolUseId, {
+        this.#recordToolCall(live, event.toolUseId, {
           input: event.input,
           name: event.name,
         });
@@ -858,12 +1298,7 @@ export class MissionService {
         this.#appendTranscript(mission.id, [
           toolResultItem(base, event.toolUseId, event.content, event.isError),
         ]);
-        this.#afterToolResult(
-          agentId,
-          mission.id,
-          event.toolUseId,
-          event.isError
-        );
+        this.#afterToolResult(live, mission.id, event.toolUseId, event.isError);
         break;
       }
       default: {
@@ -922,16 +1357,7 @@ export class MissionService {
         break;
       }
       case "process_exit": {
-        this.#live.delete(agent.id);
-        this.leases.forget(agent.id);
-        this.#saveAgent({ ...agent, status: "failed" });
-        if (agent.role === "orchestrator" && ACTIVE.has(mission.status)) {
-          this.#fail(
-            mission.id,
-            "run_failed",
-            `The Orchestrator stopped unexpectedly: ${event.message}`
-          );
-        }
+        this.#own(this.#unexpectedExit(agent, mission, event.message));
         break;
       }
       default: {
@@ -940,15 +1366,68 @@ export class MissionService {
     }
   }
 
+  async #unexpectedExit(agent: Agent, mission: Mission, message: string) {
+    if (agent.role === "orchestrator") {
+      const stopped = await this.#stopMission(mission.id, "interrupted");
+      if (
+        stopped.epoch === mission.epoch + 1 &&
+        stopped.status === "interrupted"
+      ) {
+        this.#fail(
+          mission.id,
+          "run_failed",
+          `The Orchestrator stopped unexpectedly: ${message}`
+        );
+      }
+      return;
+    }
+    const result = await this.#closeRuntime(agent.id);
+    if (agent.assignmentId) {
+      const assignment = this.#store.assignments.get(agent.assignmentId);
+      if (assignment?.status === "running") {
+        this.#saveAssignment({ ...assignment, status: "failed" });
+      }
+      if (result.stopped) {
+        await this.#pumpAssignments(mission.id);
+      }
+    }
+  }
+
+  #recordToolCall(
+    live: LiveAgent,
+    toolUseId: string,
+    call: { name: string; input: Record<string, unknown> }
+  ) {
+    // A resumed SDK session may replay earlier messages. Its durable result
+    // already updated the checklist; never let that overwrite newer todos.
+    if (
+      call.name === "TodoWrite" &&
+      this.#store.getTranscriptItem(
+        toolItemId(live.agentId, toolUseId, "result")
+      )
+    ) {
+      return;
+    }
+    live.toolCalls.set(toolUseId, call);
+  }
+
   #afterToolResult(
-    agentId: string,
+    live: LiveAgent,
     missionId: string,
     toolUseId: string,
     isError: boolean
   ) {
-    const call = this.#toolCalls.get(toolUseId);
-    this.#toolCalls.delete(toolUseId);
+    const { agentId } = live;
+    const call = live.toolCalls.get(toolUseId);
+    live.toolCalls.delete(toolUseId);
     if (!call || isError) {
+      return;
+    }
+    if (call.name === "TodoWrite") {
+      const todos = nativeTodos(call.input);
+      if (todos !== null) {
+        this.#updateTodos(agentId, todos);
+      }
       return;
     }
     const target = pathInput(call.input);
@@ -963,15 +1442,18 @@ export class MissionService {
       call.name !== "Read" &&
       PREVIEWABLE.test(mediaTypeOf(target))
     ) {
-      this.#attachArtifact(agentId, { path: target }).catch(() => null);
+      this.#own(
+        this.#attachArtifact(agentId, { path: target }, live).catch(() => null)
+      );
     }
   }
 
   async #attachArtifact(
     agentId: string,
-    input: { path: string; name?: string | undefined }
+    input: { path: string; name?: string | undefined },
+    owner = this.#live.get(agentId)
   ) {
-    const { agent, mission } = this.#requireCurrent(agentId);
+    const { agent, mission } = this.#requireCurrent(agentId, owner);
     const root = mission.workspace?.path;
     if (!root) {
       throw new Error("The mission has no folder");
@@ -990,6 +1472,7 @@ export class MissionService {
       name: input.name ?? path.basename(target.rel),
       source: target.real,
     });
+    this.#requireCurrent(agentId, owner);
     this.#log.commit((emit) => {
       this.#store.artifacts.put(artifact);
       emit(mission.id, { data: { artifact }, type: "artifact.created" });
@@ -1090,8 +1573,11 @@ export class MissionService {
     return answered;
   }
 
-  #cancelQuestions(missionId: string) {
+  #cancelQuestions(missionId: string, agentId?: string) {
     for (const question of this.#store.questions.list(missionId, ["pending"])) {
+      if (agentId && question.agentId !== agentId) {
+        continue;
+      }
       this.#questions
         .get(question.id)
         ?.resolve({ answers: [], cancelled: true });
@@ -1168,13 +1654,23 @@ export class MissionService {
     return agent;
   }
 
-  async #systemSubmit(agentId: string, text: string, mode: DeliveryMode) {
+  #systemSubmit(agentId: string, text: string, mode: DeliveryMode) {
+    return this.#own(this.#sendSystem(agentId, text, mode));
+  }
+
+  async #sendSystem(agentId: string, text: string, mode: DeliveryMode) {
     try {
       const runtime = await this.#ensureRuntime(agentId);
-      await runtime.submit(`${SYSTEM_PREFIX}${randomUUID()}`, text, mode);
+      this.#requireRuntime(agentId, runtime);
+      await this.#execute(agentId, runtime, () =>
+        runtime.submit(`${SYSTEM_PREFIX}${randomUUID()}`, text, mode)
+      );
     } catch (error) {
+      if (this.#closing) {
+        return;
+      }
       const agent = this.#store.getAgent(agentId);
-      if (agent) {
+      if (agent && !FENCED.has(this.get(agent.missionId).status)) {
         this.#notice(
           agent.missionId,
           "run_failed",
@@ -1187,25 +1683,42 @@ export class MissionService {
 
   // ----------------------------------------------------------- role tools
 
-  #roleHandlers(): RoleToolHandlers {
+  #roleHandlers(owner: LiveAgent): RoleToolHandlers {
+    const check = (agentId: string) => this.#requireCurrent(agentId, owner);
     return {
-      attachArtifact: (agentId, input) => this.#attachArtifact(agentId, input),
-      completeMission: (agentId, input) =>
-        Promise.resolve(this.#completeMission(agentId, input)),
-      dispatchWorker: (agentId, input) =>
-        Promise.resolve(this.#dispatchWorker(agentId, input)),
-      messageWorker: (agentId, input) => this.#messageWorker(agentId, input),
-      proposePlan: (agentId, input) =>
-        Promise.resolve(this.#proposePlan(agentId, input)),
-      submitHandoff: (agentId, input) =>
-        Promise.resolve(this.#submitHandoff(agentId, input)),
-      updateTodos: (agentId, input) =>
-        Promise.resolve(this.#updateTodos(agentId, input.todos)),
+      attachArtifact: async (agentId, input) => {
+        check(agentId);
+        return await this.#attachArtifact(agentId, input, owner);
+      },
+      completeMission: async (agentId, input) => {
+        check(agentId);
+        return await Promise.resolve(this.#completeMission(agentId, input));
+      },
+      dispatchWorker: async (agentId, input) => {
+        check(agentId);
+        return await Promise.resolve(this.#dispatchWorker(agentId, input));
+      },
+      messageWorker: async (agentId, input) => {
+        check(agentId);
+        return await this.#messageWorker(agentId, input, owner);
+      },
+      proposePlan: async (agentId, input) => {
+        check(agentId);
+        return await Promise.resolve(this.#proposePlan(agentId, input));
+      },
+      submitHandoff: async (agentId, input) => {
+        check(agentId);
+        return await Promise.resolve(this.#submitHandoff(agentId, input));
+      },
+      updateTodos: async (agentId, input) => {
+        check(agentId);
+        return await Promise.resolve(this.#updateTodos(agentId, input.todos));
+      },
     };
   }
 
-  #requireCurrent(agentId: string) {
-    const current = this.#isCurrent(agentId);
+  #requireCurrent(agentId: string, owner = this.#live.get(agentId)) {
+    const current = this.#isCurrent(agentId, owner);
     if (!current || FENCED.has(current.mission.status)) {
       throw new Error("The mission is paused; stop and wait for the user.");
     }
@@ -1231,15 +1744,13 @@ export class MissionService {
         this.#savePlan({ ...previous, status: "superseded" }, emit);
       }
       this.#savePlan(plan, emit);
-      const approved = plans.some((p) => p.status === "approved");
-      this.#saveMission(emit, {
-        ...mission,
-        status:
-          approved && mission.status === "running"
-            ? "running"
-            : "awaiting_approval",
-      });
+      this.#saveMission(emit, { ...mission, status: "awaiting_approval" });
     });
+    this.#saveSharedFile(
+      mission.id,
+      `plans/plan-${plan.revision}.md`,
+      `# ${plan.title}\n\n${plan.markdown}\n`
+    );
     return `Plan revision ${plan.revision} submitted for review. Wait for the user's decision; it arrives as a message. Do not change files until then.`;
   }
 
@@ -1248,7 +1759,7 @@ export class MissionService {
     input: { title: string; instructions: string; needsWrite: boolean }
   ) {
     const { mission } = this.#requireCurrent(agentId);
-    if (this.#store.plans.list(mission.id, ["approved"]).length === 0) {
+    if (this.#latestPlan(mission.id)?.status !== "approved") {
       throw new Error(
         "Workers can only be dispatched after the user approves a plan."
       );
@@ -1277,32 +1788,60 @@ export class MissionService {
     return `Assignment ${assignment.id} created. A Worker starts it as soon as a slot is free; its handoff arrives as a message.`;
   }
 
-  async #pumpAssignments(missionId: string) {
+  #pumpAssignments(missionId: string) {
+    return this.#own(this.#pump(missionId));
+  }
+
+  async #pump(missionId: string) {
     const mission = this.get(missionId);
-    if (FENCED.has(mission.status)) {
+    if (
+      this.#closing ||
+      FENCED.has(mission.status) ||
+      this.#latestPlan(missionId)?.status !== "approved"
+    ) {
       return;
     }
     const limit = this.#settings.get().maxConcurrentWorkers;
-    const running = this.#store.assignments.list(missionId, ["running"]).length;
+    const running = [...this.#live.values()].filter(
+      (owner) =>
+        owner.missionId === missionId &&
+        this.#store.getAgent(owner.agentId)?.role === "worker"
+    ).length;
+    const starting = this.#store.assignments
+      .list(missionId, ["running"])
+      .filter(
+        (assignment) =>
+          !assignment.workerAgentId || !this.#live.has(assignment.workerAgentId)
+      ).length;
     const next = this.#store.assignments
       .list(missionId, ["queued"])
       .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .slice(0, Math.max(0, limit - running));
+      .slice(0, Math.max(0, limit - running - starting));
     await Promise.all(
       next.map((assignment) => this.#startAssignment(mission, assignment))
     );
   }
 
   async #startAssignment(mission: Mission, assignment: Assignment) {
+    const saved = assignment.workerAgentId
+      ? this.#store.getAgent(assignment.workerAgentId)
+      : null;
+    if (assignment.workerAgentId && !saved) {
+      this.#saveAssignment({ ...assignment, status: "failed" });
+      this.#notice(
+        mission.id,
+        "run_failed",
+        "error",
+        `Cannot resume ${assignment.title}: its saved agent is unavailable.`
+      );
+      return;
+    }
     const workers = this.#store
       .listAgents(mission.id)
       .filter((a) => a.role === "worker").length;
-    const worker = this.#newAgent(
-      mission,
-      "worker",
-      `Worker ${workers + 1}`,
-      assignment.id
-    );
+    const worker =
+      saved ??
+      this.#newAgent(mission, "worker", `Worker ${workers + 1}`, assignment.id);
     this.#saveAgent(worker);
     this.#saveAssignment({
       ...assignment,
@@ -1310,29 +1849,59 @@ export class MissionService {
       workerAgentId: worker.id,
     });
     try {
+      if (saved && !saved.sessionId) {
+        throw new Error(
+          "The saved worker session is unavailable; no replacement was created"
+        );
+      }
       const runtime = await this.#ensureRuntime(worker.id);
-      await runtime.submit(
-        `${SYSTEM_PREFIX}assign:${assignment.id}`,
-        assignmentMessage(assignment),
-        "steer"
+      this.#requireRuntime(worker.id, runtime);
+      await this.#execute(worker.id, runtime, () =>
+        runtime.submit(
+          `${SYSTEM_PREFIX}${saved ? `resume:${mission.epoch}` : "assign"}:${assignment.id}`,
+          saved
+            ? `[Missions] The user resumed this mission. Continue assignment ${assignment.id} from your saved context. Re-read shared files and inspect the workspace before continuing. Do not repeat completed work.`
+            : assignmentMessage(assignment),
+          "steer"
+        )
       );
     } catch (error) {
-      this.#saveAssignment({
-        ...assignment,
-        status: "failed",
-        workerAgentId: worker.id,
-      });
-      void this.#systemSubmit(
-        this.#orchestrator(mission.id).id,
-        `[Missions] Assignment ${assignment.id} could not start: ${errorMessage(error)}`,
-        "steer"
-      );
+      const result = await this.#closeRuntime(worker.id);
+      if (!FENCED.has(this.get(mission.id).status)) {
+        this.#patchAgent(worker.id, { status: "failed" });
+      }
+      const latest = this.#store.assignments.get(assignment.id) ?? assignment;
+      if (latest.status === "running") {
+        this.#saveAssignment({ ...latest, status: "failed" });
+      }
+      if (!FENCED.has(this.get(mission.id).status) && !this.#closing) {
+        this.#notice(
+          mission.id,
+          "run_failed",
+          "error",
+          `Assignment ${assignment.title} could not start: ${errorMessage(error)}`
+        );
+        this.#saveSharedFile(
+          mission.id,
+          `errors/${worker.id}-${mission.epoch}.md`,
+          `# ${assignment.title}\n\n${errorMessage(error)}\n`
+        );
+        void this.#systemSubmit(
+          this.#orchestrator(mission.id).id,
+          `[Missions] Assignment ${assignment.id} could not start: ${errorMessage(error)}`,
+          "steer"
+        );
+        if (result.stopped) {
+          await this.#pumpAssignments(mission.id);
+        }
+      }
     }
   }
 
   async #messageWorker(
     agentId: string,
-    input: { assignmentId: string; text: string; mode: DeliveryMode }
+    input: { assignmentId: string; text: string; mode: DeliveryMode },
+    owner: LiveAgent
   ) {
     const { mission } = this.#requireCurrent(agentId);
     const assignment = this.#store.assignments.get(input.assignmentId);
@@ -1349,10 +1918,14 @@ export class MissionService {
       );
     }
     const runtime = await this.#ensureRuntime(assignment.workerAgentId);
-    await runtime.submit(
-      `${SYSTEM_PREFIX}${randomUUID()}`,
-      workerMessage(input.text),
-      input.mode
+    this.#requireCurrent(agentId, owner);
+    this.#requireRuntime(assignment.workerAgentId, runtime);
+    await this.#execute(assignment.workerAgentId, runtime, () =>
+      runtime.submit(
+        `${SYSTEM_PREFIX}${randomUUID()}`,
+        workerMessage(input.text),
+        input.mode
+      )
     );
     return `Message ${input.mode === "steer" ? "steered" : "queued"} to the Worker on ${assignment.id}.`;
   }
@@ -1407,16 +1980,18 @@ export class MissionService {
       handoff: input,
       status: "handed_off",
     });
+    this.#saveSharedFile(
+      mission.id,
+      `handoffs/${assignment.id}.md`,
+      `# ${assignment.title}\n\n${input.summary}\n\n## Files\n${input.filesChanged.map((file) => `- \`${file}\``).join("\n")}\n\n## Checks\n${input.checks.map((check) => `- ${check.command}: ${check.outcome}`).join("\n")}\n\n## Follow-ups\n${input.followUps.map((followUp) => `- ${followUp}`).join("\n")}\n`
+    );
     const orchestrator = this.#orchestrator(mission.id);
     void this.#systemSubmit(
       orchestrator.id,
       handoffMessage(agent.title, handed, input),
       "steer"
     );
-    // The Worker finishes its turn after this tool returns; stop it then to free a slot.
-    setTimeout(() => {
-      void this.#retireWorker(agent.id, mission.id);
-    }, 0);
+    this.#own(this.#retireWorker(agent.id, mission.id));
     return "Handoff recorded. Stop now; the Orchestrator will review your work.";
   }
 
@@ -1433,7 +2008,9 @@ export class MissionService {
         `A Worker's processes did not stop: ${result.survivors.join(", ")}`
       );
     }
-    await this.#pumpAssignments(missionId);
+    if (result.stopped) {
+      await this.#pumpAssignments(missionId);
+    }
   }
 
   #completeMission(
@@ -1456,25 +2033,123 @@ export class MissionService {
     const checks = input.checks
       .map((check) => `- ${check.command}: ${check.outcome}`)
       .join("\n");
-    this.#mutateMission(mission.id, (m) => ({
-      ...m,
-      status: "completed",
-      summary: checks
-        ? `${input.summary}\n\nChecks:\n${checks}`
-        : input.summary,
-    }));
-    return "Mission marked complete. The user will review and publish.";
+    const summary = checks
+      ? `${input.summary}\n\nChecks:\n${checks}`
+      : input.summary;
+    this.#own(this.#finishMission(mission.id, summary));
+    return "Completion requested. Execution is stopping before the user reviews and publishes.";
+  }
+
+  async #finishMission(missionId: string, summary: string) {
+    this.#saveSharedFile(missionId, "results/summary.md", summary);
+    const epoch = this.get(missionId).epoch + 1;
+    const stopped = await this.#stopMission(missionId, "paused");
+    if (
+      !this.#closing &&
+      stopped.epoch === epoch &&
+      stopped.status === "paused"
+    ) {
+      this.#mutateMission(missionId, (mission) => ({
+        ...mission,
+        status: "completed",
+        summary,
+      }));
+    }
+  }
+
+  #saveSharedFile(missionId: string, name: string, content: string) {
+    this.#own(this.#writeSharedFile(missionId, name, content));
+  }
+
+  async #writeSharedFile(missionId: string, name: string, content: string) {
+    try {
+      await this.#sharedFiles.write(missionId, name, content);
+      this.#publish(missionId, {
+        data: { paths: [] },
+        type: "workspace.changed",
+      });
+    } catch (error) {
+      this.#notice(
+        missionId,
+        "info",
+        "warning",
+        `Could not save shared file ${name}: ${errorMessage(error)}`
+      );
+    }
   }
 
   // ---------------------------------------------------------------- queue
 
-  async submitMessage(
+  submitMessage(
+    missionId: string,
+    request: SubmitMessageRequest
+  ): Promise<QueueItem> {
+    if (this.#closing) {
+      return Promise.reject(conflict("The daemon is stopping"));
+    }
+    return this.#own(this.#submitMessageIntent(missionId, request));
+  }
+
+  async #submitMessageIntent(
+    missionId: string,
+    request: SubmitMessageRequest
+  ): Promise<QueueItem> {
+    const agentId = request.agentId ?? this.#orchestrator(missionId).id;
+    const identity = { kind: "mission.message", missionId };
+    const saved = this.#journal.get(request.operationId, identity);
+    if (
+      saved &&
+      (saved.operation.detail.agentId !== agentId ||
+        saved.operation.detail.text !== request.text ||
+        saved.operation.detail.mode !== request.mode)
+    ) {
+      throw conflict("This operation ID was already used for another message");
+    }
+    const existing = this.#store.queue.get(request.operationId);
+    if (existing) {
+      if (
+        existing.missionId !== missionId ||
+        existing.agentId !== agentId ||
+        existing.text !== request.text ||
+        (!saved && existing.mode !== request.mode) ||
+        existing.replacesId !== null
+      ) {
+        throw conflict(
+          "This operation ID was already used for another message"
+        );
+      }
+      return existing;
+    }
+    const { result } = await this.#journal.run(
+      {
+        ...identity,
+        detail: { agentId, mode: request.mode, text: request.text },
+        id: request.operationId,
+      },
+      async () => await this.#submitMessage(missionId, request)
+    );
+    return this.#store.queue.get(result.id) ?? result;
+  }
+
+  async #submitMessage(
     missionId: string,
     request: SubmitMessageRequest
   ): Promise<QueueItem> {
     const mission = this.get(missionId);
     const existing = this.#store.queue.get(request.operationId);
     if (existing) {
+      const agentId = request.agentId ?? this.#orchestrator(missionId).id;
+      if (
+        existing.missionId !== missionId ||
+        existing.agentId !== agentId ||
+        existing.text !== request.text ||
+        existing.mode !== request.mode ||
+        existing.replacesId !== null
+      ) {
+        throw conflict(
+          "This operation ID was already used for another message"
+        );
+      }
       return existing;
     }
     if (FENCED.has(mission.status)) {
@@ -1497,7 +2172,10 @@ export class MissionService {
     );
     try {
       const runtime = await this.#ensureRuntime(agent.id);
-      await runtime.submit(item.id, item.text, item.mode);
+      this.#requireRuntime(agent.id, runtime);
+      await this.#execute(agent.id, runtime, () =>
+        runtime.submit(item.id, item.text, item.mode)
+      );
     } catch (error) {
       const latest = this.#store.queue.get(item.id) ?? item;
       if (latest.state === "submitting") {
@@ -1522,7 +2200,11 @@ export class MissionService {
       throw stale("This message changed; refresh and try again");
     }
     const live = this.#live.get(item.agentId);
-    if (!live) {
+    if (
+      !live ||
+      !this.#isCurrent(item.agentId, live) ||
+      live.phase !== "ready"
+    ) {
       throw conflict("The agent for this message is not running");
     }
     return { item, runtime: live.runtime };
@@ -1533,24 +2215,28 @@ export class MissionService {
     itemId: string,
     request: ChangeQueueModeRequest
   ) {
-    const { item, runtime } = this.#queueItem(
-      missionId,
-      itemId,
-      request.expectedRevision
-    );
-    if (item.state !== "queued") {
-      throw conflict(
-        item.state === "sent"
-          ? "This message was already delivered"
-          : `Cannot change a ${item.state} message`
+    return await this.#whileBusy(itemId, async () => {
+      const { item, runtime } = this.#queueItem(
+        missionId,
+        itemId,
+        request.expectedRevision
       );
-    }
-    try {
-      await runtime.changeMode(item.id, request.mode);
-    } catch (error) {
-      throw conflict(`The runner refused the change: ${errorMessage(error)}`);
-    }
-    return this.#store.queue.get(item.id) ?? item;
+      if (item.state !== "queued") {
+        throw conflict(
+          item.state === "sent"
+            ? "This message was already delivered"
+            : `Cannot change a ${item.state} message`
+        );
+      }
+      try {
+        await this.#execute(item.agentId, runtime, () =>
+          runtime.changeMode(item.id, request.mode)
+        );
+      } catch (error) {
+        throw conflict(`The runner refused the change: ${errorMessage(error)}`);
+      }
+      return this.#store.queue.get(item.id) ?? item;
+    });
   }
 
   async removeQueueItem(
@@ -1567,12 +2253,16 @@ export class MissionService {
       return item;
     }
     return await this.#whileBusy(item.id, async () => {
-      await runtime.remove(item.id);
+      await this.#execute(item.agentId, runtime, () => runtime.remove(item.id));
       return this.#store.queue.get(item.id) ?? item;
     });
   }
 
-  async #whileBusy<T>(itemId: string, work: () => Promise<T>): Promise<T> {
+  #whileBusy<T>(itemId: string, work: () => Promise<T>): Promise<T> {
+    return this.#own(this.#mutateQueue(itemId, work));
+  }
+
+  async #mutateQueue<T>(itemId: string, work: () => Promise<T>): Promise<T> {
     if (this.#queueBusy.has(itemId)) {
       throw conflict("This message is already being changed");
     }
@@ -1591,13 +2281,33 @@ export class MissionService {
   ): Promise<EditQueueItemResponse> {
     const previous = this.#store.queue.get(request.operationId);
     if (previous) {
-      if (previous.replacesId !== itemId || previous.missionId !== missionId) {
+      if (
+        previous.replacesId !== itemId ||
+        previous.missionId !== missionId ||
+        previous.text !== request.text
+      ) {
         throw conflict(
           "This operation ID was already used for another message"
         );
       }
+      if (
+        previous.state === "failed" &&
+        previous.error === "Replacement not sent: already_sent"
+      ) {
+        return { outcome: "already_sent", replacementId: null };
+      }
+      if (
+        previous.state === "failed" &&
+        previous.error === "Replacement not sent: delete_unconfirmed"
+      ) {
+        return { outcome: "delete_unconfirmed", replacementId: null };
+      }
       return { outcome: "replaced", replacementId: previous.id };
     }
+    this.#journal.get(request.operationId, {
+      kind: "mission.queue.edit",
+      missionId,
+    });
     const { item, runtime } = this.#queueItem(
       missionId,
       itemId,
@@ -1610,7 +2320,9 @@ export class MissionService {
       throw conflict(`This message was already ${item.state}`);
     }
     return await this.#whileBusy(item.id, () =>
-      this.#replaceQueueItem(missionId, item, runtime, request)
+      this.#whileBusy(request.operationId, () =>
+        this.#replaceQueueItem(missionId, item, runtime, request)
+      )
     );
   }
 
@@ -1621,14 +2333,6 @@ export class MissionService {
     request: EditQueueItemRequest
   ): Promise<EditQueueItemResponse> {
     const replacementId = request.operationId;
-    const outcome = await runtime.remove(item.id);
-    if (outcome !== "removed") {
-      return {
-        outcome:
-          outcome === "already_sent" ? "already_sent" : "delete_unconfirmed",
-        replacementId: null,
-      };
-    }
     const replacement = {
       ...this.#newQueueItem(
         missionId,
@@ -1640,11 +2344,10 @@ export class MissionService {
       replacesId: item.id,
     };
     this.#log.commit((emit) => {
-      const removed = this.#store.queue.get(item.id) ?? item;
       const linked = {
-        ...removed,
+        ...item,
         replacedById: replacementId,
-        revision: removed.revision + 1,
+        revision: item.revision + 1,
         updatedAt: this.#iso(),
       };
       this.#store.queue.put(linked);
@@ -1652,29 +2355,188 @@ export class MissionService {
       this.#store.queue.put(replacement);
       emit(missionId, { data: { item: replacement }, type: "queue.updated" });
     });
+    let outcome: EditOutcome;
     try {
-      await runtime.submit(replacement.id, replacement.text, replacement.mode);
-    } catch {
-      // The tracker records failed/unknown on the replacement item.
+      outcome = await this.#execute(item.agentId, runtime, () =>
+        runtime.edit(item.id, replacementId, request.text)
+      );
+    } catch (error) {
+      const latest = this.#store.queue.get(replacementId) ?? replacement;
+      if (latest.state === "submitting") {
+        this.#saveQueueItem({
+          ...latest,
+          error: errorMessage(error),
+          revision: latest.revision + 1,
+          state: "unknown",
+          updatedAt: this.#iso(),
+        });
+      }
+      return { outcome: "replaced", replacementId };
     }
-    return { outcome: "replaced", replacementId };
+    if (outcome !== "replaced") {
+      this.#log.commit((emit) => {
+        const failedReplacement = {
+          ...replacement,
+          error: `Replacement not sent: ${outcome}`,
+          revision: replacement.revision + 1,
+          state: "failed" as const,
+          updatedAt: this.#iso(),
+        };
+        this.#store.queue.put(failedReplacement);
+        emit(missionId, {
+          data: { item: failedReplacement },
+          type: "queue.updated",
+        });
+        const latest = this.#store.queue.get(item.id) ?? item;
+        const unlinked = {
+          ...latest,
+          replacedById: null,
+          revision: latest.revision + 1,
+          updatedAt: this.#iso(),
+        };
+        this.#store.queue.put(unlinked);
+        emit(missionId, { data: { item: unlinked }, type: "queue.updated" });
+      });
+    }
+    return {
+      outcome,
+      replacementId: outcome === "replaced" ? replacementId : null,
+    };
   }
 
   // --------------------------------------------------------- update/pause
 
-  update(missionId: string, request: UpdateMissionRequest) {
-    const mission = this.get(missionId);
-    if (mission.revision !== request.expectedRevision) {
-      throw stale("The mission changed; refresh and try again");
+  update(missionId: string, request: UpdateMissionRequest): Promise<Mission> {
+    if (this.#closing) {
+      return Promise.reject(conflict("The daemon is stopping"));
     }
-    return this.#mutateMission(missionId, (m) => ({
-      ...m,
-      ...(request.autonomy ? { autonomy: request.autonomy } : {}),
-      ...(request.title ? { title: request.title } : {}),
-    }));
+    return this.#own(this.#update(missionId, request));
   }
 
-  async pause(
+  #checkUpdate(missionId: string, request: UpdateMissionRequest) {
+    if (this.#closing) {
+      throw conflict("The daemon is stopping");
+    }
+    const current = this.get(missionId);
+    if (current.revision !== request.expectedRevision) {
+      throw stale("The mission changed; refresh and try again");
+    }
+    return current;
+  }
+
+  async #update(
+    missionId: string,
+    request: UpdateMissionRequest
+  ): Promise<Mission> {
+    this.#checkUpdate(missionId, request);
+    const changesModel = Boolean(request.orchestrator || request.worker);
+    if (changesModel && this.#modelUpdates.has(missionId)) {
+      throw conflict(
+        "A model update is already in progress; refresh and try again"
+      );
+    }
+    if (changesModel) {
+      this.#modelUpdates.add(missionId);
+    }
+    try {
+      const effective = request.orchestrator
+        ? await this.#models.resolve(request.orchestrator, "Orchestrator")
+        : undefined;
+      if (request.worker) {
+        await this.#models.resolve(request.worker, "Worker");
+      }
+      this.#checkUpdate(missionId, request);
+      const agent = this.#orchestrator(missionId);
+      const owner = this.#live.get(agent.id);
+      if (effective && owner?.phase === "ready") {
+        this.#requireRuntime(agent.id, owner.runtime);
+        const previous = owner.runtime.model ?? agent.model;
+        try {
+          const confirmed = await this.#execute(agent.id, owner.runtime, () =>
+            owner.runtime.updateModel(effective)
+          );
+          this.#requireCurrent(agent.id, owner);
+          this.#checkUpdate(missionId, request);
+          if (!sameModel(confirmed, effective)) {
+            throw conflict(
+              "Droid returned different model settings than requested"
+            );
+          }
+          this.#patchAgent(agent.id, { model: confirmed });
+        } catch (error) {
+          await this.#restoreModel(owner, previous);
+          if (error instanceof AppError) {
+            throw error;
+          }
+          throw conflict(
+            `Droid could not confirm the model update: ${errorMessage(error)}. Refresh before retrying`
+          );
+        }
+      }
+      // No await between the final revision check and the atomic mission save.
+      this.#checkUpdate(missionId, request);
+      const saved = this.#mutateMission(missionId, (m) => ({
+        ...m,
+        ...(request.autonomy ? { autonomy: request.autonomy } : {}),
+        ...(request.title ? { title: request.title } : {}),
+        ...(request.orchestrator ? { orchestrator: request.orchestrator } : {}),
+        ...(request.worker ? { worker: request.worker } : {}),
+      }));
+      if (request.orchestrator && !owner) {
+        this.#patchAgent(agent.id, { model: saved.orchestrator });
+      }
+      return saved;
+    } finally {
+      if (changesModel) {
+        this.#modelUpdates.delete(missionId);
+      }
+    }
+  }
+
+  async #restoreModel(owner: LiveAgent, previous: AgentModelSettings) {
+    if (!this.#isCurrent(owner.agentId, owner)) {
+      return;
+    }
+    try {
+      const restored = await this.#execute(owner.agentId, owner.runtime, () =>
+        owner.runtime.updateModel(previous)
+      );
+      this.#requireCurrent(owner.agentId, owner);
+      if (!sameModel(restored, previous)) {
+        throw conflict("Droid did not restore the previous settings");
+      }
+    } catch {
+      if (!this.#isCurrent(owner.agentId, owner)) {
+        return;
+      }
+      const confirmed = owner.runtime.model;
+      if (confirmed) {
+        this.#patchAgent(owner.agentId, { model: confirmed });
+        this.#mutateMission(owner.missionId, (mission) => ({
+          ...mission,
+          orchestrator: confirmed,
+        }));
+      }
+      this.#notice(
+        owner.missionId,
+        "environment",
+        "error",
+        "Droid could not restore the previous model. The last confirmed choice is shown; refresh and check the runner before sending another turn"
+      );
+      throw conflict(
+        "The model update could not be restored. Refresh to review the last confirmed choice"
+      );
+    }
+  }
+
+  pause(missionId: string, request: MissionControlRequest): Promise<Mission> {
+    if (this.#closing) {
+      return Promise.reject(conflict("The daemon is stopping"));
+    }
+    return this.#own(this.#pause(missionId, request));
+  }
+
+  async #pause(
     missionId: string,
     request: MissionControlRequest
   ): Promise<Mission> {
@@ -1695,7 +2557,14 @@ export class MissionService {
   }
 
   /** Stops any idle agents and hides the mission from active work; the worktree is left alone. */
-  async archive(
+  archive(missionId: string, request: MissionControlRequest): Promise<Mission> {
+    if (this.#closing) {
+      return Promise.reject(conflict("The daemon is stopping"));
+    }
+    return this.#own(this.#archive(missionId, request));
+  }
+
+  async #archive(
     missionId: string,
     request: MissionControlRequest
   ): Promise<Mission> {
@@ -1732,7 +2601,7 @@ export class MissionService {
     missionId: string,
     target: "paused" | "interrupted"
   ): Promise<Mission> {
-    this.#mutateMission(missionId, (m) => ({
+    const fenced = this.#mutateMission(missionId, (m) => ({
       ...m,
       epoch: m.epoch + 1,
       status: "pausing",
@@ -1740,35 +2609,30 @@ export class MissionService {
     this.broker.cancelMission(missionId);
     this.#cancelQuestions(missionId);
     const agents = this.#store.listAgents(missionId);
-    for (const agent of agents) {
-      this.leases.forget(agent.id);
-    }
-    const live = agents.flatMap((agent) => {
-      const entry = this.#live.get(agent.id);
-      return entry ? [{ agent, runtime: entry.runtime }] : [];
-    });
-    await Promise.all(live.map(({ runtime }) => drainNative(runtime)));
     const results = await Promise.all(
-      live.map(async ({ agent }) => ({
+      agents.map(async (agent) => ({
         agent,
         result: await this.#closeRuntime(agent.id),
       }))
     );
+    const failed = results.some(({ result }) => !result.stopped);
     const survivors = results.flatMap(({ result }) => result.survivors);
+    if (this.get(missionId).epoch !== fenced.epoch) {
+      return this.get(missionId);
+    }
     this.#settleAfterStop(missionId, results);
     const mission = this.#mutateMission(missionId, (m) => ({
       ...m,
-      lastError:
-        survivors.length > 0
-          ? {
-              code: "stop_failed",
-              message: `Processes still running: ${survivors.join(", ")}`,
-              retryAfterMs: null,
-            }
-          : m.lastError,
-      status: survivors.length > 0 ? "stop_failed" : target,
+      lastError: failed
+        ? {
+            code: "stop_failed",
+            message: `Processes still running: ${survivors.join(", ")}`,
+            retryAfterMs: null,
+          }
+        : m.lastError,
+      status: failed ? "stop_failed" : target,
     }));
-    if (survivors.length > 0) {
+    if (failed) {
       this.#notice(
         missionId,
         "stop_failed",
@@ -1785,7 +2649,7 @@ export class MissionService {
   ) {
     for (const { agent, result } of results) {
       this.#patchAgent(agent.id, {
-        holdsWriteLease: false,
+        holdsWriteLease: result.stopped ? false : agent.holdsWriteLease,
         status: result.stopped ? "stopped" : "failed",
       });
     }
@@ -1808,57 +2672,98 @@ export class MissionService {
     }
   }
 
-  async resume(
+  resume(missionId: string, request: MissionControlRequest): Promise<Mission> {
+    if (this.#closing) {
+      return Promise.reject(conflict("The daemon is stopping"));
+    }
+    return this.#own(this.#resume(missionId, request));
+  }
+
+  async #resume(
     missionId: string,
     request: MissionControlRequest
   ): Promise<Mission> {
     const { result } = await this.#journal.run(
       { id: request.operationId, kind: "mission.resume", missionId },
       async () => {
+        const { workspace } = this.get(missionId);
+        if (!workspace) {
+          throw conflict("The mission has no workspace");
+        }
+        await this.#workspaceGate.run(workspace.path, async () => {
+          if (this.#closing) {
+            throw conflict("The daemon is stopping");
+          }
+          const current = this.get(missionId);
+          if (current.revision !== request.expectedRevision) {
+            throw stale("The mission changed; refresh and try again");
+          }
+          if (!RESUMABLE.has(current.status)) {
+            throw conflict(`Cannot resume a mission that is ${current.status}`);
+          }
+          await this.#confirmStopped(missionId);
+          const problems = await verifyBinding(workspace);
+          if (problems.length > 0) {
+            throw conflict(problems.join(". "));
+          }
+          this.#mutateMission(missionId, (mission) => {
+            const status = resumePhase(
+              this.#store.plans.list(missionId),
+              mission
+            );
+            return {
+              ...mission,
+              endedAt: status === "completed" ? mission.endedAt : null,
+              lastError: null,
+              status,
+            };
+          });
+        });
         const mission = this.get(missionId);
-        if (mission.revision !== request.expectedRevision) {
-          throw stale("The mission changed; refresh and try again");
-        }
-        if (!RESUMABLE.has(mission.status)) {
-          throw conflict(`Cannot resume a mission that is ${mission.status}`);
-        }
-        await this.#confirmStopped(missionId);
-        const problems = mission.workspace
-          ? await verifyBinding(mission.workspace)
-          : ["The mission has no workspace"];
-        if (problems.length > 0) {
-          this.#notice(missionId, "environment", "error", problems.join(". "));
-          throw conflict(problems.join(". "));
-        }
         const interrupted = this.#store.assignments
           .list(missionId, ["cancelled"])
-          .filter((a) => a.epoch < mission.epoch && !a.handoff);
-        const next = this.#mutateMission(missionId, (m) => ({
-          ...m,
-          lastError: null,
-          status: resumePhase(this.#store.plans.list(missionId), m),
-        }));
+          .filter(
+            (assignment) =>
+              !assignment.handoff && assignment.epoch === mission.epoch - 1
+          );
+        const next = mission;
         const orchestrator = this.#orchestrator(missionId);
-        // A failed mission never got going: retry means the goal goes again.
-        const goal =
-          mission.status === "failed"
-            ? this.#store.queue.get(`${missionId}:goal`)
-            : null;
-        const resubmitGoal = goal !== null && !TERMINAL_QUEUE.has(goal.state);
+        // Only a never-attempted goal may be sent. Transport ambiguity is not proof of non-delivery.
+        const goal = this.#store.queue.get(`${missionId}:goal`);
+        const resubmitGoal = goal !== null && goal.state === "failed";
+        if (next.status === "completed") {
+          return next;
+        }
         try {
           const runtime = await this.#ensureRuntime(orchestrator.id);
+          this.#requireRuntime(orchestrator.id, runtime);
           if (goal && resubmitGoal) {
-            await runtime.submit(goal.id, goal.text, goal.mode);
+            await this.#execute(orchestrator.id, runtime, () =>
+              runtime.submit(goal.id, goal.text, goal.mode)
+            );
           }
         } catch (error) {
-          this.#fail(
-            missionId,
-            "environment",
-            `Could not restart the Orchestrator: ${errorMessage(error)}`
-          );
+          if (!FENCED.has(this.get(missionId).status)) {
+            await this.#stopMission(missionId, "interrupted");
+            if (this.get(missionId).status !== "stop_failed") {
+              this.#fail(
+                missionId,
+                "environment",
+                `Could not restart the Orchestrator: ${errorMessage(error)}`
+              );
+            }
+          }
           throw conflict("Could not restart the Orchestrator");
         }
-        if (next.status !== "completed" && !resubmitGoal) {
+        for (const assignment of interrupted) {
+          this.#saveAssignment({
+            ...assignment,
+            epoch: mission.epoch,
+            status: "queued",
+          });
+        }
+        await this.#pumpAssignments(missionId);
+        if (!resubmitGoal) {
           void this.#systemSubmit(
             orchestrator.id,
             resumedMessage(interrupted),
@@ -1873,32 +2778,34 @@ export class MissionService {
 
   /** Stop-failed missions must prove their recorded processes are gone before resuming. */
   async #confirmStopped(missionId: string) {
-    const agents = new Set(
-      this.#store.listAgents(missionId).map((agent) => agent.id)
+    const agents = this.#store.listAgents(missionId);
+    const owners = agents.flatMap((agent) => {
+      const owner = this.#live.get(agent.id);
+      return owner ? [owner] : [];
+    });
+    for (const owner of owners) {
+      owner.retirement = undefined;
+    }
+    const ownerResults = await Promise.all(
+      owners.map((owner) => this.#closeRuntime(owner.agentId, owner))
     );
-    const records = this.#store
-      .settingsWithPrefix<ProcessRecord>(PROCESS_PREFIX)
-      .filter(({ value }) => agents.has(value.agentId));
+    const records = this.#processRecords.list(agents.map((agent) => agent.id));
     const results = await Promise.all(
-      records.map(({ value }) => this.#supervisor.stopRecord(value))
+      records.map((record) => this.#supervisor.stopRecord(record))
     );
-    const survivors = results.flatMap((r) => r.survivors);
-    if (survivors.length > 0) {
+    const failed = [...ownerResults, ...results].some(
+      (result) => !result.stopped
+    );
+    if (failed) {
+      const survivors = [...ownerResults, ...results].flatMap(
+        (result) => result.survivors
+      );
       throw conflict(
         `Agent processes are still running: ${survivors.join(", ")}`
       );
     }
-    for (const { key } of records) {
-      this.#store.deleteSetting(key);
-    }
-  }
-
-  /** Persists supervisor records so orphans from a crashed daemon can be stopped. */
-  recordProcess(record: ProcessRecord | null, agentId: string) {
-    if (record) {
-      this.#store.putSetting(`${PROCESS_PREFIX}${agentId}`, record);
-    } else {
-      this.#store.deleteSetting(`${PROCESS_PREFIX}${agentId}`);
+    for (const record of records) {
+      this.#processRecords.delete(record.agentId);
     }
   }
 
@@ -1906,21 +2813,31 @@ export class MissionService {
 
   /** Startup: nothing resumes on its own. Orphans are stopped and missions wait for Resume. */
   async recover() {
-    const records =
-      this.#store.settingsWithPrefix<ProcessRecord>(PROCESS_PREFIX);
+    const records = this.#processRecords.list();
     const stopped = await Promise.all(
-      records.map(async ({ key, value }) => ({
-        key,
-        result: await this.#supervisor.stopRecord(value),
+      records.map(async (record) => ({
+        agentId: record.agentId,
+        result: await this.#supervisor.stopRecord(record),
       }))
     );
-    for (const { key, result } of stopped) {
+    const failedAgents = new Map(
+      stopped
+        .filter(({ result }) => !result.stopped)
+        .map(({ agentId, result }) => [agentId, result])
+    );
+    for (const { agentId, result } of stopped) {
       if (result.stopped) {
-        this.#store.deleteSetting(key);
+        this.#processRecords.delete(agentId);
       }
     }
-    for (const mission of this.#store.listMissionsByStatus([...ACTIVE])) {
-      this.#markInterrupted(mission.id);
+    for (const mission of this.#store.listMissions()) {
+      const agents = this.#store.listAgents(mission.id);
+      if (
+        ACTIVE.has(mission.status) ||
+        agents.some((agent) => failedAgents.has(agent.id))
+      ) {
+        this.#markInterrupted(mission.id, failedAgents);
+      }
     }
     for (const request of this.#store.permissions.listByStatus(["pending"])) {
       this.#savePermission({
@@ -1935,17 +2852,36 @@ export class MissionService {
     }
   }
 
-  #markInterrupted(missionId: string) {
+  #markInterrupted(
+    missionId: string,
+    failedAgents: ReadonlyMap<string, StopResult>
+  ) {
+    const agents = this.#store.listAgents(missionId);
+    const failed = agents.some((agent) => failedAgents.has(agent.id));
+    const survivors = agents.flatMap(
+      (agent) => failedAgents.get(agent.id)?.survivors ?? []
+    );
     this.#mutateMission(missionId, (m) => ({
       ...m,
       epoch: m.epoch + 1,
-      status: "interrupted",
+      lastError: failed
+        ? {
+            code: "stop_failed",
+            message: `Processes still running: ${survivors.join(", ")}`,
+            retryAfterMs: null,
+          }
+        : m.lastError,
+      status: failed ? "stop_failed" : "interrupted",
     }));
     this.#settleAfterStop(
       missionId,
-      this.#store
-        .listAgents(missionId)
-        .map((agent) => ({ agent, result: { stopped: true, survivors: [] } }))
+      this.#store.listAgents(missionId).map((agent) => ({
+        agent,
+        result: failedAgents.get(agent.id) ?? {
+          stopped: true,
+          survivors: [],
+        },
+      }))
     );
     for (const agent of this.#store.listAgents(missionId)) {
       if (agent.status === "stopped") {
@@ -1954,34 +2890,81 @@ export class MissionService {
     }
     this.#notice(
       missionId,
-      "recovery_required",
+      failed ? "stop_failed" : "recovery_required",
       "warning",
-      "The daemon restarted. Review the mission and Resume to continue."
+      failed
+        ? "Some agent processes survived restart. New work is blocked until Resume confirms they stopped."
+        : "The daemon restarted. Review the mission and Resume to continue."
     );
   }
 
-  /** Graceful daemon stop: runtimes close and active missions wait for Resume. */
-  async shutdown() {
-    this.#deltas.dispose();
-    const missions = this.#store.listMissionsByStatus([...ACTIVE, "completed"]);
-    await Promise.all(
-      missions.map((mission) =>
-        ACTIVE.has(mission.status)
-          ? this.#stopMission(mission.id, "interrupted")
-          : Promise.resolve(mission)
-      )
-    );
-    await Promise.all(
-      [...this.#live.keys()].map((agentId) => this.#closeRuntime(agentId))
-    );
+  /** Graceful daemon stop owns every cleanup attempt, even when another one fails. */
+  shutdown(): Promise<void> {
+    if (!this.#shutdownPromise) {
+      this.#closing = true;
+      this.#deltas.dispose();
+      this.#shutdownPromise = Promise.resolve().then(() => this.#shutdownAll());
+    }
+    return this.#shutdownPromise;
   }
 
-  /** For tests and diagnostics. */
-  isLive(agentId: string) {
-    return this.#live.has(agentId);
+  async #shutdownAll(): Promise<void> {
+    try {
+      await this.#shutdownPhase(() =>
+        this.#store
+          .listMissionsByStatus([...ACTIVE])
+          .map((mission) => this.#stopMission(mission.id, "interrupted"))
+      );
+    } finally {
+      await this.#shutdownPhase(() =>
+        [...this.#live.keys()].map(
+          async (agentId) => await this.#closeRuntime(agentId)
+        )
+      );
+      await this.#joinTasks();
+      // An admitted creation may have persisted its mission after the first sweep.
+      await this.#shutdownPhase(() =>
+        this.#store
+          .listMissionsByStatus([...ACTIVE])
+          .map((mission) => this.#stopMission(mission.id, "interrupted"))
+      );
+      await this.#shutdownPhase(() =>
+        [...this.#live.keys()].map(
+          async (agentId) => await this.#closeRuntime(agentId)
+        )
+      );
+      await this.#joinTasks();
+    }
+    if (this.#shutdownFailures.size > 0) {
+      throw new AggregateError(
+        [...this.#shutdownFailures],
+        "Mission shutdown failed"
+      );
+    }
   }
 
-  ensureAgentRuntime(agentId: string) {
-    return this.#ensureRuntime(agentId);
+  async #shutdownPhase(work: () => Promise<unknown>[]): Promise<void> {
+    try {
+      const results = await Promise.allSettled(work());
+      for (const result of results) {
+        if (result.status === "rejected") {
+          this.#shutdownFailures.add(result.reason);
+        }
+      }
+    } catch (error) {
+      this.#shutdownFailures.add(error);
+    }
+  }
+
+  async #joinTasks(): Promise<void> {
+    const results = await Promise.allSettled(this.#tasks);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        this.#shutdownFailures.add(result.reason);
+      }
+    }
+    if (this.#tasks.size > 0) {
+      await this.#joinTasks();
+    }
   }
 }

@@ -5,10 +5,13 @@ import { AppError, conflict } from "../lib/app-error";
 import { errorMessage } from "../lib/async";
 import type { Store } from "./store";
 
-export interface OperationSpec {
-  id: string;
+export interface OperationIdentity {
   kind: string;
   missionId: string | null;
+}
+
+export interface OperationSpec extends OperationIdentity {
+  id: string;
   detail?: Record<string, unknown>;
 }
 
@@ -19,12 +22,8 @@ export interface RunOptions {
 
 const replayRecorded = <T>(
   operation: Operation,
-  result: unknown,
-  kind: string
+  result: unknown
 ): { result: T; duplicate: boolean } => {
-  if (operation.kind !== kind) {
-    throw conflict("This operation ID was used for a different action");
-  }
   if (operation.status === "succeeded" || operation.status === "reconciled") {
     return { duplicate: true, result: result as T };
   }
@@ -68,23 +67,34 @@ export class OperationJournal {
     return operation;
   }
 
-  get(id: string) {
-    return this.#store.getOperation(id);
+  get(id: string, identity?: OperationIdentity) {
+    const existing = this.#store.getOperation(id);
+    if (
+      existing &&
+      identity &&
+      (existing.operation.kind !== identity.kind ||
+        existing.operation.missionId !== identity.missionId)
+    ) {
+      throw conflict(
+        "This operation ID was used for a different action or mission"
+      );
+    }
+    return existing;
   }
 
   async run<T>(
     spec: OperationSpec,
-    effect: () => Promise<T>,
+    effect: (detail: Record<string, unknown>) => Promise<T>,
     options: RunOptions = {}
   ): Promise<{ result: T; duplicate: boolean }> {
-    const existing = this.#store.getOperation(spec.id);
+    const existing = this.get(spec.id, spec);
     if (existing) {
-      return replayRecorded<T>(existing.operation, existing.result, spec.kind);
+      return replayRecorded<T>(existing.operation, existing.result);
     }
     const at = this.#now().toISOString();
     const intent: Operation = {
       createdAt: at,
-      detail: spec.detail ?? {},
+      detail: structuredClone(spec.detail ?? {}),
       id: spec.id,
       kind: spec.kind,
       missionId: spec.missionId,
@@ -93,7 +103,9 @@ export class OperationJournal {
     };
     this.#save(intent);
     try {
-      const result = await effect();
+      // Read the persisted representation, not a caller-owned retry payload.
+      const detail = this.get(spec.id, spec)?.operation.detail ?? {};
+      const result = await effect(detail);
       this.#save(
         {
           ...intent,
@@ -125,6 +137,12 @@ export class OperationJournal {
     const existing = this.#store.getOperation(id);
     if (!existing) {
       return null;
+    }
+    if (
+      existing.operation.status !== "intent" &&
+      existing.operation.status !== "unknown"
+    ) {
+      return existing.operation;
     }
     return this.#save(
       {

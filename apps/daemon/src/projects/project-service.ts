@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -23,7 +23,7 @@ import type { OperationJournal } from "../db/journal";
 import type { Store } from "../db/store";
 import type { EventLog } from "../events/event-log";
 import * as repo from "../git/repo";
-import { AppError, badRequest, notFound } from "../lib/app-error";
+import { AppError, badRequest, conflict, notFound } from "../lib/app-error";
 import { git, redactUrl, run } from "../lib/exec";
 
 export interface ProjectServiceOptions {
@@ -171,6 +171,11 @@ export class ProjectService {
   readonly #journal: OperationJournal;
   readonly #reposDir: string;
   readonly #now: () => Date;
+  readonly #clones = new Map<
+    string,
+    { controller: AbortController; task: Promise<unknown> }
+  >();
+  #closed = false;
 
   constructor(options: ProjectServiceOptions) {
     this.#store = options.store;
@@ -293,15 +298,26 @@ export class ProjectService {
 
   /** Starts a clone in the background; progress arrives as clone.updated events. */
   async clone(request: CloneProjectRequest): Promise<CloneJob> {
-    const existing = this.#store.getOperation(request.operationId);
-    if (existing && existing.operation.kind === "project.clone") {
+    const { operationId } = request;
+    const source = structuredClone(request.source);
+    const existing = this.#journal.get(operationId, {
+      kind: "project.clone",
+      missionId: null,
+    });
+    if (existing) {
       const { jobId } = existing.operation.detail;
       return this.getCloneJob(typeof jobId === "string" ? jobId : "");
+    }
+    if (this.#closed) {
+      throw conflict("The daemon is shutting down");
     }
     const parent = path.resolve(
       expandHome(request.destinationParent ?? this.#reposDir)
     );
-    const destination = path.join(parent, repoNameOf(request.source));
+    const destination = path.join(parent, repoNameOf(source));
+    if (path.dirname(destination) !== parent) {
+      throw badRequest("Invalid repository name");
+    }
     const job: CloneJob = {
       createdAt: this.#now().toISOString(),
       destination,
@@ -310,97 +326,152 @@ export class ProjectService {
       progress: null,
       projectId: null,
       source:
-        request.source.kind === "url"
-          ? { kind: "url", url: redactUrl(request.source.url) }
-          : request.source,
+        source.kind === "url"
+          ? { kind: "url", url: redactUrl(source.url) }
+          : source,
       status: "cloning",
     };
-    if (existsSync(destination)) {
-      return this.#saveJob({
-        ...job,
-        error: {
-          code: "destination_exists",
-          message: `${destination} already exists. Add it as a local project or choose another folder.`,
-        },
-        status: "failed",
-      });
-    }
-    await mkdir(parent, { recursive: true });
     this.#saveJob(job);
-    void this.#journal
+    const controller = new AbortController();
+    // run records admission synchronously, before the first filesystem await.
+    const task = this.#journal
       .run(
         {
           detail: { destination, jobId: job.id },
-          id: request.operationId,
+          id: operationId,
           kind: "project.clone",
           missionId: null,
         },
-        () => this.#runClone(job, request.source)
+        () => this.#runClone(job, source, controller.signal)
       )
       .catch(() => {
         // The job record carries the failure for the UI.
+      })
+      .finally(() => {
+        this.#clones.delete(operationId);
       });
-    return job;
+    this.#clones.set(operationId, { controller, task });
+    return await Promise.resolve(job);
   }
 
-  async #runClone(job: CloneJob, source: CloneSource) {
-    let lastProgress = 0;
-    const onStderrLine = (line: string) => {
-      const now = Date.now();
-      if (now - lastProgress >= PROGRESS_THROTTLE_MS) {
-        lastProgress = now;
-        this.#saveJob({ ...job, progress: redactUrl(line) });
+  async #runClone(job: CloneJob, source: CloneSource, signal: AbortSignal) {
+    let owned: { dev: number; ino: number } | null = null;
+    let code: CloneErrorCode = "failed";
+    try {
+      await mkdir(path.dirname(job.destination), { recursive: true });
+      signal.throwIfAborted();
+      try {
+        // Never recursively create the destination: one job owns this inode.
+        await mkdir(job.destination);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          code = "destination_exists";
+          throw new Error(
+            `${job.destination} already exists. Add it as a local project or choose another folder.`,
+            { cause: error }
+          );
+        }
+        throw error;
       }
-    };
-    const result =
-      source.kind === "github"
-        ? await run(
-            "gh",
-            ["repo", "clone", source.repo, job.destination, "--", "--progress"],
-            {
-              onStderrLine,
-              timeoutMs: 30 * 60_000,
-            }
-          )
-        : await run(
-            "git",
-            ["clone", "--progress", "--", source.url, job.destination],
-            {
-              onStderrLine,
-              timeoutMs: 30 * 60_000,
+      owned = await lstat(job.destination);
+      signal.throwIfAborted();
+      let lastProgress = 0;
+      const onStderrLine = (line: string) => {
+        const now = Date.now();
+        if (now - lastProgress >= PROGRESS_THROTTLE_MS) {
+          lastProgress = now;
+          this.#saveJob({ ...job, progress: redactUrl(line) });
+        }
+      };
+      const result =
+        source.kind === "github"
+          ? await run(
+              "gh",
+              [
+                "repo",
+                "clone",
+                source.repo,
+                job.destination,
+                "--",
+                "--progress",
+              ],
+              {
+                onStderrLine,
+                signal,
+                timeoutMs: 30 * 60_000,
+              }
+            )
+          : await run(
+              "git",
+              ["clone", "--progress", "--", source.url, job.destination],
+              {
+                onStderrLine,
+                signal,
+                timeoutMs: 30 * 60_000,
+              }
+            );
+      if (!result.ok) {
+        code = result.missing
+          ? "gh_missing"
+          : classifyCloneError(result.stderr);
+        throw new Error(
+          result.missing
+            ? "GitHub CLI (gh) is not installed"
+            : lastLines(result.stderr)
+        );
+      }
+      signal.throwIfAborted();
+      const project = this.#save(
+        await this.#describe(
+          (await repo.canonical(job.destination)) ?? job.destination
+        )
+      );
+      this.#saveJob({
+        ...job,
+        progress: null,
+        projectId: project.id,
+        status: "succeeded",
+      });
+      return { projectId: project.id };
+    } catch (error) {
+      if (owned) {
+        const actual = await lstat(job.destination).catch(() => null);
+        if (
+          actual?.isDirectory() &&
+          actual.dev === owned.dev &&
+          actual.ino === owned.ino
+        ) {
+          await rm(job.destination, { force: true, recursive: true }).catch(
+            () => {
+              // Keep the failed job and any remaining files for inspection.
             }
           );
-    if (!result.ok) {
-      // Only the folder this job created is removed.
-      await rm(job.destination, { force: true, recursive: true });
-      const code: CloneErrorCode = result.missing
-        ? "gh_missing"
-        : classifyCloneError(result.stderr);
+        }
+      }
       this.#saveJob({
         ...job,
         error: {
           code,
-          message: result.missing
-            ? "GitHub CLI (gh) is not installed"
-            : lastLines(result.stderr),
+          message: signal.aborted
+            ? "The daemon stopped during this clone"
+            : redactUrl(
+                error instanceof Error ? error.message : "Clone failed"
+              ),
         },
         progress: null,
         status: "failed",
       });
       throw new AppError("bad_request", "Clone failed");
     }
-    const project = this.#save(
-      await this.#describe(
-        (await repo.canonical(job.destination)) ?? job.destination
-      )
-    );
-    this.#saveJob({
-      ...job,
-      progress: null,
-      projectId: project.id,
-      status: "succeeded",
-    });
-    return { projectId: project.id };
+  }
+
+  async shutdown(): Promise<void> {
+    this.#closed = true;
+    const clones = [...this.#clones.values()];
+    for (const { controller } of clones) {
+      controller.abort();
+    }
+    await Promise.allSettled(clones.map(({ task }) => task));
   }
 
   /** Clones interrupted by a daemon restart are reported, not resumed. */
@@ -432,7 +503,16 @@ export class ProjectService {
       repo.currentBranch(project.path),
       repo.status(project.path),
     ]);
-    const dirtyFiles = (entries ?? []).map((entry) => entry.path);
+    if (entries === null) {
+      throw conflict("Could not read the checkout status");
+    }
+    const dirtyFiles = [
+      ...new Set(
+        entries.flatMap((entry) =>
+          entry.oldPath ? [entry.path, entry.oldPath] : [entry.path]
+        )
+      ),
+    ];
     return {
       branch,
       dirty: dirtyFiles.length > 0,

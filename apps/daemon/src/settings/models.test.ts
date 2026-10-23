@@ -3,10 +3,11 @@ import path from "node:path";
 
 import { routes } from "@missions/protocol/routes";
 import { ModelListSchema } from "@missions/protocol/settings";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDaemon } from "../daemon";
 import type { Daemon } from "../daemon";
+import { MODEL_PROBE_TIMEOUT_MS } from "../sdk/startup";
 import { testConfig } from "../test/fixtures";
 import { ModelCatalog } from "./models";
 
@@ -24,8 +25,100 @@ const opened: Daemon[] = [];
 
 describe(ModelCatalog, () => {
   afterEach(async () => {
+    vi.useRealTimers();
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
   });
+
+  it("bounds a hung discovery, clears its pending slot and permits a retry", async () => {
+    vi.useFakeTimers();
+    const load = vi
+      .fn<() => Promise<unknown[]>>()
+      .mockReturnValueOnce(Promise.withResolvers<unknown[]>().promise)
+      .mockResolvedValue(RAW);
+    const catalog = new ModelCatalog("droid", load);
+    const first = catalog.list();
+    const shared = catalog.list();
+    await vi.advanceTimersByTimeAsync(MODEL_PROBE_TIMEOUT_MS);
+    await expect(first).resolves.toStrictEqual({
+      models: [],
+      source: "unavailable",
+    });
+    await expect(shared).resolves.toStrictEqual({
+      models: [],
+      source: "unavailable",
+    });
+    await expect(catalog.list()).resolves.toMatchObject({ source: "droid" });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("requires an available catalog for mission updates and rejects efforts on a model without any", async () => {
+    const unavailable = new ModelCatalog("droid", () =>
+      Promise.reject(new Error("offline"))
+    );
+    await expect(
+      unavailable.resolve({ modelId: "x", reasoningEffort: null }, "Worker")
+    ).rejects.toThrow(/discovery is unavailable/u);
+    const catalog = new ModelCatalog("droid", () => Promise.resolve(RAW));
+    await expect(
+      catalog.resolve({ modelId: "plain", reasoningEffort: "high" }, "Worker")
+    ).rejects.toThrow(/does not support/u);
+    await expect(
+      catalog.resolve(
+        { modelId: "glm-5.3-flash", reasoningEffort: null },
+        "Worker"
+      )
+    ).resolves.toStrictEqual({
+      modelId: "glm-5.3-flash",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("cancels a pending discovery deadline on shutdown instead of leaving a timer behind", async () => {
+    vi.useFakeTimers();
+    const catalog = new ModelCatalog(
+      "droid",
+      () => Promise.withResolvers<unknown[]>().promise
+    );
+    const pending = catalog.list();
+    await catalog.close();
+    await expect(pending).resolves.toStrictEqual({
+      models: [],
+      source: "unavailable",
+    });
+    await expect(catalog.list()).resolves.toStrictEqual({
+      models: [],
+      source: "unavailable",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([null, "none"])(
+    "resolves no-effort models with native default %s to protocol null",
+    async (defaultReasoningEffort) => {
+      const catalog = new ModelCatalog("droid", () =>
+        Promise.resolve([
+          {
+            defaultReasoningEffort,
+            id: "plain",
+            supportedReasoningEfforts: [],
+          },
+        ])
+      );
+      await expect(
+        catalog.resolve(
+          { modelId: "plain", reasoningEffort: null },
+          "Orchestrator"
+        )
+      ).resolves.toStrictEqual({ modelId: "plain", reasoningEffort: null });
+      await expect(
+        catalog.resolve(
+          { modelId: "plain", reasoningEffort: "none" },
+          "Orchestrator"
+        )
+      ).rejects.toThrow(/does not support/u);
+    }
+  );
 
   it("maps CLI models and drops unknown reasoning efforts", async () => {
     const list = await new ModelCatalog("droid", () =>

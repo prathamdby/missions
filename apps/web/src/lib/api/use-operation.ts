@@ -6,31 +6,13 @@ import type {
   UseMutationOptions,
   UseMutationResult,
 } from "@tanstack/react-query";
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 
-import { isApiError } from "@/lib/api/api-error";
-import { newOperationId } from "@/lib/api/client";
+import { createSingleFlight, OperationIntents } from "./operation-intents";
 
-const SERVER_ERROR = 500;
+export { isDefiniteFailure } from "./operation-intents";
 
-/**
- * True when the daemon definitely did not act: it answered with a 4xx. A
- * network failure or 5xx may hide an effect that happened, so the intent
- * must keep its ID and let the daemon reconcile on retry.
- */
-export const isDefiniteFailure = (error: unknown) =>
-  isApiError(error) && error.status > 0 && error.status < SERVER_ERROR;
-
-/**
- * Operation IDs keyed by request intent. Retrying the same intent after a
- * failure reuses its ID so the daemon can deduplicate; `settle` forgets it so
- * a later identical request counts as new.
- */
-/**
- * `useMutation` that ignores calls while one is in flight. React Query
- * publishes `isPending` on its notify schedule, after the click handler, so
- * a fast double click would otherwise send the request twice.
- */
+/** Synchronously guards mutate AND mutateAsync before React publishes pending. */
 export const useSingleFlightMutation = <
   TData = unknown,
   TError = DefaultError,
@@ -39,44 +21,26 @@ export const useSingleFlightMutation = <
 >(
   options: UseMutationOptions<TData, TError, TVariables, TContext>
 ): UseMutationResult<TData, TError, TVariables, TContext> => {
-  const inFlight = useRef(false);
+  const flight = useMemo(() => createSingleFlight(), []);
   const mutation = useMutation({
     ...options,
-    onSettled: (...args) => {
-      inFlight.current = false;
-      return options.onSettled?.(...args);
+    onSettled: async (...args) => {
+      try {
+        await options.onSettled?.(...args);
+      } catch (error) {
+        flight.leave();
+        throw error;
+      }
+      flight.leave();
     },
   });
-  const mutate: typeof mutation.mutate = (...args) => {
-    if (inFlight.current) {
-      return;
-    }
-    inFlight.current = true;
-    mutation.mutate(...args);
-  };
-  return { ...mutation, mutate };
+  const mutate: typeof mutation.mutate = (...args) =>
+    flight.mutate(() => mutation.mutate(...args));
+  const mutateAsync: typeof mutation.mutateAsync = (...args) =>
+    flight.mutateAsync(() => mutation.mutateAsync(...args));
+  return { ...mutation, mutate, mutateAsync };
 };
 
-export const useOperationIds = () => {
-  const current = useRef<{ id: string; key: string } | null>(null);
-  return useMemo(
-    () => ({
-      idFor: (key: string) => {
-        if (current.current?.key !== key) {
-          current.current = { id: newOperationId(), key };
-        }
-        return current.current.id;
-      },
-      /** After an error: a definite rejection is recorded as failed by the daemon, so the next attempt needs a new ID. */
-      release: (error: unknown) => {
-        if (isDefiniteFailure(error)) {
-          current.current = null;
-        }
-      },
-      settle: () => {
-        current.current = null;
-      },
-    }),
-    []
-  );
-};
+/** No-key release/settle target only the most recently requested intent. */
+export const useOperationIds = (): OperationIntents =>
+  useMemo(() => new OperationIntents(), []);

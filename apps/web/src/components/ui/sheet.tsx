@@ -21,9 +21,9 @@ const sheetVariants = cva(
       side: {
         /** YWG: pickers on touch screens, with a grab handle. */
         bottom:
-          "inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl bg-surface-overlay px-md pt-md pb-[max(env(safe-area-inset-bottom),12px)]",
+          "inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl bg-surface-overlay px-md pt-md pb-[max(env(safe-area-inset-bottom),var(--spacing-lg))]",
         /** JD1: the navigation drawer. */
-        left: "inset-y-0 left-0 w-78 max-w-[85vw] gap-xl rounded-tr-[16px] bg-surface px-lg pt-[max(env(safe-area-inset-top),4px)] pb-[max(env(safe-area-inset-bottom),21px)]",
+        left: "inset-y-0 left-0 w-78 max-w-[85vw] gap-xl rounded-tr-[16px] bg-surface px-lg pt-[max(env(safe-area-inset-top),var(--spacing-xs))] pb-[max(env(safe-area-inset-bottom),var(--spacing-drawer-bottom))]",
         right:
           "inset-y-0 right-0 w-[92vw] max-w-panel rounded-l-xl bg-surface-raised",
       },

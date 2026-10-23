@@ -11,15 +11,10 @@ import {
   WarningIcon,
 } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
-import { reportMutationError } from "@/components/mission/report-error";
+import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { Button, IconButton } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { api } from "@/lib/api/endpoints";
-import {
-  useOperationIds,
-  useSingleFlightMutation,
-} from "@/lib/api/use-operation";
 import {
   deliveredRequestIds,
   goalRequestId,
@@ -123,28 +118,19 @@ const QueueEditor = ({
   onClose: () => void;
   onDraft: (draft: string) => void;
 }) => {
-  const { missionId, refresh } = useMission();
-  const ops = useOperationIds();
   const editable = isEditable(item);
-  const edit = useSingleFlightMutation({
-    mutationFn: (text: string) =>
-      api.editQueueItem(missionId, item.id, {
-        expectedRevision: item.revision,
-        operationId: ops.idFor(text),
-        text,
-      }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not edit the message"),
-    onSuccess: (result) => {
-      ops.settle();
+  const edit = useMissionCommand(
+    "editQueue",
+    "Could not edit the message",
+    (result) => {
       if (result.outcome !== "delete_unconfirmed") {
         onClose();
       }
       if (result.outcome !== "replaced") {
         toast(EDIT_OUTCOME[result.outcome]);
       }
-    },
-  });
+    }
+  );
   return (
     <li className="flex flex-col gap-sm px-md py-sm">
       <Textarea
@@ -165,7 +151,13 @@ const QueueEditor = ({
         </Button>
         <Button
           disabled={!(editable && draft.trim()) || edit.isPending}
-          onClick={() => edit.mutate(draft.trim())}
+          onClick={() =>
+            edit.mutate({
+              expectedRevision: item.revision,
+              itemId: item.id,
+              text: draft.trim(),
+            })
+          }
           size="sm"
           variant="primary"
         >
@@ -183,26 +175,13 @@ const QueueRow = ({
   item: QueueItem;
   onEdit: () => void;
 }) => {
-  const { applyLocal, missionId, refresh } = useMission();
   const editable = isEditable(item);
 
-  const mode = useSingleFlightMutation({
-    mutationFn: () =>
-      api.changeQueueMode(missionId, item.id, {
-        expectedRevision: item.revision,
-        mode: item.mode === "steer" ? "queue" : "steer",
-      }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not change delivery"),
-    onSuccess: (value) => applyLocal({ kind: "queue", value }),
-  });
-
-  const remove = useSingleFlightMutation({
-    mutationFn: () => api.removeQueueItem(missionId, item.id, item.revision),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not remove the message"),
-    onSuccess: (value) => applyLocal({ kind: "queue", value }),
-  });
+  const mode = useMissionCommand("queueMode", "Could not change delivery");
+  const remove = useMissionCommand(
+    "removeQueue",
+    "Could not remove the message"
+  );
   return (
     <li className="flex items-start gap-md px-md py-sm">
       <span className="mt-2xs">
@@ -221,7 +200,13 @@ const QueueRow = ({
                 : "queue-switch-to-steer"
             }
             disabled={mode.isPending}
-            onClick={() => mode.mutate()}
+            onClick={() =>
+              mode.mutate({
+                expectedRevision: item.revision,
+                itemId: item.id,
+                mode: item.mode === "steer" ? "queue" : "steer",
+              })
+            }
             size="sm"
             variant="ghost"
           >
@@ -234,7 +219,12 @@ const QueueRow = ({
             disabled={remove.isPending}
             icon={<CloseIcon />}
             label="Remove from queue"
-            onClick={() => remove.mutate()}
+            onClick={() =>
+              remove.mutate({
+                expectedRevision: item.revision,
+                itemId: item.id,
+              })
+            }
             size="sm"
           />
         </div>

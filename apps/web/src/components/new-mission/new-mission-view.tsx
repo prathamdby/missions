@@ -1,15 +1,11 @@
 "use client";
 
-import type { MissionSummary } from "@missions/protocol/missions";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import type { FormEvent, KeyboardEvent } from "react";
+import { useMemo } from "react";
 
 import { AutonomyChip } from "@/components/missions/autonomy-chip";
-import {
-  ComposerFrame,
-  ComposerHints,
-} from "@/components/missions/composer-frame";
 import { BranchPicker } from "@/components/new-mission/branch-picker";
 import { ProjectPicker } from "@/components/new-mission/project-picker";
 import { ProjectSheet } from "@/components/new-mission/project-sheet";
@@ -23,6 +19,11 @@ import { COMPOSER_ID } from "@/components/shell/global-shortcuts";
 import { PageHeader, PageTitle } from "@/components/shell/page-header";
 import { Button, IconButton } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
+import {
+  ComposerBox,
+  ComposerLegend,
+  ComposerToolbar,
+} from "@/components/ui/composer-box";
 import { Dot } from "@/components/ui/dot";
 import {
   ArrowUpIcon,
@@ -44,15 +45,13 @@ import { Wordmark } from "@/components/ui/wordmark";
 import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
 import { useConnectionStatus } from "@/lib/api/queries";
-import { queryKeys } from "@/lib/api/query-keys";
-import {
-  useOperationIds,
-  useSingleFlightMutation,
-} from "@/lib/api/use-operation";
+import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { nextAutonomy } from "@/lib/autonomy";
 import { tildePath } from "@/lib/format";
-import { upsertById } from "@/lib/live/global-cache";
+import { upsertMissionSummary } from "@/lib/live/global-cache";
 import { cn } from "@/lib/utils";
+
+import { MissionCreation } from "./mission-creation";
 
 const UNSUPPORTED = "Attachments and mentions are coming soon";
 
@@ -85,7 +84,7 @@ const CheckoutLine = ({
       dirty: true,
       label: changesLabel(checkout.data.dirtyFiles.length),
     };
-  } else if (checkout.data || workspace.mode === "existing_worktree") {
+  } else if (form.workspaceKnown) {
     state = { dirty: false, label: "Clean" };
   }
   const current = workspace.mode !== "new_worktree";
@@ -329,26 +328,16 @@ export const NewMissionView = () => {
   const form = useNewMissionForm();
   const router = useRouter();
   const client = useQueryClient();
-  const ops = useOperationIds();
+  const creation = useMemo(
+    () => new MissionCreation({ create: api.createMission }),
+    []
+  );
 
   const create = useSingleFlightMutation({
-    mutationFn: async (draft: NonNullable<NewMissionForm["draft"]>) => {
-      const operationId = ops.idFor(JSON.stringify(draft));
-      return await api.createMission({ ...draft, operationId });
-    },
+    mutationFn: creation.submit,
     onSuccess: (snapshot) => {
-      ops.settle();
       const { mission } = snapshot;
-      client.setQueryData<MissionSummary[]>(queryKeys.missions, (list) =>
-        upsertById(list, {
-          createdAt: mission.createdAt,
-          id: mission.id,
-          projectId: mission.projectId,
-          status: mission.status,
-          title: mission.title,
-          updatedAt: mission.updatedAt,
-        })
-      );
+      upsertMissionSummary(client, mission);
       form.setGoal("");
       router.push(`/missions/${mission.id}`);
     },
@@ -409,42 +398,7 @@ export const NewMissionView = () => {
               </Callout>
             ) : null}
             <form onSubmit={onSubmit}>
-              <ComposerFrame
-                inert={!hasProject}
-                toolbar={
-                  <>
-                    <Hint label={UNSUPPORTED}>
-                      <IconButton
-                        icon={<AttachIcon tone="secondary" />}
-                        label="Attach files"
-                        size="responsive"
-                      />
-                    </Hint>
-                    <Hint label={UNSUPPORTED}>
-                      <IconButton
-                        icon={<AtIcon tone="secondary" />}
-                        label="Mention a file"
-                        size="responsive"
-                      />
-                    </Hint>
-                    <AutonomyChip
-                      disabled={!hasProject}
-                      onChange={form.handleAutonomyChange}
-                      value={form.autonomy}
-                    />
-                    <span className="flex-1" />
-                    <IconButton
-                      disabled={!canSubmit}
-                      icon={<ArrowUpIcon />}
-                      label="Start mission"
-                      shape="round"
-                      size="responsive"
-                      type="submit"
-                      variant="submit"
-                    />
-                  </>
-                }
-              >
+              <ComposerBox inert={!hasProject}>
                 <Textarea
                   aria-label="Mission goal"
                   disabled={!hasProject}
@@ -460,10 +414,41 @@ export const NewMissionView = () => {
                   value={form.goal}
                   variant="bare"
                 />
-              </ComposerFrame>
+                <ComposerToolbar>
+                  <Hint label={UNSUPPORTED}>
+                    <IconButton
+                      icon={<AttachIcon tone="secondary" />}
+                      label="Attach files"
+                      size="responsive"
+                    />
+                  </Hint>
+                  <Hint label={UNSUPPORTED}>
+                    <IconButton
+                      icon={<AtIcon tone="secondary" />}
+                      label="Mention a file"
+                      size="responsive"
+                    />
+                  </Hint>
+                  <AutonomyChip
+                    disabled={!hasProject}
+                    onChange={form.handleAutonomyChange}
+                    value={form.autonomy}
+                  />
+                  <span className="flex-1" />
+                  <IconButton
+                    disabled={!canSubmit}
+                    icon={<ArrowUpIcon />}
+                    label="Start mission"
+                    shape="round"
+                    size="responsive"
+                    type="submit"
+                    variant="submit"
+                  />
+                </ComposerToolbar>
+              </ComposerBox>
             </form>
           </div>
-          <ComposerHints>
+          <ComposerLegend>
             <span>
               <Kbd>↵</Kbd>
               to plan
@@ -474,7 +459,7 @@ export const NewMissionView = () => {
               new line
             </span>
             <span>Nothing runs until you approve the plan.</span>
-          </ComposerHints>
+          </ComposerLegend>
         </div>
       </div>
     </div>

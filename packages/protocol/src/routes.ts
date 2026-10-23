@@ -44,6 +44,7 @@ export const routes = {
     apiPath(`/projects/${projectId}/worktrees`),
   projects: () => apiPath("/projects"),
   pullRequest: (missionId: string) => apiPath(`/missions/${missionId}/pr`),
+  pullRequests: () => apiPath("/pull-requests"),
   push: (missionId: string) => apiPath(`/missions/${missionId}/push`),
   question: (missionId: string, questionId: string) =>
     apiPath(`/missions/${missionId}/questions/${questionId}`),

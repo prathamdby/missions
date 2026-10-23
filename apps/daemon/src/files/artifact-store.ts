@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { Artifact } from "@missions/protocol/missions";
 
-import { badRequest } from "../lib/app-error";
+import { badRequest, forbidden } from "../lib/app-error";
 import { mediaTypeOf } from "./workspace-files";
 
 export const ARTIFACT_LIMIT = 50 * 1024 * 1024;
@@ -47,7 +47,11 @@ export class ArtifactStore {
     name: string;
     createdAt: string;
   }): Promise<Artifact> {
-    const info = await stat(input.source);
+    const source = await realpath(input.source);
+    if (source.split(path.sep).includes(".git")) {
+      throw forbidden("Git internals cannot be attached");
+    }
+    const info = await stat(source);
     if (!info.isFile()) {
       throw badRequest("Only files can be attached");
     }
@@ -67,7 +71,7 @@ export class ArtifactStore {
     };
     const target = this.filePath(artifact);
     await mkdir(path.dirname(target), { mode: 0o700, recursive: true });
-    await copyFile(input.source, target);
+    await copyFile(source, target);
     return artifact;
   }
 }

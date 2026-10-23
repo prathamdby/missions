@@ -29,7 +29,9 @@ export type CreateMissionRequest = z.input<typeof CreateMissionRequestSchema>;
 export const UpdateMissionRequestSchema = z.strictObject({
   autonomy: AutonomySchema.optional(),
   expectedRevision: RevisionSchema,
+  orchestrator: AgentModelSettingsSchema.optional(),
   title: z.string().trim().min(1).max(200).optional(),
+  worker: AgentModelSettingsSchema.optional(),
 });
 export type UpdateMissionRequest = z.infer<typeof UpdateMissionRequestSchema>;
 

@@ -25,22 +25,7 @@ import {
 } from "@/components/ui/icons";
 import { FieldHint, FieldLabel, Input } from "@/components/ui/input";
 
-import { cloneCommand, joinPath, repoNameOf } from "./clone-target";
-
-const SSH_REMOTE = /^(?:ssh:\/\/)?[\w.-]+@[\w.-]+[:/].+/u;
-const HTTPS_REMOTE = /^https?:\/\/[\w.-]+(?::\d+)?\/.+/u;
-
-type RemoteKind = "https" | "ssh" | null;
-
-const remoteKind = (url: string): RemoteKind => {
-  if (SSH_REMOTE.test(url)) {
-    return "ssh";
-  }
-  if (HTTPS_REMOTE.test(url)) {
-    return "https";
-  }
-  return null;
-};
+import { cloneCommand, joinPath, remoteKind, repoNameOf } from "./clone-target";
 
 const REMOTE_COPY = {
   https: { auth: "credential helper", label: "HTTPS remote" },

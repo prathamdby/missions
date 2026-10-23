@@ -62,6 +62,24 @@ export const groupTodos = (
   };
 };
 
+/** Mission checklist first; worker checklists only stand in when it is absent. */
+export const todoProgress = (
+  todos: Readonly<Record<string, readonly Todo[]>>,
+  agents: Readonly<Record<string, Agent>>
+) => {
+  const groups = groupTodos(todos, agents);
+  const items =
+    groups.main.length > 0
+      ? groups.main
+      : groups.workers.flatMap((worker) => worker.todos);
+  return {
+    done: items.filter((todo) => todo.status === "completed").length,
+    groups,
+    items,
+    total: items.length,
+  };
+};
+
 export type AgentPhase =
   | "blocked"
   | "done"

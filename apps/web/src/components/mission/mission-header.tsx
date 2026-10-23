@@ -14,9 +14,14 @@ import { useMissionControl } from "@/components/mission/use-mission-control";
 import { useShell } from "@/components/shell/shell-context";
 import { Badge } from "@/components/ui/badge";
 import { useProjects } from "@/lib/api/queries";
-import { canPause, formatDuration, isMissionActive } from "@/lib/format";
+import {
+  canPause,
+  canResume,
+  formatDuration,
+  isMissionActive,
+} from "@/lib/format";
 import { displayStatus } from "@/lib/mission/display-status";
-import { groupTodos } from "@/lib/mission/overview";
+import { todoProgress } from "@/lib/mission/overview";
 import { useNow } from "@/lib/use-now";
 
 const useElapsed = (start: string, end: string | null) => {
@@ -28,12 +33,7 @@ const useElapsed = (start: string, end: string | null) => {
 /** Paper J7R: the mobile header's todo pill, which opens the details sheet. */
 const TodoPill = ({ onClick }: { onClick: () => void }) => {
   const { live } = useMission();
-  const groups = groupTodos(live.todos, live.agents);
-  const todos =
-    groups.main.length > 0
-      ? groups.main
-      : groups.workers.flatMap((group) => group.todos);
-  const done = todos.filter((todo) => todo.status === "completed").length;
+  const { items: todos, done } = todoProgress(live.todos, live.agents);
   return (
     <button
       aria-label={
@@ -83,12 +83,12 @@ const HeaderAction = ({
 
 const ControlButton = () => {
   const { live } = useMission();
-  const { pause, pausing, resume, resuming } = useMissionControl();
+  const { pause, pausing, resume, resuming, pending } = useMissionControl();
   const { status } = live.mission;
   if (canPause(status)) {
     return (
       <HeaderAction
-        disabled={pausing}
+        disabled={pending}
         icon={<PauseIcon />}
         onClick={pause}
         title="Pause all agents at a safe point"
@@ -106,31 +106,20 @@ const ControlButton = () => {
   }
   if (status === "paused") {
     return (
-      <HeaderAction disabled={resuming} icon={<PlayIcon />} onClick={resume}>
+      <HeaderAction disabled={pending} icon={<PlayIcon />} onClick={resume}>
         {resuming ? "Resuming…" : "Resume"}
       </HeaderAction>
     );
   }
-  if (status === "interrupted" || status === "stop_failed") {
+  if (canResume(status)) {
     return (
       <HeaderAction
-        disabled={resuming}
+        disabled={pending}
         icon={<RepeatIcon />}
         onClick={resume}
         title="Resume from the last safe point"
       >
         {resuming ? "Retrying…" : "Retry"}
-      </HeaderAction>
-    );
-  }
-  if (status === "failed") {
-    return (
-      <HeaderAction
-        disabled
-        icon={<RepeatIcon />}
-        title="The daemon cannot restart a failed mission. Start a follow-up mission instead."
-      >
-        Retry
       </HeaderAction>
     );
   }
