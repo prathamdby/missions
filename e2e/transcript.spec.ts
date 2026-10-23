@@ -12,28 +12,31 @@ import {
   missionSnapshot,
 } from "./fixtures";
 
+const SETTLED = /^awaiting_approval(?:,(?:idle|waiting_permission))+$/u;
+
 test("earlier transcript failures stay visible and retry loads the missing page", async ({
   page,
   request,
 }) => {
   const project = await addProject(request, gitRepo("transcript-pagination"));
   const mission = await createMission(request, project.id);
-  // Wait for the real scripted turn to finish so its SSE tail cannot race the
-  // paginated snapshot. MissionView still uses its real context and session.
+  // Wait until the real scripted turn rests on its plan approval so its SSE
+  // tail cannot race the paginated snapshot. MissionView still uses its real
+  // context and session.
   await expect
     .poll(
       async () => {
         const current = MissionSnapshotSchema.parse(
           await missionSnapshot(request, mission.id)
         );
-        return (
-          current.mission.status === "awaiting_approval" &&
-          current.agents.every((agent) => agent.status === "idle")
-        );
+        return [
+          current.mission.status,
+          ...current.agents.map((agent) => agent.status),
+        ].join(",");
       },
       { timeout: 30_000 }
     )
-    .toBeTruthy();
+    .toMatch(SETTLED);
   const snapshot = MissionSnapshotSchema.parse(
     await missionSnapshot(request, mission.id)
   );
@@ -75,13 +78,13 @@ test("earlier transcript failures stay visible and retry loads the missing page"
   });
   const requests: { before: string | null; limit: string | null }[] = [];
   await page.route(
-    `**/api/daemon/v1/missions/${mission.id}/snapshot`,
+    `**/api/daemon/v2/missions/${mission.id}/snapshot`,
     async (route) => {
       await route.fulfill({ json: tail });
     }
   );
   await page.route(
-    `**/api/daemon/v1/missions/${mission.id}/transcript?*`,
+    `**/api/daemon/v2/missions/${mission.id}/transcript?*`,
     async (route) => {
       const url = new URL(route.request().url());
       requests.push({

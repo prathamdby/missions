@@ -208,6 +208,83 @@ const ghCommand = (args: string[]): CommandCategory => {
   return "publish";
 };
 
+/**
+ * Branch changes and history- or worktree-destroying Git operations. They
+ * keep the vcs category but count as high impact, so lower autonomy levels
+ * ask and they wait until no other agent is writing.
+ */
+const GIT_HIGH_IMPACT = new Set([
+  "reset",
+  "clean",
+  "rebase",
+  "switch",
+  "checkout",
+  "restore",
+  "stash",
+  "update-ref",
+  "worktree",
+  "merge",
+  "pull",
+  "cherry-pick",
+  "revert",
+  "am",
+  "init",
+  "clone",
+]);
+const GIT_BRANCH_REWRITE = new Set([
+  "-d",
+  "-D",
+  "--delete",
+  "-m",
+  "-M",
+  "--move",
+  "-f",
+  "--force",
+  "-c",
+  "-C",
+  "--copy",
+]);
+
+const gitSubcommand = (args: string[]) => {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (GIT_VALUE_OPTIONS.has(arg)) {
+      index += 1;
+    } else if (!arg.startsWith("-")) {
+      return { rest: args.slice(index + 1), subcommand: arg };
+    }
+  }
+  return null;
+};
+
+const highImpactGit = (args: string[]) => {
+  const found = gitSubcommand(args);
+  if (!found) {
+    return false;
+  }
+  if (GIT_HIGH_IMPACT.has(found.subcommand)) {
+    return true;
+  }
+  return (
+    (found.subcommand === "branch" || found.subcommand === "tag") &&
+    found.rest.some((arg) => GIT_BRANCH_REWRITE.has(arg))
+  );
+};
+
+/** True when any recognizable git invocation is a branch change or destructive. */
+export const isHighImpactGit = (command: string, nesting = 0): boolean => {
+  if (nesting > 8) {
+    return true;
+  }
+  const tokens = words(command);
+  return tokens.some((token, index) => {
+    if (token.split("/").at(-1) === "git") {
+      return highImpactGit(tokens.slice(index + 1));
+    }
+    return HAS_SPACE.test(token) && isHighImpactGit(token, nesting + 1);
+  });
+};
+
 export const commandCategory = (
   command: string,
   nesting = 0

@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   AgentRuntimeOptions,
   RuntimeStartResult,
+  SubmitOptions,
 } from "../sdk/agent-runtime";
 import { NativeQueueTracker } from "../sdk/native-queue";
 import {
@@ -45,9 +46,10 @@ const resultText = (value: unknown): string => {
 };
 
 /**
- * A deterministic agent that walks the full mission lifecycle (explore, plan,
- * dispatch, write behind a permission, hand off, complete) without spawning
- * Droid. Used by browser tests and offline demos via MISSIONS_SCRIPTED_AGENTS=1.
+ * A deterministic agent that walks the full mission lifecycle (explore, an
+ * optional Plan-mode proposal, dispatch, write behind a permission, hand off,
+ * complete) without spawning Droid. Used by browser tests and offline demos
+ * via MISSIONS_SCRIPTED_AGENTS=1.
  * Steer messages land between steps; Queue messages wait for the turn to end.
  */
 export class ScriptedRuntime implements RuntimeHandle {
@@ -66,6 +68,10 @@ export class ScriptedRuntime implements RuntimeHandle {
   #seq = 0;
   #planRevision = 0;
   #scenario: Scenario = "default";
+  #mode: "auto" | "spec" = "auto";
+  /** Model-only context, such as planning guidance; never starts a turn. */
+  readonly #contexts: string[] = [];
+  readonly availableModels: readonly unknown[] = [];
 
   constructor(options: AgentRuntimeOptions, delayMs = 250) {
     this.#options = options;
@@ -102,7 +108,12 @@ export class ScriptedRuntime implements RuntimeHandle {
     });
   }
 
-  submit(id: string, text: string, mode: DeliveryMode) {
+  submit(
+    id: string,
+    text: string,
+    mode: DeliveryMode,
+    _options: SubmitOptions = {}
+  ) {
     if (
       this.#options.role === "orchestrator" &&
       this.#turns === 0 &&
@@ -116,6 +127,16 @@ export class ScriptedRuntime implements RuntimeHandle {
     this.queue.admitted(id);
     this.#inbox.push(id);
     void this.#pump();
+    return Promise.resolve();
+  }
+
+  addContext(_id: string, text: string) {
+    this.#contexts.push(text);
+    return Promise.resolve();
+  }
+
+  setInteractionMode(mode: "auto" | "spec") {
+    this.#mode = mode;
     return Promise.resolve();
   }
 
@@ -197,6 +218,7 @@ export class ScriptedRuntime implements RuntimeHandle {
         id: this.#id("user"),
         requestId: id,
         role: "user",
+        sender: null,
         text,
         thinking: "",
         toolResults: [],
@@ -213,6 +235,7 @@ export class ScriptedRuntime implements RuntimeHandle {
         id: this.#id("reply"),
         requestId: null,
         role: "assistant",
+        sender: null,
         text,
         thinking,
         toolResults: [],
@@ -346,17 +369,6 @@ export class ScriptedRuntime implements RuntimeHandle {
       await this.#workerTurn(text);
       return;
     }
-    if (
-      text.includes("approved plan revision") &&
-      this.#scenario !== "default"
-    ) {
-      await this.#startRichWork();
-      return;
-    }
-    if (text.includes("approved plan revision")) {
-      await this.#startDefaultWork();
-      return;
-    }
     if (text.includes("finished assignment")) {
       await this.#read(NOTES_FILE, "# Notes");
       const finished =
@@ -375,6 +387,10 @@ export class ScriptedRuntime implements RuntimeHandle {
     }
     if (text.includes("requested changes")) {
       await this.#propose("Revised plan");
+      return;
+    }
+    if (text.includes("Plan mode is now active")) {
+      await this.#propose("Plan");
       return;
     }
     if (isSystemRequest(requestId) && this.#turns > 0) {
@@ -405,7 +421,7 @@ export class ScriptedRuntime implements RuntimeHandle {
         "Reading the README to understand the project."
       );
       await this.#read("README.md", "# Project");
-      await this.#propose("Plan");
+      await this.#planOrWork();
       return;
     }
     this.#say(`Noted: ${text.slice(0, 200)}`);
@@ -426,24 +442,66 @@ export class ScriptedRuntime implements RuntimeHandle {
     this.#say("A Worker is writing the notes. I will review its handoff.");
   }
 
+  /**
+   * Plan mode: presents the plan through native ExitSpecMode, as the CLI
+   * does, and continues the same turn once the user approves it.
+   */
   async #propose(title: string) {
     this.#planRevision += 1;
-    if (this.#scenario !== "default") {
+    const rich = this.#scenario !== "default";
+    if (rich) {
       await this.#roleTool("update_todos", {
         todos: RICH_TODOS.map((content) => ({ content, status: "pending" })),
       });
       this.#say("Here’s the plan. Nothing runs until you approve it.");
-      await this.#roleTool("propose_plan", {
-        markdown: RICH_PLAN,
-        title: "Make the webhook retry test deterministic",
-      });
+    }
+    const plan = rich
+      ? RICH_PLAN
+      : `## ${title}\n\n1. Dispatch a Worker to write ${NOTES_FILE}.\n2. Review the result and finish.`;
+    const planTitle = rich
+      ? "Make the webhook retry test deterministic"
+      : `${title} ${this.#planRevision}`;
+    const toolUseId = this.#id("tool");
+    const input = { plan, title: planTitle };
+    this.#emit({ input, name: "ExitSpecMode", toolUseId, type: "tool_call" });
+    if (!rich) {
+      this.#say("The plan is ready for your review.");
+    }
+    const approved = await this.#options.onPermission({
+      agentId: this.#options.agentId,
+      toolUses: [
+        {
+          confirmationType: "exit_spec_mode",
+          details: { plan, title: planTitle, type: "exit_spec_mode" },
+          input,
+          toolName: "ExitSpecMode",
+          toolUseId,
+        },
+      ],
+    });
+    this.#emit({
+      content: approved ? "Plan approved" : "The user wants changes",
+      isError: !approved,
+      toolUseId,
+      type: "tool_result",
+    });
+    if (!approved) {
       return;
     }
-    await this.#roleTool("propose_plan", {
-      markdown: `## ${title}\n\n1. Dispatch a Worker to write ${NOTES_FILE}.\n2. Review the result and finish.`,
-      title: `${title} ${this.#planRevision}`,
-    });
-    this.#say("The plan is ready for your review.");
+    this.#mode = "auto";
+    await this.#step();
+    await (rich ? this.#startRichWork() : this.#startDefaultWork());
+  }
+
+  /** Work mode starts directly; Plan mode presents a plan first. */
+  async #planOrWork() {
+    if (this.#mode === "spec") {
+      await this.#propose("Plan");
+      return;
+    }
+    await (this.#scenario === "default"
+      ? this.#startDefaultWork()
+      : this.#startRichWork());
   }
 
   /** Paper QAU to RHI: explore, run the failing test, ask two questions, plan. */
@@ -460,7 +518,7 @@ export class ScriptedRuntime implements RuntimeHandle {
       toolCallId: this.#id("ask"),
     });
     await this.#step();
-    await this.#propose("Plan");
+    await this.#planOrWork();
   }
 
   async #startRichWork() {

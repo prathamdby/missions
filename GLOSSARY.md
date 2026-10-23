@@ -12,15 +12,27 @@ Missions coordinate agents working toward a goal in a local project.
 
 **Agent**: A droid acting as an orchestrator or worker within a mission.
 
-**Orchestrator**: The agent responsible for planning and coordinating a mission. _Avoid_: Worker
+**Orchestrator**: The main agent of a mission: it talks with the user, does work directly, and coordinates Workers when that helps. The UI and prompts call it the main agent. _Avoid_: Worker
 
 **Worker**: An agent responsible for an assignment. _Avoid_: Orchestrator
 
 **Assignment**: A piece of mission work given to a worker. _Avoid_: Mission
 
-**Plan**: The proposed work for a mission, subject to approval or revision.
+**Handoff**: A Worker's final report on its assignment, delivered to the Orchestrator as an agent message.
 
-**Queue**: Messages awaiting delivery to an agent.
+**Agent message**: A message from one agent to another in the same mission, such as a Worker's question or the Orchestrator's reply. Its sender is set by the daemon, and it is task context, never user authorization.
+
+**Work mode**: The default execution mode, in which agents act within the mission's autonomy level.
+
+**Plan mode**: An optional, read-only execution mode for every agent, in which the Orchestrator plans and asks the user to approve the plan.
+
+**Plan**: The proposed work presented in Plan mode, subject to approval or revision.
+
+**Queue**: Durable messages awaiting delivery to an agent, in acceptance order.
+
+**Accepted**: A queued message saved by the daemon but not yet sent to its agent; it can still be edited or removed.
+
+**Steer**: Delivery at the agent's next tool boundary. _Avoid_: Interrupt
 
 **Permission**: Authorization for an agent action that requires approval.
 

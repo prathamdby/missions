@@ -6,6 +6,7 @@ import type { FormEvent, KeyboardEvent } from "react";
 import { useMemo } from "react";
 
 import { AutonomyChip } from "@/components/missions/autonomy-chip";
+import { ExecutionModeChip } from "@/components/missions/execution-mode-chip";
 import { BranchPicker } from "@/components/new-mission/branch-picker";
 import { ProjectPicker } from "@/components/new-mission/project-picker";
 import { ProjectSheet } from "@/components/new-mission/project-sheet";
@@ -49,6 +50,8 @@ import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { nextAutonomy } from "@/lib/autonomy";
 import { tildePath } from "@/lib/format";
 import { upsertMissionSummary } from "@/lib/live/global-cache";
+import { goalRequestId } from "@/lib/mission/queue";
+import { markReceipt, markSubmit } from "@/lib/perf-marks";
 import { cn } from "@/lib/utils";
 
 import { MissionCreation } from "./mission-creation";
@@ -337,6 +340,7 @@ export const NewMissionView = () => {
     mutationFn: creation.submit,
     onSuccess: (snapshot) => {
       const { mission } = snapshot;
+      markReceipt(goalRequestId(mission.id), "create-mission");
       upsertMissionSummary(client, mission);
       form.setGoal("");
       router.push(`/missions/${mission.id}`);
@@ -348,6 +352,7 @@ export const NewMissionView = () => {
 
   const submit = () => {
     if (form.draft && !create.isPending) {
+      markSubmit("create-mission");
       create.mutate(form.draft);
     }
   };
@@ -434,6 +439,11 @@ export const NewMissionView = () => {
                     onChange={form.handleAutonomyChange}
                     value={form.autonomy}
                   />
+                  <ExecutionModeChip
+                    disabled={!hasProject}
+                    onChange={form.handleExecutionModeChange}
+                    value={form.executionMode}
+                  />
                   <span className="flex-1" />
                   <IconButton
                     disabled={!canSubmit}
@@ -451,14 +461,18 @@ export const NewMissionView = () => {
           <ComposerLegend>
             <span>
               <Kbd>↵</Kbd>
-              to plan
+              {form.executionMode === "plan" ? "to plan" : "to start"}
             </span>
             <span>
               <Kbd>⇧</Kbd>
               <Kbd>↵</Kbd>
               new line
             </span>
-            <span>Nothing runs until you approve the plan.</span>
+            <span>
+              {form.executionMode === "plan"
+                ? "Nothing changes until you approve the plan."
+                : "Agents act within the autonomy level you pick."}
+            </span>
           </ComposerLegend>
         </div>
       </div>

@@ -12,10 +12,12 @@ const mission: Mission = {
   createdAt: AT,
   endedAt: null,
   epoch: 0,
+  executionMode: "work",
   goal: "Keep existing work",
   id: "mission-model",
   lastError: null,
   orchestrator: { modelId: "original", reasoningEffort: "high" },
+  pendingExecutionMode: null,
   projectId: "project",
   publish: {
     cleanup: "none",
@@ -71,7 +73,7 @@ describe("mission model update transport", () => {
     );
     await commands.run("update", modelSettingsUpdate("worker", worker, 4));
     const [url, init] = fetch.mock.calls[0] ?? [];
-    expect(url).toBe("/api/daemon/v1/missions/mission-model");
+    expect(url).toBe("/api/daemon/v2/missions/mission-model");
     expect(init?.method).toBe("PATCH");
     expect(JSON.parse(String(init?.body))).toStrictEqual({
       expectedRevision: 4,

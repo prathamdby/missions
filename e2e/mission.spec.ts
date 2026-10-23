@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   addProject,
+  chooseExecutionMode,
   createMission,
   gitRepo,
   missionSnapshot,
@@ -12,7 +13,27 @@ test.beforeAll(async ({ request }) => {
   await useScriptedModels(request);
 });
 
-test("a mission goes from goal to plan approval to completion", async ({
+test("a Work mission goes from goal to completion without a plan gate", async ({
+  page,
+  request,
+}) => {
+  const project = await addProject(request, gitRepo("work-mode"));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Project" }).click();
+  await page.getByRole("option", { name: project.name }).click();
+  await expect(page.getByTestId("execution-mode")).toContainText("Work");
+  await page
+    .getByRole("textbox", { name: "Mission goal" })
+    .fill("Write a NOTES.md file summarizing the project");
+  await page.getByRole("button", { name: "Start mission" }).click();
+  await expect(page).toHaveURL(/\/missions\//u);
+  await expect(page.getByTestId("mission-complete")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("plan-card")).toHaveCount(0);
+});
+
+test("a Plan mission goes from goal to plan approval to completion", async ({
   page,
   request,
 }) => {
@@ -21,6 +42,7 @@ test("a mission goes from goal to plan approval to completion", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
+  await chooseExecutionMode(page, "Plan");
   await page
     .getByRole("textbox", { name: "Mission goal" })
     .fill("Write a NOTES.md file summarizing the project");

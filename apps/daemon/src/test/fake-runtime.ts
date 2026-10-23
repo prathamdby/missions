@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AgentRuntimeOptions,
   RuntimeStartResult,
+  SubmitOptions,
 } from "../sdk/agent-runtime";
 import { NativeQueueTracker } from "../sdk/native-queue";
 
@@ -14,7 +15,15 @@ import { NativeQueueTracker } from "../sdk/native-queue";
 export class FakeRuntime implements RuntimeHandle {
   readonly options: AgentRuntimeOptions;
   readonly queue: NativeQueueTracker;
-  readonly submitted: { id: string; text: string; mode: DeliveryMode }[] = [];
+  readonly submitted: {
+    id: string;
+    text: string;
+    mode: DeliveryMode;
+    options: SubmitOptions;
+  }[] = [];
+  readonly contexts: { id: string; text: string }[] = [];
+  readonly interactionModes: ("auto" | "spec")[] = [];
+  readonly availableModels: readonly unknown[] = [];
   sessionId: string | null = null;
   model: AgentModelSettings;
   readonly modelUpdates: AgentModelSettings[] = [];
@@ -24,6 +33,8 @@ export class FakeRuntime implements RuntimeHandle {
   survivors: number[] = [];
   /** When set and returning true, every submit rejects. */
   failSubmits: (() => boolean) | null = null;
+  /** When set and returning true, every native mode switch rejects. */
+  failInteractionMode: (() => boolean) | null = null;
 
   constructor(options: AgentRuntimeOptions) {
     this.options = options;
@@ -57,13 +68,31 @@ export class FakeRuntime implements RuntimeHandle {
     });
   }
 
-  submit(id: string, text: string, mode: DeliveryMode) {
+  submit(
+    id: string,
+    text: string,
+    mode: DeliveryMode,
+    options: SubmitOptions = {}
+  ) {
     if (this.failSubmits?.()) {
       return Promise.reject(new Error("spawn failed"));
     }
-    this.submitted.push({ id, mode, text });
+    this.submitted.push({ id, mode, options, text });
     this.queue.submitted(id, text, mode);
     this.queue.admitted(id);
+    return Promise.resolve();
+  }
+
+  addContext(id: string, text: string) {
+    this.contexts.push({ id, text });
+    return Promise.resolve();
+  }
+
+  setInteractionMode(mode: "auto" | "spec") {
+    if (this.failInteractionMode?.()) {
+      return Promise.reject(new Error("mode switch failed"));
+    }
+    this.interactionModes.push(mode);
     return Promise.resolve();
   }
 
@@ -123,6 +152,7 @@ export class FakeRuntime implements RuntimeHandle {
         id: `msg-${id}`,
         requestId: id,
         role: "user",
+        sender: null,
         text: entry?.text ?? "",
         thinking: "",
         toolResults: [],

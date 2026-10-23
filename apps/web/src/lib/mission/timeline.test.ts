@@ -1,4 +1,5 @@
 import type {
+  MessageParty,
   PermissionRequest,
   PlanRevision,
   TranscriptItem,
@@ -23,7 +24,10 @@ const item = (
   isError: false,
   kind,
   missionId: "m1",
+  purpose: null,
+  recipient: null,
   requestId: null,
+  sender: null,
   seq,
   text: `text ${seq}`,
   toolName: null,
@@ -32,15 +36,21 @@ const item = (
 });
 
 const plan = (revision: number, second: number): PlanRevision => ({
+  actionable: false,
+  agentId: null,
   createdAt: at(second),
   decidedAt: null,
+  epoch: null,
   feedback: null,
+  guidanceVersion: null,
   id: `p${revision}`,
   markdown: "# Plan",
   missionId: "m1",
   revision,
+  sessionId: null,
   status: revision === 2 ? "proposed" : "superseded",
   title: "Plan",
+  toolUseId: null,
 });
 
 const permission = (second: number): PermissionRequest => ({
@@ -341,5 +351,84 @@ describe(buildTimeline, () => {
         entry.kind === "preview" ? entry.text : entry.kind
       )
     ).toStrictEqual(["user", "hello world", "late"]);
+  });
+});
+
+const orch: MessageParty = {
+  agentId: "orch",
+  role: "orchestrator",
+  title: "Orchestrator",
+};
+const w1: MessageParty = { agentId: "w1", role: "worker", title: "Worker" };
+const w2: MessageParty = { agentId: "w2", role: "worker", title: "Worker 2" };
+const message = (seq: number, sender: MessageParty, recipient: MessageParty) =>
+  item(seq, "agent_message", {
+    agentId: sender.agentId,
+    purpose: "message",
+    recipient,
+    requestId: `q${seq}`,
+    sender,
+  });
+
+describe("agent messages", () => {
+  it("groups an exchange between one pair until another row intervenes", () => {
+    const timeline = buildTimeline({
+      ...empty,
+      transcript: [
+        message(1, orch, w1),
+        message(2, w1, orch),
+        message(3, orch, w1),
+        message(4, orch, w2),
+        item(5, "user"),
+        message(6, w2, orch),
+      ],
+    });
+    const rows = transcriptRows(timeline, true);
+    expect(
+      rows.map((row) =>
+        row.kind === "messages" ? row.items.map((entry) => entry.id) : row.kind
+      )
+    ).toStrictEqual([["t1", "t2", "t3"], ["t4"], "entry", ["t6"]]);
+  });
+
+  it("hides send_message and native plan calls, but shows a failed role call", () => {
+    const timeline = buildTimeline({
+      ...empty,
+      transcript: [
+        item(1, "tool_call", {
+          toolName: "missions.send_message",
+          toolUseId: "a",
+        }),
+        item(2, "tool_result", { toolUseId: "a" }),
+        message(3, orch, w1),
+        item(4, "tool_call", { toolName: "ExitSpecMode", toolUseId: "b" }),
+        item(5, "tool_call", {
+          toolName: "missions.send_message",
+          toolUseId: "c",
+        }),
+        item(6, "tool_result", { isError: true, toolUseId: "c" }),
+      ],
+    });
+    expect(
+      timeline.map((entry) =>
+        entry.kind === "tools"
+          ? entry.calls.map((call) => [call.call?.id, call.result?.id])
+          : entry.kind
+      )
+    ).toStrictEqual(["agent_message", [["t5", "t6"]]]);
+  });
+
+  it("shows a live native plan while the agent is still mid-turn", () => {
+    const timeline = buildTimeline({
+      ...empty,
+      planAgentId: "orch",
+      planInFlight: true,
+      plans: [{ ...plan(2, 2), actionable: true }],
+      transcript: [item(1, "assistant")],
+    });
+    expect(timeline.map((entry) => entry.kind)).toStrictEqual([
+      "assistant",
+      "plan",
+    ]);
   });
 });

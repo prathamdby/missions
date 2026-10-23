@@ -1,5 +1,5 @@
 import type { CreateMissionRequest } from "@missions/protocol/commands";
-import type { Autonomy } from "@missions/protocol/common";
+import type { Autonomy, ExecutionMode } from "@missions/protocol/common";
 import type { MissionSummary } from "@missions/protocol/missions";
 import type { Branch, Project } from "@missions/protocol/projects";
 import type { Settings } from "@missions/protocol/settings";
@@ -52,6 +52,8 @@ interface DraftInput {
   branch: string | null;
   branches: Evidence<readonly Branch[]>;
   checkout: Evidence<CheckoutStatus>;
+  /** Work (the default) is omitted from the request. */
+  executionMode?: ExecutionMode;
   goal: string;
   newBranch: string | null;
   project: Project | null;
@@ -155,6 +157,9 @@ const buildRequest = (
   }
   return {
     autonomy: input.autonomy,
+    ...(input.executionMode === "plan"
+      ? { executionMode: "plan" as const }
+      : {}),
     goal,
     orchestrator: settings.data.orchestrator,
     projectId: project.id,

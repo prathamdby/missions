@@ -46,7 +46,10 @@ export interface MissionLiveState {
   /** Snapshot cursor. Events at or below it are already reflected. */
   base: number;
   changedPaths: readonly string[];
-  /** Highest authoritative transcript seq per `${agentId}:${kind}`. */
+  /**
+   * Highest seq per `${agentId}:${kind}` through which streaming is over: an
+   * authoritative transcript item arrived or the agent stopped.
+   */
   finalized: Record<string, number>;
   mission: Mission;
   notices: Record<number, LiveNotice>;
@@ -56,6 +59,8 @@ export interface MissionLiveState {
   previews: Record<string, StreamingPreview>;
   questions: Record<string, Question>;
   queue: Record<string, QueueItem>;
+  /** Seq through which the whole mission stopped streaming (paused, ended). */
+  settled: number;
   todos: Record<string, readonly Todo[]>;
   transcript: Record<string, TranscriptItem>;
   transcriptHasMore: boolean;
@@ -96,6 +101,7 @@ export const fromSnapshot = (snapshot: MissionSnapshot): MissionLiveState => ({
   previews: {},
   questions: byId(snapshot.questions),
   queue: byId(snapshot.queue),
+  settled: 0,
   todos: groupTodos(snapshot.todos),
   transcript: byId(snapshot.transcript),
   transcriptHasMore: snapshot.transcriptHasMore,
@@ -165,36 +171,98 @@ const previewKindOf = (item: TranscriptItem): PreviewKind | null => {
   return item.kind === "thinking" ? "thinking" : null;
 };
 
+const PREVIEW_KINDS: readonly PreviewKind[] = ["text", "thinking"];
+
+/** Agent statuses after which nothing more streams for earlier turns. */
+const AGENT_STOPPED: ReadonlySet<Agent["status"]> = new Set([
+  "failed",
+  "interrupted",
+  "stopped",
+]);
+
+/** Mission statuses reached only after every agent stopped streaming. */
+const MISSION_STOPPED: ReadonlySet<Mission["status"]> = new Set([
+  "archived",
+  "completed",
+  "failed",
+  "interrupted",
+  "paused",
+  "stop_failed",
+]);
+
+/** Drops chunks at or below `through`; null when nothing is left. */
+const trimPreview = (preview: StreamingPreview, through: number) => {
+  const chunks: Record<number, string> = {};
+  for (const [chunkSeq, text] of Object.entries(preview.chunks)) {
+    if (Number(chunkSeq) > through) {
+      chunks[Number(chunkSeq)] = text;
+    }
+  }
+  return Object.keys(chunks).length > 0 ? { ...preview, chunks } : null;
+};
+
+const trimPreviews = (
+  previews: Record<string, StreamingPreview>,
+  through: number,
+  matches: (preview: StreamingPreview) => boolean
+) => {
+  const out: Record<string, StreamingPreview> = {};
+  for (const [messageId, preview] of Object.entries(previews)) {
+    const kept = matches(preview) ? trimPreview(preview, through) : preview;
+    if (kept) {
+      out[messageId] = kept;
+    }
+  }
+  return out;
+};
+
 const prunePreviews = (
   previews: Record<string, StreamingPreview>,
   item: TranscriptItem,
   kind: PreviewKind | null,
   seq: number
 ) => {
-  const out: Record<string, StreamingPreview> = {};
-  for (const [messageId, preview] of Object.entries(previews)) {
-    if (messageId === item.id) {
-      continue;
-    }
-    if (
-      kind !== null &&
-      preview.agentId === item.agentId &&
-      preview.kind === kind
-    ) {
-      const chunks: Record<number, string> = {};
-      for (const [chunkSeq, text] of Object.entries(preview.chunks)) {
-        if (Number(chunkSeq) > seq) {
-          chunks[Number(chunkSeq)] = text;
-        }
-      }
-      if (Object.keys(chunks).length > 0) {
-        out[messageId] = { ...preview, chunks };
-      }
-      continue;
-    }
-    out[messageId] = preview;
+  const { [item.id]: _replaced, ...rest } = previews;
+  return kind === null
+    ? rest
+    : trimPreviews(
+        rest,
+        seq,
+        (preview) => preview.agentId === item.agentId && preview.kind === kind
+      );
+};
+
+/**
+ * Ends streaming for one agent (or every agent when `agentId` is null) through
+ * `seq`: its unfinished previews are dropped and older deltas stay ignored,
+ * so an interrupted or retracted message cannot reappear.
+ */
+const settle = (
+  state: MissionLiveState,
+  agentId: string | null,
+  seq: number
+): MissionLiveState => {
+  if (agentId === null) {
+    return {
+      ...state,
+      previews: trimPreviews(state.previews, seq, () => true),
+      settled: Math.max(state.settled, seq),
+    };
   }
-  return out;
+  const finalized = { ...state.finalized };
+  for (const kind of PREVIEW_KINDS) {
+    const key = `${agentId}:${kind}`;
+    finalized[key] = Math.max(finalized[key] ?? 0, seq);
+  }
+  return {
+    ...state,
+    finalized,
+    previews: trimPreviews(
+      state.previews,
+      seq,
+      (preview) => preview.agentId === agentId
+    ),
+  };
 };
 
 const applyTranscriptItem = (
@@ -242,7 +310,10 @@ const applyDelta = (
   },
   seq: number
 ): MissionLiveState => {
-  const finalizedThrough = state.finalized[`${data.agentId}:${data.kind}`] ?? 0;
+  const finalizedThrough = Math.max(
+    state.settled,
+    state.finalized[`${data.agentId}:${data.kind}`] ?? 0
+  );
   if (state.transcript[data.messageId] || seq <= finalizedThrough) {
     return state;
   }
@@ -312,10 +383,16 @@ const applyBody = (
   const { seq } = event;
   switch (event.type) {
     case "mission.updated": {
-      return applyMission(state, event.data.mission, seq);
+      const next = applyMission(state, event.data.mission, seq);
+      return MISSION_STOPPED.has(event.data.mission.status)
+        ? settle(next, null, seq)
+        : next;
     }
     case "agent.updated": {
-      return upsert(state, "agents", event.data.agent, seq);
+      const next = upsert(state, "agents", event.data.agent, seq);
+      return AGENT_STOPPED.has(event.data.agent.status)
+        ? settle(next, event.data.agent.id, seq)
+        : next;
     }
     case "transcript.item": {
       return applyTranscriptItem(state, event.data.item, seq);
@@ -422,6 +499,22 @@ export const prependTranscript = (
   return { ...state, transcript, transcriptHasMore: hasMore };
 };
 
+/** A snapshot of a stopped mission or agent ends streaming through its cursor. */
+const settleSnapshot = (
+  state: MissionLiveState,
+  snapshot: MissionSnapshot
+): MissionLiveState => {
+  let next = MISSION_STOPPED.has(snapshot.mission.status)
+    ? settle(state, null, snapshot.cursor)
+    : state;
+  for (const agent of snapshot.agents) {
+    if (AGENT_STOPPED.has(agent.status)) {
+      next = settle(next, agent.id, snapshot.cursor);
+    }
+  }
+  return next;
+};
+
 /** Replaces state with a fresh snapshot and replays retained events newer than it. */
 export const rebase = (
   snapshot: MissionSnapshot,
@@ -436,6 +529,7 @@ export const rebase = (
       previous.transcriptHasMore && next.transcriptHasMore;
     next.previews = previous.previews;
     next.finalized = previous.finalized;
+    next.settled = previous.settled;
     next.notices = previous.notices;
     next.operations = previous.operations;
     const newest = Math.max(
@@ -463,7 +557,7 @@ export const rebase = (
       }
     }
   }
-  return applyEvents(next, log);
+  return applyEvents(settleSnapshot(next, snapshot), log);
 };
 
 type LocalEntity =

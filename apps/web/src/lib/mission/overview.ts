@@ -4,9 +4,11 @@ import type {
   Assignment,
   Handoff,
   Todo,
+  WaitingReason,
 } from "@missions/protocol/missions";
 
 import { MISSION_TODOS } from "../live/mission-state";
+import { waitingOf } from "./waiting";
 
 export interface WorkerTodos {
   agentId: string;
@@ -100,6 +102,8 @@ export interface AgentRow {
   phase: AgentPhase;
   role: Agent["role"];
   startedAt: string;
+  /** Why the agent has no output yet, while it is live. */
+  waiting: WaitingReason | null;
 }
 
 const LIVE: ReadonlySet<AgentStatus> = new Set([
@@ -142,6 +146,8 @@ export interface RowContext {
   environmentBlocked: boolean;
   /** When the user approved a plan; null while the Orchestrator still plans. */
   planApprovedAt: string | null;
+  /** The mission is in Plan mode or switching to it. Work mode has no planning phase. */
+  planning: boolean;
 }
 
 const PLANNING = "Explore and plan";
@@ -153,6 +159,12 @@ const orchestratorRow = (
   own: string | null,
   context: RowContext
 ): AgentRow => {
+  if (
+    context.planApprovedAt === null &&
+    !(context.planning || context.awaitingApproval)
+  ) {
+    return { ...row, activity: own ?? "Plans and reviews" };
+  }
   if (context.planApprovedAt === null) {
     return {
       ...row,
@@ -218,6 +230,7 @@ export const agentRows = (
         phase: phaseOf(agent, assignment),
         role: agent.role,
         startedAt: assignment?.createdAt ?? agent.createdAt,
+        waiting: waitingOf(agent),
       };
       // The Orchestrator's todos are the mission plan that Workers carry out,
       // so they never describe what the Orchestrator itself is doing.

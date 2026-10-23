@@ -7,9 +7,31 @@ import { CheckIcon, CloseIcon, PauseIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { WAITING, waitingOf } from "@/lib/mission/waiting";
+
+/** Waiting for the agent's own progress, not for the user. */
+const SELF_WAITS = new Set([
+  "startup",
+  "model",
+  "write_lease",
+  "retry",
+  "reconnecting",
+]);
 
 const AgentState = ({ agent }: { agent: Agent }) => {
   const { live } = useMission();
+  const waiting = waitingOf(agent);
+  if (waiting && SELF_WAITS.has(waiting)) {
+    return (
+      <span
+        className="flex items-center gap-tight text-2xs leading-xs text-text-tertiary"
+        title={WAITING[waiting].long}
+      >
+        <DotLoader label={WAITING[waiting].long} tone="accent" />
+        {WAITING[waiting].short}
+      </span>
+    );
+  }
   if (agent.status === "working" || agent.status === "starting") {
     return <DotLoader label="Working" tone="accent" />;
   }
