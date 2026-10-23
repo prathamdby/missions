@@ -19,11 +19,15 @@ const agent = (
   id,
   missionId: "m",
   model: { modelId: "scripted", reasoningEffort: null },
+  previousSessionIds: [],
+  promptVersion: null,
   role,
+  sessionGeneration: 0,
   sessionId: null,
   status: "idle",
   title: role === "orchestrator" ? "Orchestrator" : "Worker 1",
   updatedAt: LATER,
+  waitingReason: null,
   workingState: null,
   ...extra,
 });
@@ -153,6 +157,7 @@ const APPROVED = {
   awaitingApproval: false,
   environmentBlocked: false,
   planApprovedAt: AT,
+  planning: false,
 };
 
 describe(agentRows, () => {
@@ -189,7 +194,7 @@ describe(agentRows, () => {
       {},
       {},
       {},
-      { ...APPROVED, planApprovedAt: null }
+      { ...APPROVED, planApprovedAt: null, planning: true }
     );
     expect(exploring[0]?.activity).toBe("Explore and plan");
     expect(exploring[0]?.phase).toBe("working");
@@ -201,6 +206,23 @@ describe(agentRows, () => {
       { ...APPROVED, awaitingApproval: true, planApprovedAt: null }
     );
     expect(waiting?.phase).toBe("needs_you");
+  });
+
+  it("has no planning phase in Work mode without a plan", () => {
+    const [orch] = agentRows(
+      {
+        orch: agent("orch", "orchestrator", {
+          status: "starting",
+          waitingReason: "write_lease",
+        }),
+      },
+      {},
+      {},
+      {},
+      { ...APPROVED, planApprovedAt: null }
+    );
+    expect(orch?.activity).toBe("Plans and reviews");
+    expect(orch?.waiting).toBe("write_lease");
   });
 
   it("records the finished planning phase once the plan is approved", () => {

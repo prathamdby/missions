@@ -23,6 +23,7 @@ import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration, isMissionActive } from "@/lib/format";
 import { deliveredRequestIds, showGoalBubble } from "@/lib/mission/queue";
 import { buildTimeline } from "@/lib/mission/timeline";
+import { WAITING, waitingOf } from "@/lib/mission/waiting";
 import { useNow } from "@/lib/use-now";
 
 const PAGE_SIZE = 100;
@@ -67,7 +68,9 @@ const turnStart = (transcript: readonly TranscriptItem[], fallback: string) => {
   let start = fallback;
   for (const item of transcript) {
     if (
-      (item.kind === "user" || item.kind === "system") &&
+      (item.kind === "user" ||
+        item.kind === "system" ||
+        item.kind === "agent_message") &&
       item.createdAt > start
     ) {
       start = item.createdAt;
@@ -76,7 +79,11 @@ const turnStart = (transcript: readonly TranscriptItem[], fallback: string) => {
   return start;
 };
 
-/** Paper QAU working line: accent loader, phase, and how long this turn has run. */
+/**
+ * Paper QAU working line: accent loader, phase, and how long this turn has
+ * run. A known waiting reason (startup, model, write access, provider retry)
+ * replaces the generic phase.
+ */
 const WorkingLine = ({
   agentId,
   transcript,
@@ -86,14 +93,23 @@ const WorkingLine = ({
 }) => {
   const { live } = useMission();
   const now = useNow();
-  const working = Object.values(live.agents).some(
-    (agent) => agent.status === "working" && (!agentId || agent.id === agentId)
+  const agents = Object.values(live.agents).filter(
+    (agent) => !agentId || agent.id === agentId
   );
-  if (!(working && isMissionActive(live.mission.status))) {
+  const working = agents.some(
+    (agent) => agent.status === "working" || agent.status === "starting"
+  );
+  const waiting = agents
+    .map((agent) => waitingOf(agent))
+    .find((reason) => reason !== null);
+  if (!((working || waiting) && isMissionActive(live.mission.status))) {
     return null;
   }
-  const label =
+  let label =
     live.mission.status === "exploring" ? "Exploring the codebase" : "Working";
+  if (waiting) {
+    label = WAITING[waiting].long;
+  }
   const started = Date.parse(turnStart(transcript, live.mission.createdAt));
   return (
     <div className="flex h-2xl shrink-0 items-center gap-control">
@@ -118,10 +134,16 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
   const preserveFrom = useRef<number | null>(null);
   const observedHeight = useRef<number | null>(null);
 
+  // An agent message is one record shown in both participants' views.
   const transcript = useMemo(
     () =>
       Object.values(live.transcript).filter(
-        (item) => !agentId || item.agentId === agentId
+        (item) =>
+          !agentId ||
+          item.agentId === agentId ||
+          (item.kind === "agent_message" &&
+            (item.sender?.agentId === agentId ||
+              item.recipient?.agentId === agentId))
       ),
     [agentId, live.transcript]
   );
@@ -143,6 +165,7 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
         (entry) =>
           !agentId ||
           entry.agentId === agentId ||
+          entry.kind === "agent_message" ||
           (!worker &&
             (entry.agentId === null ||
               entry.kind === "permission" ||

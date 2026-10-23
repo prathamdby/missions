@@ -37,11 +37,40 @@ const item = (
 ): NewTranscriptItem => ({
   ...base,
   isError: false,
+  purpose: null,
+  recipient: null,
   requestId: null,
+  sender: null,
   toolName: null,
   toolUseId: null,
   ...fields,
 });
+
+const agentMessageItemId = (queueItemId: string) => `${queueItemId}:message`;
+
+/**
+ * The one canonical record of an agent-to-agent message. Both participants'
+ * views project it; the recipient's native echo never adds a second record.
+ */
+export const agentMessageItem = (
+  base: Base,
+  message: {
+    queueItemId: string;
+    purpose: NonNullable<NewTranscriptItem["purpose"]>;
+    sender: NonNullable<NewTranscriptItem["sender"]>;
+    recipient: NonNullable<NewTranscriptItem["recipient"]>;
+    text: string;
+  }
+) =>
+  item(base, {
+    id: agentMessageItemId(message.queueItemId),
+    kind: "agent_message",
+    purpose: message.purpose,
+    recipient: message.recipient,
+    requestId: message.queueItemId,
+    sender: message.sender,
+    text: message.text,
+  });
 
 export const toolCallItem = (
   base: Base,
@@ -116,16 +145,25 @@ interface PendingDelta {
   text: string;
 }
 
-/** Batches streaming deltas so the event log grows per interval, not per token. */
+const DELTA_INTERVAL_MS = 50;
+/** Bounds the started-item memory; a forgotten item only loses its immediate first flush. */
+const STARTED_LIMIT = 512;
+
+/**
+ * Batches streaming deltas so the event log grows per interval, not per
+ * token. The first delta of each item is published immediately: time to
+ * first visible text should not pay the batching interval.
+ */
 export class DeltaCoalescer {
   readonly #pending = new Map<string, PendingDelta>();
+  readonly #started = new Map<string, string>();
   readonly #flush: (itemId: string, delta: PendingDelta) => void;
   readonly #intervalMs: number;
   #timer: NodeJS.Timeout | null = null;
 
   constructor(
     flush: (itemId: string, delta: PendingDelta) => void,
-    intervalMs = 150
+    intervalMs = DELTA_INTERVAL_MS
   ) {
     this.#flush = flush;
     this.#intervalMs = intervalMs;
@@ -138,6 +176,20 @@ export class DeltaCoalescer {
     text: string,
     generation: string
   ) {
+    if (!text) {
+      return;
+    }
+    if (!this.#started.has(itemId)) {
+      this.#started.set(itemId, generation);
+      if (this.#started.size > STARTED_LIMIT) {
+        const [oldest] = this.#started.keys();
+        if (oldest !== undefined) {
+          this.#started.delete(oldest);
+        }
+      }
+      this.#flush(itemId, { agentId, generation, kind, text });
+      return;
+    }
     const existing = this.#pending.get(itemId);
     if (existing) {
       existing.text += text;
@@ -150,12 +202,19 @@ export class DeltaCoalescer {
   /** The authoritative item arrived: unsent preview text is no longer needed. */
   drop(itemId: string) {
     this.#pending.delete(itemId);
+    // Keep the started mark: a late delta for a finalized item must not
+    // resurrect a preview through the immediate path.
   }
 
   dropGeneration(generation: string) {
     for (const [id, delta] of this.#pending) {
       if (delta.generation === generation) {
         this.#pending.delete(id);
+      }
+    }
+    for (const [id, owner] of this.#started) {
+      if (owner === generation) {
+        this.#started.delete(id);
       }
     }
   }
@@ -180,5 +239,6 @@ export class DeltaCoalescer {
       this.#timer = null;
     }
     this.#pending.clear();
+    this.#started.clear();
   }
 }

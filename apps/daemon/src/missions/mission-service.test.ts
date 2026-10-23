@@ -93,10 +93,16 @@ const boot = async (
 const waitFor = async <T>(read: () => T, done: (value: T) => boolean) =>
   await pollUntil(() => Promise.resolve(read()), done, Date.now() + 3000, 10);
 
+interface MissionOptions {
+  autonomy?: "off" | "low" | "medium" | "high";
+  executionMode?: "work" | "plan";
+}
+
 const createMission = async (
   booted: Awaited<ReturnType<typeof boot>>,
   suffix = "1",
-  workspacePath?: string
+  workspacePath?: string,
+  options: MissionOptions = {}
 ) => {
   const repo = workspacePath ?? (await gitRepo());
   const added = await booted.daemon.projects.addLocal({
@@ -107,7 +113,8 @@ const createMission = async (
     throw new Error("project not added");
   }
   const snapshot = await booted.daemon.missions.create({
-    autonomy: "high",
+    autonomy: options.autonomy ?? "high",
+    executionMode: options.executionMode,
     goal: "Add a greeting file",
     operationId: `create-mission-${suffix}`,
     orchestrator: MODEL,
@@ -118,8 +125,16 @@ const createMission = async (
   return { ...booted, missionId: snapshot.mission.id, repo };
 };
 
-const startMission = async (config?: DaemonConfig) => {
-  const created = await createMission(await boot(config));
+const startMission = async (
+  config?: DaemonConfig,
+  options: MissionOptions = {}
+) => {
+  const created = await createMission(
+    await boot(config),
+    "1",
+    undefined,
+    options
+  );
   const orchestrator = await waitFor(
     () => created.runtimes[0],
     (r) => (r?.submitted.length ?? 0) > 0
@@ -130,15 +145,44 @@ const startMission = async (config?: DaemonConfig) => {
   return { ...created, orchestrator };
 };
 
-const approvePlan = async (ctx: Awaited<ReturnType<typeof startMission>>) => {
-  await ctx.orchestrator.tool("propose_plan", {
-    markdown: "1. Write the file",
-    title: "Greeting",
+/** A Droid permission no autonomy level approves, so the user must decide. */
+const UNCLASSIFIED: PermissionToolUse = {
+  confirmationType: "custom",
+  details: { type: "custom" },
+  input: {},
+  toolName: "Mystery",
+  toolUseId: "mystery",
+};
+
+const proposePlan = (
+  runtime: FakeRuntime,
+  plan = "1. Write",
+  title = "Greeting",
+  toolUseId = "spec-1"
+) =>
+  runtime.options.onPermission({
+    agentId: runtime.options.agentId,
+    toolUses: [
+      {
+        confirmationType: "exit_spec_mode",
+        details: { plan, title, type: "exit_spec_mode" },
+        input: {},
+        toolName: "ExitSpecMode",
+        toolUseId,
+      },
+    ],
   });
-  return ctx.daemon.missions.decidePlan(ctx.missionId, {
-    approve: true,
-    planRevision: 1,
-  });
+
+/** Waits until the outbox handed a message to the runner's native queue. */
+const nativelyQueued = async (daemon: Daemon, id: string) => {
+  const item = await waitFor(
+    () => daemon.store.queue.get(id),
+    (entry) => entry?.state === "queued"
+  );
+  if (item?.state !== "queued") {
+    throw new Error(`${id} was not delivered`);
+  }
+  return item;
 };
 
 const saveCleanupOperation = (
@@ -237,6 +281,7 @@ describe("mission service", () => {
         id: "replayed-use",
         requestId: null,
         role: "assistant",
+        sender: null,
         text: "",
         thinking: "",
         toolResults: [],
@@ -255,6 +300,7 @@ describe("mission service", () => {
         id: "replayed-result",
         requestId: null,
         role: "user",
+        sender: null,
         text: "",
         thinking: "",
         toolResults: [
@@ -275,7 +321,6 @@ describe("mission service", () => {
 
   it("imports native todos from complete SDK messages, including worker checklists", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "Read",
       needsWrite: false,
@@ -293,6 +338,7 @@ describe("mission service", () => {
         id: "native-use",
         requestId: null,
         role: "assistant",
+        sender: null,
         text: "",
         thinking: "",
         toolResults: [],
@@ -311,6 +357,7 @@ describe("mission service", () => {
         id: "native-result",
         requestId: null,
         role: "user",
+        sender: null,
         text: "",
         thinking: "",
         toolResults: [
@@ -330,7 +377,6 @@ describe("mission service", () => {
 
   it("resumes original worker sessions across repeated pauses without creating replacement agents", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "Read",
       needsWrite: false,
@@ -392,7 +438,6 @@ describe("mission service", () => {
     if (!orchestrator) {
       throw new Error("Orchestrator did not start");
     }
-    await approvePlan({ ...ctx, orchestrator });
     await orchestrator.tool("dispatch_worker", {
       instructions: "Read",
       needsWrite: false,
@@ -425,7 +470,6 @@ describe("mission service", () => {
 
   it("updates the active native session and future worker preference, not defaults or existing workers", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "Read only",
       needsWrite: false,
@@ -830,22 +874,33 @@ describe("mission service", () => {
     ]);
   });
 
-  it("blocks writes until the exact plan revision is approved", async () => {
-    const ctx = await startMission();
+  it("blocks writes in Plan mode until the live plan revision is approved", async () => {
+    const ctx = await startMission(undefined, { executionMode: "plan" });
     const { daemon, missionId, orchestrator, repo } = ctx;
     const before = await orchestrator.options.onPermission({
       agentId: orchestrator.options.agentId,
       toolUses: [createEdit(`${repo}/a.txt`)],
     });
-    await orchestrator.tool("propose_plan", {
-      markdown: "1. Write",
-      title: "Greeting",
-    });
-    expect(daemon.missions.get(missionId).status).toBe("awaiting_approval");
+    const decision = proposePlan(orchestrator);
+    const [plan] = daemon.missions.snapshot(missionId).plans;
+    expect([
+      orchestrator.interactionModes,
+      daemon.missions.get(missionId).status,
+      daemon.store.getAgent(orchestrator.options.agentId)?.status,
+      plan?.actionable,
+      plan?.toolUseId,
+    ]).toStrictEqual([
+      ["spec"],
+      "awaiting_approval",
+      "waiting_permission",
+      true,
+      "spec-1",
+    ]);
     expect(() =>
       daemon.missions.decidePlan(missionId, { approve: true, planRevision: 2 })
     ).toThrow(/not found/iu);
     daemon.missions.decidePlan(missionId, { approve: true, planRevision: 1 });
+    await expect(decision).resolves.toBeTruthy();
     const after = await orchestrator.options.onPermission({
       agentId: orchestrator.options.agentId,
       toolUses: [createEdit(`${repo}/a.txt`)],
@@ -854,22 +909,13 @@ describe("mission service", () => {
       before,
       after,
       daemon.missions.get(missionId).status,
-    ]).toStrictEqual([false, true, "running"]);
-    expect(
-      daemon.store.getAgent(orchestrator.options.agentId)?.holdsWriteLease
-    ).toBeTruthy();
+      daemon.missions.get(missionId).executionMode,
+      daemon.store.getAgent(orchestrator.options.agentId)?.holdsWriteLease,
+    ]).toStrictEqual([false, true, "running", "work", true]);
   });
 
   it("runs a Worker in the shared workspace and returns its handoff", async () => {
     const ctx = await startMission();
-    await expect(
-      ctx.orchestrator.tool("dispatch_worker", {
-        instructions: "x",
-        needsWrite: true,
-        title: "Early",
-      })
-    ).rejects.toThrow(/approves a plan/u);
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "Write a.txt",
       needsWrite: true,
@@ -896,6 +942,235 @@ describe("mission service", () => {
         s.text.includes("finished assignment")
       )
     ).toBeTruthy();
+  });
+
+  it("delivers worker messages and handoffs through one outbox with sender identity", async () => {
+    const ctx = await startMission();
+    ctx.orchestrator.consume(`${ctx.missionId}:goal`);
+    await ctx.orchestrator.tool("dispatch_worker", {
+      instructions: "Research",
+      needsWrite: false,
+      title: "Research",
+    });
+    const worker = await waitFor(
+      () => ctx.runtimes[1],
+      (runtime) => (runtime?.submitted.length ?? 0) > 0
+    );
+    if (!worker) {
+      throw new Error("Missing worker");
+    }
+    const send = (text: string) =>
+      worker.tool("send_message", { messageId: "m1", text, to: "main" });
+    const first = await send("Found the cause");
+    const replay = await send("Found the cause");
+    await expect(send("Something else")).rejects.toThrow(/different message/u);
+    const id = `msg:${worker.options.agentId}:m1`;
+    await nativelyQueued(ctx.daemon, id);
+    ctx.orchestrator.consume(id);
+    const delivered = ctx.orchestrator.submitted.filter((s) => s.id === id);
+    await worker.tool("submit_handoff", {
+      checks: [],
+      filesChanged: [],
+      followUps: [],
+      summary: "Done",
+    });
+    const [assignment] = ctx.daemon.missions.snapshot(
+      ctx.missionId
+    ).assignments;
+    const handoff = await nativelyQueued(
+      ctx.daemon,
+      `handoff:${assignment?.id ?? ""}`
+    );
+    const { transcript } = ctx.daemon.missions.snapshot(ctx.missionId);
+    expect({
+      first: String(first).includes("accepted"),
+      handoff: [handoff.origin, handoff.purpose, handoff.sender?.role],
+      records: transcript
+        .filter((item) => item.kind === "agent_message")
+        .map((item) => [item.purpose, item.sender?.role, item.recipient?.role]),
+      replay: String(replay).includes("not sent again"),
+      sender: delivered.map((s) => s.options.sender?.kind),
+      userEcho: transcript.some(
+        (item) => item.kind === "user" && item.requestId === id
+      ),
+    }).toStrictEqual({
+      first: true,
+      handoff: ["agent", "handoff", "worker"],
+      records: [
+        ["assignment", "orchestrator", "worker"],
+        ["message", "worker", "orchestrator"],
+        ["handoff", "worker", "orchestrator"],
+      ],
+      replay: true,
+      sender: ["agent"],
+      userEcho: false,
+    });
+  });
+
+  it("keeps accepted messages through pause and delivers them once, in order, after resume", async () => {
+    const ctx = await startMission();
+    const { daemon, missionId, orchestrator } = ctx;
+    orchestrator.consume(`${missionId}:goal`);
+    await orchestrator.options.onPermission({
+      agentId: orchestrator.options.agentId,
+      toolUses: [createEdit(`${ctx.repo}/a.txt`)],
+    });
+    const submit = (operationId: string, plan = false) =>
+      daemon.missions.submitMessage(missionId, {
+        executionMode: plan ? "plan" : undefined,
+        mode: "steer",
+        operationId,
+        text: operationId,
+      });
+    await submit("plan-msg", true);
+    const after = await submit("after-msg");
+    const dropped = await submit("drop-msg");
+    await yieldImmediate();
+    const edit = vi.spyOn(orchestrator, "edit");
+    const remove = vi.spyOn(orchestrator, "remove");
+    const edited = await daemon.missions.editQueueItem(missionId, after.id, {
+      expectedRevision: after.revision,
+      operationId: "after-edit",
+      text: "after-edit",
+    });
+    await daemon.missions.removeQueueItem(
+      missionId,
+      dropped.id,
+      dropped.revision
+    );
+    const held = ["plan-msg", "after-msg", "after-edit", "drop-msg"].map(
+      (id) => daemon.store.queue.get(id)?.state
+    );
+    expect({
+      edited,
+      held,
+      nativeCalls: edit.mock.calls.length + remove.mock.calls.length,
+      pending: daemon.missions.get(missionId).pendingExecutionMode,
+    }).toStrictEqual({
+      edited: { outcome: "replaced", replacementId: "after-edit" },
+      held: ["accepted", "removed", "accepted", "removed"],
+      nativeCalls: 0,
+      pending: "plan",
+    });
+    const paused = await daemon.missions.pause(missionId, {
+      expectedRevision: daemon.missions.get(missionId).revision,
+      operationId: "outbox-pause",
+    });
+    expect(daemon.store.queue.get("plan-msg")?.state).toBe("accepted");
+    await daemon.missions.resume(missionId, {
+      expectedRevision: paused.revision,
+      operationId: "outbox-resume",
+    });
+    const restarted = await waitFor(
+      () => ctx.runtimes[1],
+      (runtime) =>
+        runtime?.submitted.some((entry) => entry.id === "after-edit") ?? false
+    );
+    expect({
+      mode: daemon.missions.get(missionId).executionMode,
+      native: restarted?.interactionModes,
+      order: restarted?.submitted.map((entry) =>
+        entry.id.startsWith("sys:") ? "sys" : entry.id
+      ),
+    }).toStrictEqual({
+      mode: "plan",
+      native: ["spec"],
+      order: ["sys", "plan-msg", "after-edit"],
+    });
+  });
+
+  it("keeps a failed native mode switch pending and retries it before delivery", async () => {
+    const ctx = await startMission();
+    const { daemon, missionId, orchestrator } = ctx;
+    orchestrator.consume(`${missionId}:goal`);
+    let failing = true;
+    orchestrator.failInteractionMode = () => failing;
+    await daemon.missions.submitMessage(missionId, {
+      executionMode: "plan",
+      mode: "steer",
+      operationId: "switch-msg",
+      text: "Plan this",
+    });
+    await waitFor(
+      () => daemon.log.replay(missionId, 0),
+      (events) =>
+        events.some(
+          (event) =>
+            event.type === "notice" &&
+            event.data.notice.message.includes("Could not switch")
+        )
+    );
+    const held = daemon.missions.get(missionId);
+    const heldState = daemon.store.queue.get("switch-msg")?.state;
+    failing = false;
+    await daemon.missions.submitMessage(missionId, {
+      mode: "steer",
+      operationId: "switch-next",
+      text: "Next",
+    });
+    await nativelyQueued(daemon, "switch-msg");
+    expect({
+      after: daemon.missions.get(missionId).executionMode,
+      held: [held.executionMode, held.pendingExecutionMode, heldState],
+      native: orchestrator.interactionModes,
+    }).toStrictEqual({
+      after: "plan",
+      held: ["work", "plan", "accepted"],
+      native: ["spec"],
+    });
+  });
+
+  it("clears live plan approvals left by a crashed daemon", async () => {
+    const ctx = await startMission(undefined, { executionMode: "plan" });
+    const { daemon, missionId, orchestrator } = ctx;
+    proposePlan(orchestrator);
+    const [live] = daemon.missions.snapshot(missionId).plans;
+    vi.spyOn(daemon.supervisor, "stopRecord").mockResolvedValue({
+      stopped: true,
+      survivors: [],
+    });
+    await daemon.missions.recover();
+    const [recovered] = daemon.missions.snapshot(missionId).plans;
+    expect([live?.actionable, recovered?.actionable]).toStrictEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it("ends a plan approval with its native request and asks for a fresh one after resume", async () => {
+    const ctx = await startMission(undefined, { executionMode: "plan" });
+    const { daemon, missionId, orchestrator } = ctx;
+    const decision = proposePlan(orchestrator);
+    const paused = await daemon.missions.pause(missionId, {
+      expectedRevision: daemon.missions.get(missionId).revision,
+      operationId: "plan-pause",
+    });
+    await expect(decision).resolves.toBeFalsy();
+    const [ended] = daemon.missions.snapshot(missionId).plans;
+    expect([ended?.status, ended?.actionable]).toStrictEqual([
+      "proposed",
+      false,
+    ]);
+    await daemon.missions.resume(missionId, {
+      expectedRevision: paused.revision,
+      operationId: "plan-resume",
+    });
+    expect(() =>
+      daemon.missions.decidePlan(missionId, { approve: true, planRevision: 1 })
+    ).toThrow(/no longer waiting/u);
+    const restarted = await waitFor(
+      () => ctx.runtimes[1],
+      (runtime) => (runtime?.submitted.length ?? 0) > 0
+    );
+    const fresh = proposePlan(restarted ?? orchestrator, "1. Write", "Again");
+    daemon.missions.decidePlan(missionId, { approve: true, planRevision: 2 });
+    await expect(fresh).resolves.toBeTruthy();
+    expect([
+      restarted?.submitted[0]?.text.includes(
+        "present it again with ExitSpecMode"
+      ),
+      daemon.missions.get(missionId).executionMode,
+    ]).toStrictEqual([true, "work"]);
   });
 
   it("keeps questions and todos durable and rejects stale answers", async () => {
@@ -946,6 +1221,7 @@ describe("mission service", () => {
       operationId: "queued-msg-1",
       text: "later",
     });
+    await nativelyQueued(daemon, "queued-msg-1");
     const pendingAnswer = orchestrator.options.onAskUser({
       agentId: orchestrator.options.agentId,
       questions: [
@@ -998,7 +1274,7 @@ describe("mission service", () => {
       operationId: "race-msg",
       text: "first",
     });
-    const revision = daemon.store.queue.get("race-msg")?.revision ?? -1;
+    const { revision } = await nativelyQueued(daemon, "race-msg");
     const edit = (operationId: string, expectedRevision = revision) =>
       daemon.missions.editQueueItem(missionId, "race-msg", {
         expectedRevision,
@@ -1027,67 +1303,63 @@ describe("mission service", () => {
     });
   });
 
-  it("never replays a transport-ambiguous goal when a failed mission resumes", async () => {
+  it("never replays a transport-ambiguous goal and retries it only on request", async () => {
     let failing = true;
-    const runtimes: FakeRuntime[] = [];
-    const daemon = await createDaemon({
-      config: await testConfig(),
-      createRuntime: (options) => {
-        const runtime = new FakeRuntime(options);
-        runtime.failSubmits = () => failing;
-        runtimes.push(runtime);
-        return runtime;
-      },
-      version: "test",
+    const booted = await boot(undefined, (runtime) => {
+      runtime.failSubmits = () => failing;
     });
-    opened.push(daemon);
-    const repo = await gitRepo();
-    const added = await daemon.projects.addLocal({
-      operationId: "add-project-1",
-      path: repo,
-    });
-    if (added.status !== "added") {
-      throw new Error("project not added");
-    }
-    const { mission } = await daemon.missions.create({
-      autonomy: "high",
-      goal: "Add a greeting file",
-      operationId: "create-mission-1",
-      orchestrator: MODEL,
-      projectId: added.project.id,
-      worker: MODEL,
-      workspace: { mode: "current_checkout" },
-    });
-    const failed = await waitFor(
-      () => daemon.missions.get(mission.id),
-      (entry) => entry.status === "failed"
+    const ctx = await createMission(booted);
+    const goalId = `${ctx.missionId}:goal`;
+    const goal = await waitFor(
+      () => ctx.daemon.store.queue.get(goalId),
+      (item) => item?.state === "unknown"
     );
-    const goal = daemon.store.queue.get(`${mission.id}:goal`);
-    expect([failed.lastError?.code, goal?.state]).toStrictEqual([
-      "environment",
-      "unknown",
-    ]);
-    failing = false;
-    const resumed = await daemon.missions.resume(mission.id, {
-      expectedRevision: failed.revision,
-      operationId: "retry-op-1",
-    });
-    const orchestrator = runtimes.at(-1);
-    await waitFor(
-      () => orchestrator?.submitted.length ?? 0,
-      (count) => count > 0
-    );
+    const snapshot = ctx.daemon.missions.snapshot(ctx.missionId);
     expect({
-      goalState: daemon.store.queue.get(`${mission.id}:goal`)?.state,
-      replayedGoal: orchestrator?.submitted.some(
-        (entry) => entry.id === `${mission.id}:goal`
-      ),
-      status: resumed.status,
+      goalState: goal?.state,
+      notice: ctx.daemon.log
+        .replay(ctx.missionId, 0)
+        .some(
+          (event) =>
+            event.type === "notice" &&
+            event.data.notice.message.includes("uncertain")
+        ),
+      status: snapshot.mission.status,
+    }).toStrictEqual({ goalState: "unknown", notice: true, status: "running" });
+    failing = false;
+    const [orchestrator] = ctx.runtimes;
+    const retry = await ctx.daemon.missions.retryQueueItem(
+      ctx.missionId,
+      goalId,
+      { expectedRevision: goal?.revision ?? -1, operationId: "goal-retry" }
+    );
+    const replay = await ctx.daemon.missions.retryQueueItem(
+      ctx.missionId,
+      goalId,
+      { expectedRevision: goal?.revision ?? -1, operationId: "goal-retry" }
+    );
+    await nativelyQueued(ctx.daemon, retry.id);
+    expect({
+      replay: replay.id,
+      retryOf: retry.retryOf,
+      sent: orchestrator?.submitted.map((entry) => entry.id),
     }).toStrictEqual({
-      goalState: "unknown",
-      replayedGoal: false,
-      status: "exploring",
+      replay: retry.id,
+      retryOf: goalId,
+      sent: [retry.id],
     });
+    await expect(
+      ctx.daemon.missions.retryQueueItem(ctx.missionId, retry.id, {
+        expectedRevision: ctx.daemon.store.queue.get(retry.id)?.revision ?? -1,
+        operationId: "retry-queued",
+      })
+    ).rejects.toThrow(/failed|uncertain|unknown/iu);
+    await expect(
+      ctx.daemon.missions.retryQueueItem(ctx.missionId, goalId, {
+        expectedRevision: ctx.daemon.store.queue.get(goalId)?.revision ?? -1,
+        operationId: "goal-retry-again",
+      })
+    ).rejects.toThrow(/already retried/u);
   });
 
   it("reports a failed stop and blocks new work until processes are gone", async () => {
@@ -1320,8 +1592,8 @@ describe("mission service", () => {
       toolUses: [createEdit(`${ctx.repo}/a.txt`)],
     });
     await expect(
-      orchestrator.tool("propose_plan", { markdown: "stale", title: "Old" })
-    ).rejects.toThrow(/paused/u);
+      proposePlan(orchestrator, "stale", "Old", "old-spec")
+    ).resolves.toBeFalsy();
     const answer = await orchestrator.options.onAskUser({
       agentId: orchestrator.options.agentId,
       questions: [],
@@ -1335,8 +1607,7 @@ describe("mission service", () => {
   });
 
   it("uses only the latest plan and enforces read-only worker assignments", async () => {
-    const ctx = await startMission();
-    await approvePlan(ctx);
+    const ctx = await startMission(undefined, { executionMode: "plan" });
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "Analyze only",
       needsWrite: false,
@@ -1350,11 +1621,21 @@ describe("mission service", () => {
       agentId: worker.options.agentId,
       toolUses: [createEdit(`${ctx.repo}/a.txt`)],
     });
-    await ctx.orchestrator.tool("propose_plan", {
-      markdown: "Different changes",
-      title: "Revision 2",
-    });
-    const oldApproval = await ctx.orchestrator.options.onPermission({
+    const first = proposePlan(ctx.orchestrator, "Changes", "Revision 1");
+    const second = proposePlan(
+      ctx.orchestrator,
+      "Different changes",
+      "Revision 2",
+      "spec-2"
+    );
+    const superseded = await first;
+    expect(() =>
+      ctx.daemon.missions.decidePlan(ctx.missionId, {
+        approve: true,
+        planRevision: 1,
+      })
+    ).toThrow(/already decided or replaced/u);
+    const planWrite = await ctx.orchestrator.options.onPermission({
       agentId: ctx.orchestrator.options.agentId,
       toolUses: [createEdit(`${ctx.repo}/a.txt`)],
     });
@@ -1364,17 +1645,41 @@ describe("mission service", () => {
         needsWrite: true,
         title: "Blocked",
       })
-    ).rejects.toThrow(/approves a plan/u);
+    ).rejects.toThrow(/Plan mode is read-only/u);
     expect([
+      superseded,
       readOnlyWrite,
-      oldApproval,
+      planWrite,
       ctx.daemon.missions.get(ctx.missionId).status,
-    ]).toStrictEqual([false, false, "awaiting_approval"]);
+      ctx.daemon.missions
+        .snapshot(ctx.missionId)
+        .plans.map((plan) => plan.status),
+    ]).toStrictEqual([
+      false,
+      false,
+      false,
+      "awaiting_approval",
+      ["superseded", "proposed"],
+    ]);
+    ctx.daemon.missions.decidePlan(ctx.missionId, {
+      approve: false,
+      feedback: "Smaller",
+      planRevision: 2,
+    });
+    const rejected = await second;
+    const feedback = await waitFor(
+      () => ctx.orchestrator.submitted.at(-1)?.text ?? "",
+      (text) => text.includes("requested changes")
+    );
+    expect([
+      rejected,
+      feedback.includes("Smaller"),
+      ctx.daemon.missions.get(ctx.missionId).executionMode,
+    ]).toStrictEqual([false, true, "plan"]);
   });
 
   it("keeps the writer lease until disposal is confirmed", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     await ctx.orchestrator.options.onPermission({
       agentId: ctx.orchestrator.options.agentId,
       toolUses: [createEdit(`${ctx.repo}/a.txt`)],
@@ -1418,8 +1723,6 @@ describe("mission service", () => {
       throw new Error("Missing second runtime");
     }
     const second = { ...secondCreated, orchestrator: secondRuntime };
-    await approvePlan(first);
-    await approvePlan(second);
     await first.orchestrator.options.onPermission({
       agentId: first.orchestrator.options.agentId,
       toolUses: [createEdit(`${first.repo}/a.txt`)],
@@ -1442,7 +1745,6 @@ describe("mission service", () => {
   it("reserves a handed-off worker slot until successful retirement", async () => {
     const ctx = await startMission();
     ctx.daemon.settings.update({ maxConcurrentWorkers: 1 });
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "First",
       needsWrite: true,
@@ -1492,7 +1794,6 @@ describe("mission service", () => {
   it("a failed retirement keeps queued assignments blocked", async () => {
     const ctx = await startMission();
     ctx.daemon.settings.update({ maxConcurrentWorkers: 1 });
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "First",
       needsWrite: true,
@@ -1532,7 +1833,6 @@ describe("mission service", () => {
 
   it("completion cancels decisions and confirms quiescence before publishing", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     const pendingQuestion = ctx.orchestrator.options.onAskUser({
       agentId: ctx.orchestrator.options.agentId,
       questions: [],
@@ -1540,15 +1840,7 @@ describe("mission service", () => {
     });
     const permission = ctx.orchestrator.options.onPermission({
       agentId: ctx.orchestrator.options.agentId,
-      toolUses: [
-        {
-          confirmationType: "exec",
-          details: { command: "git push", type: "exec" },
-          input: {},
-          toolName: "Execute",
-          toolUseId: "push",
-        },
-      ],
+      toolUses: [UNCLASSIFIED],
     });
     await waitFor(
       () => ctx.daemon.missions.snapshot(ctx.missionId).permissions.length,
@@ -1643,10 +1935,8 @@ describe("mission service", () => {
       operationId: "mode-item",
       text: "original",
     };
-    const item = await ctx.daemon.missions.submitMessage(
-      ctx.missionId,
-      request
-    );
+    await ctx.daemon.missions.submitMessage(ctx.missionId, request);
+    const item = await nativelyQueued(ctx.daemon, "mode-item");
     const entered = Promise.withResolvers<undefined>();
     const release = Promise.withResolvers<undefined>();
     const change = ctx.orchestrator.changeMode.bind(ctx.orchestrator);
@@ -1694,11 +1984,12 @@ describe("mission service", () => {
 
   it("delegates editing once with durable linkage already established", async () => {
     const ctx = await startMission();
-    const item = await ctx.daemon.missions.submitMessage(ctx.missionId, {
+    await ctx.daemon.missions.submitMessage(ctx.missionId, {
       mode: "queue",
       operationId: "edit-owner",
       text: "old",
     });
+    const item = await nativelyQueued(ctx.daemon, "edit-owner");
     const edit = ctx.orchestrator.edit.bind(ctx.orchestrator);
     const editing = vi
       .spyOn(ctx.orchestrator, "edit")
@@ -1745,6 +2036,7 @@ describe("mission service", () => {
               id: "restored-goal",
               requestId: goalId,
               role: "user" as const,
+              sender: null,
               text: "Add a greeting file",
               thinking: "",
               toolResults: [],
@@ -1773,7 +2065,7 @@ describe("mission service", () => {
     }
   });
 
-  it("retries a goal only when startup proved it was never submitted", async () => {
+  it("keeps a goal accepted when startup proved it was never submitted", async () => {
     let failStart = true;
     const booted = await boot(undefined, (runtime) => {
       const start = runtime.start.bind(runtime);
@@ -1792,12 +2084,16 @@ describe("mission service", () => {
     expect([
       ctx.runtimes[0]?.closed,
       ctx.daemon.store.queue.get(`${ctx.missionId}:goal`)?.state,
-    ]).toStrictEqual([true, "failed"]);
+    ]).toStrictEqual([true, "accepted"]);
     failStart = false;
     await ctx.daemon.missions.resume(ctx.missionId, {
       expectedRevision: failed.revision,
       operationId: "retry-initialization",
     });
+    await waitFor(
+      () => ctx.runtimes[1]?.submitted.length ?? 0,
+      (count) => count > 0
+    );
     expect(ctx.runtimes[1]?.submitted.map((item) => item.id)).toStrictEqual([
       `${ctx.missionId}:goal`,
     ]);
@@ -1806,7 +2102,6 @@ describe("mission service", () => {
   it("unexpected worker exit settles the assignment and pumps only after disposal", async () => {
     const ctx = await startMission();
     ctx.daemon.settings.update({ maxConcurrentWorkers: 1 });
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "First",
       needsWrite: true,
@@ -1850,7 +2145,6 @@ describe("mission service", () => {
 
   it("tool call correlation is agent-scoped and discarded with its generation", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "Work",
       needsWrite: true,
@@ -1950,10 +2244,7 @@ describe("mission service", () => {
       expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
       operationId: "recover-confirmed",
     });
-    expect([resumed.status, repository.list()]).toStrictEqual([
-      "exploring",
-      [],
-    ]);
+    expect([resumed.status, repository.list()]).toStrictEqual(["running", []]);
   });
 
   it("rejects replaying another mission's message operation ID", async () => {
@@ -1975,11 +2266,12 @@ describe("mission service", () => {
 
   it("retains a failed edit outcome instead of retrying cancellation on duplicate", async () => {
     const ctx = await startMission();
-    const item = await ctx.daemon.missions.submitMessage(ctx.missionId, {
+    await ctx.daemon.missions.submitMessage(ctx.missionId, {
       mode: "queue",
       operationId: "unconfirmed-original",
       text: "old",
     });
+    const item = await nativelyQueued(ctx.daemon, "unconfirmed-original");
     const edit = vi
       .spyOn(ctx.orchestrator, "edit")
       .mockResolvedValue("delete_unconfirmed");
@@ -2013,7 +2305,6 @@ describe("mission service", () => {
 
   it("retiring one worker invalidates only its pending decisions", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "Work",
       needsWrite: true,
@@ -2026,20 +2317,13 @@ describe("mission service", () => {
     if (!worker) {
       throw new Error("Missing worker");
     }
-    const use: PermissionToolUse = {
-      confirmationType: "exec",
-      details: { command: "git push", type: "exec" },
-      input: {},
-      toolName: "Execute",
-      toolUseId: "push",
-    };
     const orchestratorDecision = ctx.orchestrator.options.onPermission({
       agentId: ctx.orchestrator.options.agentId,
-      toolUses: [use],
+      toolUses: [UNCLASSIFIED],
     });
     const workerDecision = worker.options.onPermission({
       agentId: worker.options.agentId,
-      toolUses: [use],
+      toolUses: [UNCLASSIFIED],
     });
     await waitFor(
       () => ctx.daemon.missions.snapshot(ctx.missionId).permissions.length,
@@ -2069,7 +2353,6 @@ describe("mission service", () => {
 
   it("retirement cancels lease waits without handing off a still-running writer", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     await ctx.orchestrator.options.onPermission({
       agentId: ctx.orchestrator.options.agentId,
       toolUses: [createEdit(`${ctx.repo}/a.txt`)],
@@ -2167,7 +2450,6 @@ describe("mission service", () => {
     }
     const ctx = { ...created, orchestrator };
     ctx.daemon.settings.update({ maxConcurrentWorkers: 1 });
-    await approvePlan(ctx);
     await orchestrator.tool("dispatch_worker", {
       instructions: "First",
       needsWrite: true,
@@ -2323,7 +2605,6 @@ describe("mission service", () => {
 
   it("retains the lease when hard close cannot confirm stopped despite a hung interrupt", async () => {
     const ctx = await startMission();
-    await approvePlan(ctx);
     await ctx.orchestrator.options.onPermission({
       agentId: ctx.orchestrator.options.agentId,
       toolUses: [createEdit(`${ctx.repo}/a.txt`)],
@@ -2400,17 +2681,20 @@ describe("mission service", () => {
         ctx.orchestrator.queue.admitted(id);
       }
     );
-    const submitted = ctx.daemon.missions.submitMessage(ctx.missionId, {
+    const accepted = await ctx.daemon.missions.submitMessage(ctx.missionId, {
       mode: "queue",
       operationId: "hung-submission",
       text: "Ambiguous delivery",
     });
+    expect(accepted.state).toBe("accepted");
     await entered.promise;
     await ctx.daemon.missions.pause(ctx.missionId, {
       expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
       operationId: "hung-submission-pause",
     });
-    await expect(submitted).resolves.toMatchObject({ state: "unknown" });
+    expect(ctx.daemon.store.queue.get("hung-submission")?.state).toBe(
+      "unknown"
+    );
     await ctx.daemon.close();
     submission.resolve(undefined);
     interrupt.resolve(undefined);

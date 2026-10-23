@@ -71,7 +71,7 @@ export default defineConfig({
       },
       reuseExistingServer: false,
       timeout: 60_000,
-      url: `http://127.0.0.1:${DAEMON_PORT}/v1/health`,
+      url: `http://127.0.0.1:${DAEMON_PORT}/v2/health`,
     },
     {
       command: `pnpm --filter @missions/web build && pnpm --filter @missions/web exec next start --hostname 127.0.0.1 --port ${WEB_PORT}`,

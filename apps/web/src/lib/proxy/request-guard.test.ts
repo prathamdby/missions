@@ -106,20 +106,24 @@ describe(forwardResponseHeaders, () => {
 });
 
 describe(upstreamPath, () => {
-  it("only maps v1 paths and re-encodes segments", () => {
+  it("only maps current-version paths and re-encodes segments", () => {
     const cases: (string[] | undefined)[] = [
-      ["v1", "missions", "abc"],
-      ["v1", "a b"],
-      ["v1", "x/y"],
-      ["v2", "missions"],
-      ["v1"],
-      ["v1", "..", "secret"],
+      ["v2", "missions", "abc"],
+      ["v2", "a b"],
+      ["v2", "x/y"],
+      ["v1", "missions"],
+      ["v2"],
+      ["v2", "..", "secret"],
+      ["v2", ".", "missions"],
+      ["v2", "", "missions"],
       undefined,
     ];
     expect(cases.map((segments) => upstreamPath(segments))).toStrictEqual([
-      "/v1/missions/abc",
-      "/v1/a%20b",
-      "/v1/x%2Fy",
+      "/v2/missions/abc",
+      "/v2/a%20b",
+      "/v2/x%2Fy",
+      null,
+      null,
       null,
       null,
       null,

@@ -20,63 +20,114 @@ const opened: Daemon[] = [];
 const until = async <T>(read: () => T, done: (value: T) => boolean) =>
   await pollUntil(() => Promise.resolve(read()), done, Date.now() + 10_000, 10);
 
+const SUMMARY =
+  "Added NOTES.md and reviewed it.\n\nChecks:\n- test -f NOTES.md: passed";
+
+const start = async (executionMode?: "plan" | "work") => {
+  const daemon = await createDaemon({
+    config: await testConfig(),
+    createRuntime: (options) => new ScriptedRuntime(options, 1),
+    version: "test",
+  });
+  opened.push(daemon);
+  const repo = await gitRepo("scripted");
+  const added = await daemon.projects.addLocal({
+    operationId: "scripted-project",
+    path: repo,
+  });
+  if (added.status !== "added") {
+    throw new Error("project not added");
+  }
+  const created = await daemon.missions.create({
+    autonomy: "high",
+    executionMode,
+    goal: "Write notes",
+    operationId: "scripted-mission",
+    orchestrator: MODEL,
+    projectId: added.project.id,
+    worker: MODEL,
+    workspace: { mode: "current_checkout" },
+  });
+  return { daemon, id: created.mission.id, repo };
+};
+
 describe(ScriptedRuntime, () => {
   afterEach(async () => {
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
   });
 
   it(
-    "walks a mission from plan approval to completion",
+    "works straight through in Work mode, with assignment and handoff as agent messages",
     { timeout: 20_000 },
     async () => {
-      const daemon = await createDaemon({
-        config: await testConfig(),
-        createRuntime: (options) => new ScriptedRuntime(options, 1),
-        version: "test",
+      const { daemon, id, repo } = await start();
+      const done = await until(
+        () => daemon.missions.snapshot(id),
+        (snap) => snap.mission.status === "completed"
+      );
+      const messages = done.transcript.filter(
+        (item) => item.kind === "agent_message"
+      );
+      expect({
+        handoffs: done.assignments.map((a) => a.status),
+        messages: messages.map((item) => [
+          item.purpose,
+          item.sender?.role,
+          item.recipient?.role,
+        ]),
+        notes: existsSync(path.join(repo, "NOTES.md")),
+        plans: done.plans.length,
+        queue: done.queue.map((item) => [item.purpose, item.state]),
+        summary: done.mission.summary,
+      }).toStrictEqual({
+        handoffs: ["handed_off"],
+        messages: [
+          ["assignment", "orchestrator", "worker"],
+          ["handoff", "worker", "orchestrator"],
+        ],
+        notes: true,
+        plans: 0,
+        queue: [
+          ["message", "sent"],
+          ["assignment", "sent"],
+          ["handoff", "sent"],
+        ],
+        summary: SUMMARY,
       });
-      opened.push(daemon);
-      const repo = await gitRepo("scripted");
-      const added = await daemon.projects.addLocal({
-        operationId: "scripted-project",
-        path: repo,
-      });
-      if (added.status !== "added") {
-        throw new Error("project not added");
-      }
-      const created = await daemon.missions.create({
-        autonomy: "high",
-        goal: "Write notes",
-        operationId: "scripted-mission",
-        orchestrator: MODEL,
-        projectId: added.project.id,
-        worker: MODEL,
-        workspace: { mode: "current_checkout" },
-      });
-      const { id } = created.mission;
+    }
+  );
+
+  it(
+    "walks a Plan-mode mission from native plan approval to completion",
+    { timeout: 20_000 },
+    async () => {
+      const { daemon, id } = await start("plan");
       const proposed = await until(
         () => daemon.missions.snapshot(id),
-        (snap) => snap.mission.status === "awaiting_approval"
+        (snap) => snap.plans.some((plan) => plan.actionable)
       );
-      expect(proposed.plans.map((plan) => plan.status)).toStrictEqual([
-        "proposed",
-      ]);
-      await daemon.missions.decidePlan(id, {
-        approve: true,
-        planRevision: 1,
+      expect({
+        mode: proposed.mission.executionMode,
+        plans: proposed.plans.map((plan) => [plan.status, plan.actionable]),
+        status: proposed.mission.status,
+      }).toStrictEqual({
+        mode: "plan",
+        plans: [["proposed", true]],
+        status: "awaiting_approval",
       });
+      daemon.missions.decidePlan(id, { approve: true, planRevision: 1 });
       const done = await until(
         () => daemon.missions.snapshot(id),
         (snap) => snap.mission.status === "completed"
       );
       expect({
         handoffs: done.assignments.map((a) => a.status),
-        notes: existsSync(path.join(repo, "NOTES.md")),
+        mode: done.mission.executionMode,
         summary: done.mission.summary,
       }).toStrictEqual({
         handoffs: ["handed_off"],
-        notes: true,
-        summary:
-          "Added NOTES.md and reviewed it.\n\nChecks:\n- test -f NOTES.md: passed",
+        mode: "work",
+        summary: SUMMARY,
       });
       const endedAt = done.mission.endedAt ?? "";
       await sleep(5);

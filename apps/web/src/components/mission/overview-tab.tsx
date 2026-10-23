@@ -28,6 +28,7 @@ import { formatDuration, shortAge } from "@/lib/format";
 import { agentRows, todoProgress } from "@/lib/mission/overview";
 import type { AgentRow } from "@/lib/mission/overview";
 import { checksLabel, prRef } from "@/lib/mission/pr";
+import { WAITING } from "@/lib/mission/waiting";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -285,7 +286,8 @@ const AgentStatusCell = ({ row }: { row: AgentRow }) => {
   const ended = row.endedAt ? Date.parse(row.endedAt) : now;
   const duration = formatDuration(ended - Date.parse(row.startedAt));
   const base = "flex w-16 shrink-0 justify-end text-right";
-  if (row.phase === "needs_you") {
+  const userWait = row.waiting === "permission" || row.waiting === "answer";
+  if (row.phase === "needs_you" || userWait) {
     return (
       <span className={cn(base, "font-mono text-2xs leading-xs text-warning")}>
         Needs you
@@ -296,6 +298,16 @@ const AgentStatusCell = ({ row }: { row: AgentRow }) => {
     return (
       <span className={cn(base, "font-mono text-2xs leading-xs text-danger")}>
         {row.phase === "failed" ? "Failed" : "Blocked"}
+      </span>
+    );
+  }
+  if (row.waiting) {
+    return (
+      <span
+        className="flex min-w-16 shrink-0 justify-end text-right font-mono text-2xs leading-xs whitespace-nowrap text-text-tertiary"
+        title={WAITING[row.waiting].long}
+      >
+        {WAITING[row.waiting].short}
       </span>
     );
   }
@@ -397,6 +409,10 @@ const Agents = () => {
       planApprovedAt:
         Object.values(live.plans).find((plan) => plan.status === "approved")
           ?.decidedAt ?? null,
+      planning:
+        live.mission.executionMode === "plan" ||
+        live.mission.pendingExecutionMode === "plan" ||
+        live.mission.status === "exploring",
     }
   );
   if (rows.length === 0) {

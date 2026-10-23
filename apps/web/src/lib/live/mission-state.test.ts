@@ -33,10 +33,12 @@ const mission = (
   createdAt: AT,
   endedAt: null,
   epoch: 0,
+  executionMode: "work",
   goal: "Fix the flaky test",
   id: MISSION_ID,
   lastError: null,
   orchestrator: { modelId: "opus", reasoningEffort: "high" },
+  pendingExecutionMode: null,
   projectId: "p-1",
   publish: {
     cleanup: "none",
@@ -62,11 +64,15 @@ const agent = (status: Agent["status"]): Agent => ({
   id: "a-orch",
   missionId: MISSION_ID,
   model: { modelId: "opus", reasoningEffort: "high" },
+  previousSessionIds: [],
+  promptVersion: null,
   role: "orchestrator",
+  sessionGeneration: 0,
   sessionId: "s-1",
   status,
   title: "Orchestrator",
   updatedAt: AT,
+  waitingReason: null,
   workingState: null,
 });
 
@@ -74,12 +80,18 @@ const queueItem = (revision: number, state: QueueItem["state"]): QueueItem => ({
   agentId: "a-orch",
   createdAt: AT,
   error: null,
+  executionMode: null,
   id: "q-1",
   missionId: MISSION_ID,
   mode: "queue",
+  origin: "user",
+  purpose: "message",
   replacedById: null,
   replacesId: null,
+  retryOf: null,
   revision,
+  sender: null,
+  sequence: 0,
   state,
   text: "Then open a draft PR",
   updatedAt: AT,
@@ -114,7 +126,10 @@ const item = (
   isError: false,
   kind,
   missionId: MISSION_ID,
+  purpose: null,
+  recipient: null,
   requestId: null,
+  sender: null,
   seq,
   text,
   toolName: null,
@@ -293,7 +308,8 @@ describe("mission live state", () => {
       mission: [3, "paused"],
       notices: ["24"],
       permission: "approved",
-      previews: ["msg-2"],
+      // msg-2 never finalized before the mission paused at seq 26.
+      previews: [],
       queue: "sent",
       todo: "completed",
       transcript: "Hello world",
@@ -382,6 +398,127 @@ describe("mission live state", () => {
       expect(state.previews).toStrictEqual({});
       expect(state.transcript["final-1"]?.text).toBe("Draft");
     }
+  });
+
+  it("never resurrects a finalized thinking preview from late or replayed deltas", () => {
+    const thinking = (seq: number, delta: string, messageId = "think-1") =>
+      event(seq, {
+        data: { agentId: "a-orch", delta, kind: "thinking", messageId },
+        type: "transcript.delta",
+      });
+    const final = event(13, {
+      data: { item: item("think-1", "thinking", "Plan the fix", 13) },
+      type: "transcript.item",
+    });
+    const streaming = fold(fromSnapshot(snapshot()), [
+      thinking(11, "Plan "),
+      thinking(12, "the fix"),
+    ]);
+    const preview = streaming.previews["think-1"];
+    expect(preview && [preview.kind, previewText(preview)]).toStrictEqual([
+      "thinking",
+      "Plan the fix",
+    ]);
+    const done = applyEvent(streaming, final);
+    expect(done.previews).toStrictEqual({});
+    const replayed = fold(done, [
+      thinking(11, "Plan "),
+      thinking(12, "the fix"),
+      thinking(14, " again"),
+    ]);
+    expect(replayed.previews).toStrictEqual({});
+    expect(replayed.transcript["think-1"]?.text).toBe("Plan the fix");
+    const next = applyEvent(replayed, thinking(15, "Next", "think-2"));
+    expect(Object.keys(next.previews)).toStrictEqual(["think-2"]);
+  });
+
+  it("drops an interrupted agent's preview and ignores its late deltas in any order", () => {
+    const delta = event(11, {
+      data: {
+        agentId: "a-orch",
+        delta: "Half a sen",
+        kind: "text",
+        messageId: "cut-1",
+      },
+      type: "transcript.delta",
+    });
+    const interrupted = event(12, {
+      data: { agent: agent("interrupted") },
+      type: "agent.updated",
+    });
+    for (const order of [
+      [delta, interrupted],
+      [interrupted, delta],
+    ]) {
+      const state = fold(fromSnapshot(snapshot()), [...order, delta]);
+      expect(state.previews).toStrictEqual({});
+    }
+    const resumed = fold(fromSnapshot(snapshot()), [
+      delta,
+      interrupted,
+      event(13, {
+        data: {
+          agentId: "a-orch",
+          delta: "Retrying",
+          kind: "text",
+          messageId: "cut-2",
+        },
+        type: "transcript.delta",
+      }),
+    ]);
+    expect(Object.keys(resumed.previews)).toStrictEqual(["cut-2"]);
+  });
+
+  it("drops every agent's unfinished preview when the mission pauses", () => {
+    const state = fold(fromSnapshot(snapshot()), [
+      event(11, {
+        data: {
+          agentId: "a-orch",
+          delta: "Orchestrating",
+          kind: "text",
+          messageId: "o-1",
+        },
+        type: "transcript.delta",
+      }),
+      event(12, {
+        data: {
+          agentId: "a-worker",
+          delta: "Thinking",
+          kind: "thinking",
+          messageId: "w-1",
+        },
+        type: "transcript.delta",
+      }),
+      event(13, {
+        data: { mission: mission(2, "paused") },
+        type: "mission.updated",
+      }),
+    ]);
+    expect(state.previews).toStrictEqual({});
+  });
+
+  it("a reconnect onto a stopped mission drops previews streamed before the snapshot", () => {
+    const streaming = fold(fromSnapshot(snapshot()), [
+      event(11, {
+        data: {
+          agentId: "a-orch",
+          delta: "Partial",
+          kind: "text",
+          messageId: "p-1",
+        },
+        type: "transcript.delta",
+      }),
+    ]);
+    expect(Object.keys(streaming.previews)).toStrictEqual(["p-1"]);
+    const stopped = snapshot({
+      cursor: 12,
+      mission: mission(2, "interrupted"),
+    });
+    expect(rebase(stopped, [], streaming).previews).toStrictEqual({});
+    const running = snapshot({ cursor: 12, mission: mission(2) });
+    expect(Object.keys(rebase(running, [], streaming).previews)).toStrictEqual([
+      "p-1",
+    ]);
   });
 
   it("rebases onto a newer snapshot and replays only newer events", () => {

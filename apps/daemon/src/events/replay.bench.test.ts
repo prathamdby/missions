@@ -66,6 +66,7 @@ const say = (runtime: FakeRuntime, index: number) =>
       id: `bench-${index}`,
       requestId: null,
       role: "assistant",
+      sender: null,
       text: `Step ${index}: inspected the module and recorded what changed.`,
       thinking: "",
       toolResults: [],

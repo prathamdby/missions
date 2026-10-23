@@ -77,7 +77,7 @@ test("settings persist across reload and recover after a failed save", async ({
     .inputValue();
   const next = initial === "low" ? "medium" : "low";
   const radio = page.getByTestId(`settings-autonomy-${next}`);
-  await page.route("**/api/daemon/v1/settings", async (route) => {
+  await page.route("**/api/daemon/v2/settings", async (route) => {
     if (route.request().method() !== "PATCH") {
       await route.continue();
       return;
@@ -95,7 +95,7 @@ test("settings persist across reload and recover after a failed save", async ({
     page.getByText("Could not save the setting", { exact: true })
   ).toBeVisible();
   await expect(page.getByTestId(`settings-autonomy-${initial}`)).toBeChecked();
-  await page.unroute("**/api/daemon/v1/settings");
+  await page.unroute("**/api/daemon/v2/settings");
   await page.locator("label").filter({ has: radio }).click();
   await expect(radio).toBeChecked();
   await page.reload();

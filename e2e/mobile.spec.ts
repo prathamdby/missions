@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-import { addProject, gitRepo, useScriptedModels } from "./fixtures";
+import {
+  addProject,
+  chooseExecutionMode,
+  gitRepo,
+  useScriptedModels,
+} from "./fixtures";
 
 test.beforeAll(async ({ request }) => {
   await useScriptedModels(request);
@@ -14,6 +19,7 @@ test("a phone can start a mission and open the navigation", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
+  await chooseExecutionMode(page, "Plan");
   await page
     .getByRole("textbox", { name: "Mission goal" })
     .fill("Write a NOTES.md file summarizing the project");

@@ -45,6 +45,9 @@ export const agents = sqliteTable(
     data: doc(),
     id: text("id").primaryKey(),
     missionId: text("mission_id").notNull(),
+    /** Null marks a legacy native session whose system prompt predates v2. */
+    promptVersion: text("prompt_version"),
+    sessionGeneration: integer("session_generation").notNull().default(0),
     status: text("status").notNull(),
   },
   (t) => [index("agents_mission_idx").on(t.missionId, t.status)]

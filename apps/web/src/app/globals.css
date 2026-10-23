@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "../styles/tokens.css";
 
+/* Streamdown ships Tailwind classes in its bundle; pnpm links it into apps/web/node_modules. */
+@source "../../node_modules/streamdown/dist";
+
 @layer base {
   html {
     color-scheme: dark;

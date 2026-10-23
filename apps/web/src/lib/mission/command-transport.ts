@@ -64,6 +64,11 @@ export const missionCommandTransport = (
         "mission",
         api.resumeMission(missionId, { ...body, operationId })
       ),
+    retryQueue: ({ itemId, ...body }, operationId) =>
+      receive(
+        "queue",
+        api.retryQueueItem(missionId, itemId, { ...body, operationId })
+      ),
     update: (body) => receive("mission", api.updateMission(missionId, body)),
   };
 };

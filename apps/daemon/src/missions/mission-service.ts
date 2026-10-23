@@ -12,6 +12,7 @@ import type {
   EditQueueItemRequest,
   EditQueueItemResponse,
   MissionControlRequest,
+  RetryQueueItemRequest,
   SubmitMessageRequest,
   UpdateMissionRequest,
 } from "@missions/protocol/commands";
@@ -19,13 +20,19 @@ import {
   AnswerQuestionRequestSchema,
   CreateMissionRequestSchema,
 } from "@missions/protocol/commands";
-import type { DeliveryMode, Role } from "@missions/protocol/common";
+import type {
+  DeliveryMode,
+  ExecutionMode,
+  MessagePurpose,
+  Role,
+} from "@missions/protocol/common";
 import type { EventBody } from "@missions/protocol/events";
 import type {
   Agent,
   AgentModelSettings,
   AgentStatus,
   Assignment,
+  MessageParty,
   Mission,
   MissionSnapshot,
   PermissionRequest,
@@ -44,6 +51,7 @@ import type { SharedFiles } from "../files/shared-files";
 import { mediaTypeOf, resolveWorkspacePath } from "../files/workspace-files";
 import { AppError, conflict, notFound, stale } from "../lib/app-error";
 import { errorMessage } from "../lib/async";
+import { TimingLog } from "../lib/timing";
 import { PermissionBroker } from "../permissions/permission-broker";
 import type { AgentContext } from "../permissions/permission-broker";
 import { StaleDecisionError } from "../permissions/stale-decision-error";
@@ -60,20 +68,29 @@ import type {
   AskUserAnswer,
   AskUserAsk,
   EditOutcome,
+  PermissionToolUse,
   RemoveOutcome,
   RuntimeStartResult,
+  SubmitOptions,
 } from "../sdk/agent-runtime";
 import type { NativeQueueEntry, NativeQueueTracker } from "../sdk/native-queue";
 import { nativeTodos } from "../sdk/native-todos";
+import { PLAN_GUIDANCE, PLAN_GUIDANCE_VERSION } from "../sdk/plan-guidance";
+import { PROMPT_VERSION, promptFor } from "../sdk/prompts";
 import {
   createRoleToolServer,
-  DISABLED_TOOL_IDS,
-  ENABLED_TOOL_IDS,
-  ORCHESTRATOR_PROMPT,
+  disabledToolIds,
+  enabledToolIds,
+  MAIN_RECIPIENT,
+  MAX_AGENT_MESSAGE,
   ROLE_TOOL_SERVER,
-  WORKER_PROMPT,
 } from "../sdk/role-tools";
-import type { RoleToolHandlers, TodoInput } from "../sdk/role-tools";
+import type {
+  HistoryInput,
+  RoleToolHandlers,
+  SendMessageInput,
+  TodoInput,
+} from "../sdk/role-tools";
 import type { ModelCatalog } from "../settings/models";
 import type { SettingsService } from "../settings/settings-service";
 import { WorkspaceOperationGate } from "../workspaces/workspace-operation-gate";
@@ -82,23 +99,33 @@ import type { WorkspaceService } from "../workspaces/workspace-service";
 import { WriteLeaseRegistry } from "../workspaces/write-lease";
 import {
   ACTIVE,
+  agentMessageText,
   assignmentMessage,
+  continuationMessage,
   FENCED,
   ARCHIVABLE,
   handoffMessage,
   isSystemRequest,
+  MAX_OUTSTANDING_MESSAGES,
   MAX_PENDING_ASSIGNMENTS,
-  planApprovedMessage,
+  planEnteredMessage,
   planRejectedMessage,
+  planReissueMessage,
   RESUMABLE,
   resumedMessage,
   resumePhase,
   SNAPSHOT_TRANSCRIPT,
   SYSTEM_PREFIX,
   titleFromGoal,
-  workerMessage,
 } from "./messages";
 import {
+  deliverableFor,
+  isOutstanding,
+  nextSequence,
+  sameMessage,
+} from "./outbox";
+import {
+  agentMessageItem,
   DeltaCoalescer,
   itemsFromMessage,
   textItemId,
@@ -114,8 +141,18 @@ export interface RuntimeHandle {
   readonly sessionId: string | null;
   readonly model: AgentModelSettings | null;
   updateModel: (choice: AgentModelSettings) => Promise<AgentModelSettings>;
+  /** Raw model metadata reported at session start; seeds the shared catalog. */
+  readonly availableModels?: readonly unknown[];
   start: (resumeSessionId?: string) => Promise<RuntimeStartResult>;
-  submit: (id: string, text: string, mode: DeliveryMode) => Promise<void>;
+  submit: (
+    id: string,
+    text: string,
+    mode: DeliveryMode,
+    options?: SubmitOptions
+  ) => Promise<void>;
+  /** Model-only context that does not start an agent loop. */
+  addContext: (id: string, text: string) => Promise<void>;
+  setInteractionMode: (mode: "auto" | "spec") => Promise<void>;
   changeMode: (id: string, mode: DeliveryMode) => Promise<void>;
   remove: (id: string) => Promise<RemoveOutcome>;
   edit: (
@@ -143,7 +180,12 @@ export interface MissionServiceOptions {
   sharedFiles: SharedFiles;
   createRuntime?: RuntimeFactory;
   now?: () => Date;
+  /** Content-free stage timings; disabled unless sinks are configured. */
+  timing?: TimingLog;
 }
+
+/** Re-reads repository state after an agent-driven Git or PR action. */
+export type GitObserver = (missionId: string) => Promise<unknown>;
 
 interface LiveAgent {
   runtime: RuntimeHandle;
@@ -159,6 +201,16 @@ interface LiveAgent {
   toolCalls: Map<string, { name: string; input: Record<string, unknown> }>;
   operations: Set<Promise<unknown>>;
   fenced: PromiseWithResolvers<undefined>;
+  /** Planning guidance already supplied to this session. */
+  planGuidance: boolean;
+  /** Request whose first streamed text has not been timed yet. */
+  awaitingText: string | null;
+}
+
+/** A live native ExitSpecMode confirmation bound to one plan revision. */
+interface PlanBinding {
+  live: LiveAgent;
+  resolve: (approved: boolean) => void;
 }
 
 interface PendingQuestion {
@@ -192,6 +244,21 @@ const ENDED_STATUSES = new Set<Mission["status"]>([
 ]);
 
 const isDefiniteFailure = (error: unknown) => error instanceof AppError;
+
+const isExitSpecMode = (use: PermissionToolUse) =>
+  use.confirmationType === "exit_spec_mode" ||
+  use.details.type === "exit_spec_mode" ||
+  use.toolName === "ExitSpecMode";
+
+/** Recognizable shell Git/PR actions; their effects are re-read afterwards. */
+const GIT_ACTION = /(?:^|[\s;&|(`'"])(?:git|gh)\s/u;
+const commandOf = (input: Record<string, unknown>) =>
+  typeof input.command === "string" ? input.command : "";
+
+/** Upper bound for one read_history entry; the page stays readable. */
+const HISTORY_ENTRY_LIMIT = 2000;
+const DUPLICATE_OPERATION =
+  "This operation ID was already used for another message";
 const sameModel = (a: AgentModelSettings, b: AgentModelSettings) =>
   a.modelId === b.modelId && a.reasoningEffort === b.reasoningEffort;
 
@@ -245,6 +312,14 @@ export class MissionService {
   readonly #queueBusy = new Set<string>();
   readonly #artifacts: ArtifactStore;
   readonly #sharedFiles: SharedFiles;
+  readonly #timing: TimingLog;
+  /** Live ExitSpecMode confirmations by plan revision ID. */
+  readonly #planBindings = new Map<string, PlanBinding>();
+  /** Per-recipient delivery loops; `again` reruns after the current pass. */
+  readonly #deliveries = new Map<string, { again: boolean }>();
+  /** Missions whose main agent asked for Plan mode and must yield first. */
+  readonly #planEntries = new Map<string, string | null>();
+  #gitObserver: GitObserver | null = null;
 
   constructor(options: MissionServiceOptions) {
     this.#store = options.store;
@@ -263,6 +338,7 @@ export class MissionService {
       options.createRuntime ??
       ((runtimeOptions) => new AgentRuntime(runtimeOptions));
     this.#now = options.now ?? (() => new Date());
+    this.#timing = options.timing ?? new TimingLog();
     this.leases = new WriteLeaseRegistry((workspace, holder) =>
       this.#onLeaseChange(workspace, holder)
     );
@@ -272,7 +348,9 @@ export class MissionService {
         if (!workspace) {
           return Promise.reject(new Error("No workspace"));
         }
-        return this.leases.acquire(workspace, agentId, signal);
+        return this.#waitingFor(agentId, "write_lease", () =>
+          this.leases.acquire(workspace, agentId, signal)
+        );
       },
       context: (agentId) => this.#context(agentId),
       now: this.#now,
@@ -303,6 +381,34 @@ export class MissionService {
 
   #iso() {
     return this.#now().toISOString();
+  }
+
+  /** Agent-driven Git actions trigger a repository re-read through this observer. */
+  setGitObserver(observer: GitObserver) {
+    this.#gitObserver = observer;
+  }
+
+  /** Shows why an agent is not producing output while `effect` is pending. */
+  async #waitingFor<T>(
+    agentId: string,
+    reason: NonNullable<Agent["waitingReason"]>,
+    effect: () => Promise<T>
+  ): Promise<T> {
+    this.#setWaiting(agentId, reason);
+    try {
+      return await effect();
+    } finally {
+      if (this.#store.getAgent(agentId)?.waitingReason === reason) {
+        this.#setWaiting(agentId, null);
+      }
+    }
+  }
+
+  #setWaiting(agentId: string, reason: Agent["waitingReason"]) {
+    const agent = this.#store.getAgent(agentId);
+    if (agent && agent.waitingReason !== reason && !this.#closing) {
+      this.#saveAgent({ ...agent, waitingReason: reason });
+    }
   }
 
   // ---------------------------------------------------------------- reads
@@ -466,8 +572,10 @@ export class MissionService {
       });
     });
     if (request.agentId && this.#isCurrent(request.agentId)) {
+      const pending = request.status === "pending";
       this.#patchAgent(request.agentId, {
-        status: request.status === "pending" ? "waiting_permission" : "working",
+        status: pending ? "waiting_permission" : "working",
+        waitingReason: pending ? "permission" : null,
       });
     }
   }
@@ -539,17 +647,31 @@ export class MissionService {
         live.phase === "retiring" ||
         live.epoch !== mission.epoch,
       missionId: mission.id,
-      planApproved: this.#latestPlan(mission.id)?.status === "approved",
+      otherWriters: this.#otherWriters(mission.id, agent.id),
+      planMode: mission.executionMode === "plan",
       projectId: mission.projectId,
       role: agent.role,
       workspacePath: mission.workspace.path,
     };
   }
 
-  #latestPlan(missionId: string) {
-    return this.#store.plans
-      .list(missionId)
-      .toSorted((a, b) => b.revision - a.revision)[0];
+  /** Live writable Workers other than `agentId`; they block repository administration. */
+  #otherWriters(missionId: string, agentId: string) {
+    return this.#store.assignments
+      .list(missionId, ["running"])
+      .flatMap((assignment) => {
+        const workerId = assignment.workerAgentId;
+        if (
+          !assignment.needsWrite ||
+          !workerId ||
+          workerId === agentId ||
+          !this.#live.has(workerId)
+        ) {
+          return [];
+        }
+        const title = this.#store.getAgent(workerId)?.title ?? "A Worker";
+        return [`${title} (${assignment.id})`];
+      });
   }
 
   #onLeaseChange(workspace: string, holder: string | null) {
@@ -561,6 +683,10 @@ export class MissionService {
         const holdsWriteLease = agent.id === holder;
         if (agent.holdsWriteLease !== holdsWriteLease) {
           this.#saveAgent({ ...agent, holdsWriteLease });
+        }
+        // A released lease can unblock a mode transition held in the outbox.
+        if (holder === null && agent.role === "orchestrator") {
+          this.#scheduleDelivery(agent.id);
         }
       }
     }
@@ -714,10 +840,14 @@ export class MissionService {
           createdAt: at,
           endedAt: null,
           epoch: 0,
+          // A Plan request on the goal is an ordered transition applied
+          // before the goal is delivered, like any later Plan message.
+          executionMode: "work",
           goal: request.goal,
           id,
           lastError: null,
           orchestrator: request.orchestrator ?? settings.orchestrator,
+          pendingExecutionMode: null,
           projectId: project.id,
           publish: {
             cleanup: "none",
@@ -728,7 +858,7 @@ export class MissionService {
             remote: null,
           },
           revision: 0,
-          status: "exploring",
+          status: "running",
           summary: null,
           title,
           updatedAt: at,
@@ -741,13 +871,15 @@ export class MissionService {
           "Orchestrator",
           null
         );
-        const goalItem = this.#newQueueItem(
-          mission.id,
-          orchestrator.id,
-          `${mission.id}:goal`,
-          request.goal,
-          "steer"
-        );
+        const goalItem = this.#newQueueItem({
+          agentId: orchestrator.id,
+          executionMode: request.executionMode ?? null,
+          id: `${mission.id}:goal`,
+          missionId: mission.id,
+          mode: "steer",
+          sequence: 1,
+          text: request.goal,
+        });
         this.#log.commit((emit) => {
           this.#saveMission(emit, mission);
           this.#saveAgent(orchestrator, emit);
@@ -758,6 +890,9 @@ export class MissionService {
       }
     );
     const { missionId } = result as { missionId: string };
+    this.#timing.mark(`${missionId}:goal`, "message.accepted", {
+      missionId,
+    });
     this.#own(this.#launch(missionId));
     return this.snapshot(missionId);
   }
@@ -776,37 +911,59 @@ export class MissionService {
       id: randomUUID(),
       missionId: mission.id,
       model: role === "orchestrator" ? mission.orchestrator : mission.worker,
+      previousSessionIds: [],
+      promptVersion: null,
       role,
+      sessionGeneration: 0,
       sessionId: null,
       status: "starting",
       title,
       updatedAt: at,
+      waitingReason: null,
       workingState: null,
     };
   }
 
-  #newQueueItem(
-    missionId: string,
-    agentId: string,
-    id: string,
-    text: string,
-    mode: DeliveryMode
-  ): QueueItem {
+  /** A durably accepted, definitely unsent outbox entry. */
+  #newQueueItem(fields: {
+    missionId: string;
+    agentId: string;
+    id: string;
+    text: string;
+    mode: DeliveryMode;
+    sequence: number;
+    executionMode?: ExecutionMode | null;
+    origin?: QueueItem["origin"];
+    purpose?: MessagePurpose;
+    sender?: MessageParty | null;
+    retryOf?: string | null;
+    replacesId?: string | null;
+  }): QueueItem {
     const at = this.#iso();
     return {
-      agentId,
+      agentId: fields.agentId,
       createdAt: at,
       error: null,
-      id,
-      missionId,
-      mode,
+      executionMode: fields.executionMode ?? null,
+      id: fields.id,
+      missionId: fields.missionId,
+      mode: fields.mode,
+      origin: fields.origin ?? "user",
+      purpose: fields.purpose ?? "message",
       replacedById: null,
-      replacesId: null,
+      replacesId: fields.replacesId ?? null,
+      retryOf: fields.retryOf ?? null,
       revision: 0,
-      state: "submitting",
-      text,
+      sender: fields.sender ?? null,
+      sequence: fields.sequence,
+      state: "accepted",
+      text: fields.text,
       updatedAt: at,
     };
+  }
+
+  static #party(agent: Agent): MessageParty {
+    return { agentId: agent.id, role: agent.role, title: agent.title };
   }
 
   async #launch(missionId: string) {
@@ -820,32 +977,18 @@ export class MissionService {
     const goal = this.#store.queue.get(`${missionId}:goal`);
     if (
       !(orchestrator && goal) ||
-      goal.state !== "submitting" ||
+      goal.state !== "accepted" ||
       orchestrator.sessionId
     ) {
       return;
     }
-    let attempted = false;
     try {
       const runtime = await this.#ensureRuntime(orchestrator.id);
       this.#requireRuntime(orchestrator.id, runtime);
-      if (this.#store.queue.get(goal.id)?.state === "submitting") {
-        attempted = true;
-        await this.#execute(orchestrator.id, runtime, () =>
-          runtime.submit(goal.id, goal.text, "steer")
-        );
-      }
+      this.#scheduleDelivery(orchestrator.id);
     } catch (error) {
-      const stuck = this.#store.queue.get(goal.id);
-      if (stuck && stuck.state === "submitting") {
-        this.#saveQueueItem({
-          ...stuck,
-          error: errorMessage(error),
-          revision: stuck.revision + 1,
-          state: attempted ? "unknown" : "failed",
-          updatedAt: this.#iso(),
-        });
-      }
+      // The goal stays accepted: it was never submitted and is delivered
+      // after Resume, never replayed from an uncertain state.
       if (!FENCED.has(this.get(mission.id).status)) {
         const stopped = await this.#stopMission(mission.id, "interrupted");
         if (
@@ -867,13 +1010,14 @@ export class MissionService {
     code: "environment" | "run_failed",
     message: string
   ) {
+    // A mission whose main agent never got a session has nothing to resume.
+    const started = this.#store
+      .listAgents(missionId)
+      .some((agent) => agent.role === "orchestrator" && agent.sessionId);
     this.#mutateMission(missionId, (mission) => ({
       ...mission,
       lastError: { code, message, retryAfterMs: null },
-      status:
-        !this.#latestPlan(missionId) && code === "environment"
-          ? "failed"
-          : "interrupted",
+      status: !started && code === "environment" ? "failed" : "interrupted",
     }));
     this.#notice(missionId, code, "error", message);
   }
@@ -911,20 +1055,23 @@ export class MissionService {
     // Callbacks capture this owner, never whichever runtime later occupies agentId.
     const live = {
       agentId,
+      awaitingText: null,
       epoch: mission.epoch,
       fenced: Promise.withResolvers<undefined>(),
       id: randomUUID(),
       missionId: mission.id,
       operations: new Set(),
       phase: "starting" as const,
+      planGuidance: false,
       toolCalls: new Map(),
       workspace,
     } as LiveAgent;
+    const ids = { agentId, missionId: mission.id };
     live.runtime = this.#createRuntime({
       agentId,
       cwd: workspace,
-      disabledToolIds: DISABLED_TOOL_IDS,
-      enabledToolIds: ENABLED_TOOL_IDS,
+      disabledToolIds: disabledToolIds(agent.role),
+      enabledToolIds: enabledToolIds(agent.role),
       mcpServers: [
         createRoleToolServer(agent.role, agentId, this.#roleHandlers(live)),
       ],
@@ -938,27 +1085,50 @@ export class MissionService {
         if (ask.agentId !== agentId || !this.#isCurrent(agentId, live)) {
           return false;
         }
+        const plan = ask.toolUses.find(isExitSpecMode);
+        if (plan) {
+          return ask.toolUses.length === 1 && agent.role === "orchestrator"
+            ? await this.#proposeNativePlan(live, plan)
+            : false;
+        }
         const result = await this.broker.ask(agentId, ask.toolUses);
         return result.approved && this.#isCurrent(agentId, live) !== null;
       },
+      onTiming: (stage, detail) =>
+        this.#timing.mark(live.id, stage, ids, detail),
       reasoningEffort: agent.model.reasoningEffort,
       role: agent.role,
       supervisor: this.#supervisor,
-      systemPrompt: `${agent.role === "orchestrator" ? ORCHESTRATOR_PROMPT : WORKER_PROMPT}\nPersistent shared mission files: ${this.#sharedFiles.root(mission.id)}. Read AGENTS.md and CREW.md there; use plans/, handoffs/, results/, and errors/ for shared knowledge, not repository code. Native TodoWrite also updates your sidebar checklist.`,
+      systemPrompt: `${promptFor(agent.role)}\n\nPersistent shared mission files: ${this.#sharedFiles.root(mission.id)}`,
     });
     this.#live.set(agentId, live);
+    // An immutable legacy system prompt is never resumed under v2 rules; a
+    // linked successor session continues from saved state instead.
+    const resumeId =
+      agent.promptVersion === PROMPT_VERSION ? agent.sessionId : null;
+    this.#timing.mark(live.id, "startup.requested", ids, {
+      resume: resumeId !== null,
+    });
+    this.#setWaiting(agentId, "startup");
     live.started = this.#sharedFiles
       .ensure(mission.id)
-      .then(async () => await live.runtime.start(agent.sessionId ?? undefined));
-    live.ready = this.#finishStart(live, agent);
+      .then(async () => await live.runtime.start(resumeId ?? undefined));
+    live.ready = this.#finishStart(live, agent, resumeId);
     return live;
   }
 
-  async #finishStart(live: LiveAgent, agent: Agent): Promise<RuntimeHandle> {
+  async #finishStart(
+    live: LiveAgent,
+    agent: Agent,
+    resumeId: string | null
+  ): Promise<RuntimeHandle> {
     try {
       const started = await live.started;
       if (!this.#isCurrent(agent.id, live)) {
         throw conflict("Agent startup was cancelled");
+      }
+      if (live.runtime.availableModels) {
+        this.#models.remember(live.runtime.availableModels);
       }
       // PATCH during initialization only records a desired choice. Reconcile
       // before ready resolves, so the first goal cannot use the old model.
@@ -971,24 +1141,136 @@ export class MissionService {
             (desired.reasoningEffort !== null &&
               native.reasoningEffort !== desired.reasoningEffort));
         if (!sameModel(desired, agent.model) || differs) {
-          await this.#reconcileStartingModel(live, desired);
+          await this.#waitingFor(agent.id, "model", () =>
+            this.#reconcileStartingModel(live, desired)
+          );
+        }
+        if (this.get(agent.missionId).executionMode === "plan") {
+          await this.#syncNativeMode(live);
         }
       }
       live.phase = "ready";
-      if (agent.sessionId) {
+      if (resumeId) {
         this.#reconcileQueue(agent, live.runtime, started);
       }
       for (const message of started.messages) {
         this.#onAgentEvent(live, { message, type: "message" });
       }
+      const latest = this.#store.getAgent(agent.id) ?? agent;
+      const successor = resumeId === null && latest.sessionId !== null;
       this.#patchAgent(agent.id, {
+        promptVersion: PROMPT_VERSION,
         sessionId: started.sessionId,
         status: "idle",
+        waitingReason: null,
+        ...(successor && latest.sessionId
+          ? {
+              previousSessionIds: [
+                ...latest.previousSessionIds,
+                latest.sessionId,
+              ],
+              sessionGeneration: latest.sessionGeneration + 1,
+            }
+          : {}),
       });
+      this.#timing.mark(live.id, "startup.ready", {
+        agentId: agent.id,
+        missionId: agent.missionId,
+      });
+      if (successor && latest.sessionId) {
+        this.#continueLegacy(latest, latest.sessionId);
+      }
       return live.runtime;
     } catch (error) {
       await this.#closeRuntime(agent.id, live);
       throw error;
+    }
+  }
+
+  /**
+   * Shows the legacy-to-v2 transition, then gives the successor session a
+   * continuation packet. Nothing from the old session is replayed.
+   */
+  #continueLegacy(agent: Agent, previousSessionId: string) {
+    const mission = this.get(agent.missionId);
+    const assignment = agent.assignmentId
+      ? this.#store.assignments.get(agent.assignmentId)
+      : null;
+    const titles = new Map(
+      this.#store.listAgents(mission.id).map((entry) => [entry.id, entry.title])
+    );
+    const recent = this.#store
+      .transcriptPage(mission.id, null, 60)
+      .items.filter(
+        (item) =>
+          (item.kind === "user" ||
+            item.kind === "assistant" ||
+            item.kind === "agent_message") &&
+          (agent.role === "orchestrator" ||
+            item.agentId === agent.id ||
+            item.recipient?.agentId === agent.id)
+      )
+      .slice(-20)
+      .map((item) => ({
+        kind: item.kind,
+        text: item.text,
+        who:
+          item.kind === "user" ? "User" : (titles.get(item.agentId) ?? "Agent"),
+      }));
+    this.#appendTranscript(mission.id, [
+      {
+        agentId: agent.id,
+        createdAt: this.#iso(),
+        id: `${agent.id}:successor:${previousSessionId}`,
+        isError: false,
+        kind: "system",
+        missionId: mission.id,
+        purpose: "control",
+        recipient: null,
+        requestId: null,
+        sender: null,
+        text: `${agent.title} continues in a new session under the updated app instructions. Its earlier session is preserved and readable through the mission history; nothing from it is replayed.`,
+        toolName: null,
+        toolUseId: null,
+      },
+    ]);
+    void this.#systemSubmit(
+      agent.id,
+      continuationMessage({
+        assignment,
+        handoffs:
+          agent.role === "orchestrator"
+            ? this.#store.assignments.list(mission.id, ["handed_off"])
+            : [],
+        mission,
+        plans: this.#store.plans.list(mission.id),
+        previousSessionId,
+        recent,
+        role: agent.role,
+        todos: this.#store.todos
+          .list(mission.id)
+          .filter((todo) => todo.agentId === agent.id),
+      }),
+      "steer"
+    );
+  }
+
+  /**
+   * Native Spec mode follows the mission's execution mode. Planning guidance
+   * is supplied once per session as model-only context, so ordinary prompts
+   * never carry it.
+   */
+  async #syncNativeMode(live: LiveAgent) {
+    const mode = this.get(live.missionId).executionMode;
+    await live.runtime.setInteractionMode(mode === "plan" ? "spec" : "auto");
+    this.#requireCurrent(live.agentId, live);
+    if (mode === "plan" && !live.planGuidance) {
+      await live.runtime.addContext(
+        `${SYSTEM_PREFIX}plan-guidance:${live.id}`,
+        PLAN_GUIDANCE
+      );
+      this.#requireCurrent(live.agentId, live);
+      live.planGuidance = true;
     }
   }
 
@@ -1035,11 +1317,13 @@ export class MissionService {
         .map((message) => message.requestId)
         .filter((id): id is string => id !== null)
     );
+    // Accepted entries never reached the runner; the outbox delivers them.
     const mirrored = this.#store.queue
       .list(agent.missionId)
       .filter(
         (item) =>
           item.agentId === agent.id &&
+          item.state !== "accepted" &&
           (!TERMINAL_QUEUE.has(item.state) || consumedIds.has(item.id))
       );
     runtime.queue.hydrate(
@@ -1073,6 +1357,7 @@ export class MissionService {
     owner.fenced.resolve(undefined);
     this.#deltas.dropGeneration(owner.id);
     owner.toolCalls.clear();
+    this.#unbindPlans(owner);
     // Settle pending decisions before another execution can occupy this agent ID.
     const errors: unknown[] = [];
     try {
@@ -1252,6 +1537,15 @@ export class MissionService {
       case "text_delta":
       case "thinking_delta": {
         const kind = event.type === "text_delta" ? "text" : "thinking";
+        if (live.awaitingText) {
+          this.#timing.markOnce(live.awaitingText, `first_${kind}`, {
+            agentId,
+            missionId: mission.id,
+          });
+          if (kind === "text") {
+            live.awaitingText = null;
+          }
+        }
         this.#deltas.push(
           textItemId(agentId, event.messageId, kind),
           agentId,
@@ -1268,11 +1562,23 @@ export class MissionService {
             name: use.name,
           });
         }
-        const items = itemsFromMessage(base, event.message).map((entry) =>
-          entry.kind === "user" && isSystemRequest(entry.requestId)
-            ? { ...entry, kind: "system" as const }
-            : entry
-        );
+        const items = itemsFromMessage(base, event.message).flatMap((entry) => {
+          if (entry.kind !== "user") {
+            return [entry];
+          }
+          if (isSystemRequest(entry.requestId)) {
+            return [{ ...entry, kind: "system" as const }];
+          }
+          // Agent messages already have their canonical record; the
+          // recipient's native echo must not become a user bubble.
+          const queued = entry.requestId
+            ? this.#store.queue.get(entry.requestId)
+            : null;
+          const fromAgent =
+            (queued && queued.origin !== "user") ||
+            Boolean(event.message.sender);
+          return fromAgent ? [] : [entry];
+        });
         this.#appendTranscript(mission.id, items);
         for (const result of event.message.toolResults) {
           this.#afterToolResult(
@@ -1317,7 +1623,16 @@ export class MissionService {
         if (event.state === "idle") {
           status = "idle";
         }
-        this.#saveAgent({ ...agent, status, workingState: event.state });
+        this.#saveAgent({
+          ...agent,
+          status,
+          waitingReason:
+            agent.waitingReason === "retry" ? null : agent.waitingReason,
+          workingState: event.state,
+        });
+        if (event.state === "idle") {
+          this.#onAgentIdle(agent, mission);
+        }
         break;
       }
       case "turn_completed": {
@@ -1325,9 +1640,11 @@ export class MissionService {
         if (mission.workspace) {
           this.leases.release(mission.workspace.path, agent.id);
         }
+        this.#onAgentIdle(agent, mission);
         break;
       }
       case "retry": {
+        this.#setWaiting(agent.id, "retry");
         const limited = /rate|429|quota/iu.test(event.reason);
         this.#notice(
           mission.id,
@@ -1420,7 +1737,17 @@ export class MissionService {
     const { agentId } = live;
     const call = live.toolCalls.get(toolUseId);
     live.toolCalls.delete(toolUseId);
-    if (!call || isError) {
+    if (!call) {
+      return;
+    }
+    // Failed or uncertain Git actions are re-read too, never retried blindly.
+    const gitAction =
+      (call.name === "Execute" && GIT_ACTION.test(commandOf(call.input))) ||
+      (call.name === "Script" && GIT_ACTION.test(JSON.stringify(call.input)));
+    if (gitAction) {
+      this.#observeGit(missionId);
+    }
+    if (isError) {
       return;
     }
     if (call.name === "TodoWrite") {
@@ -1528,7 +1855,10 @@ export class MissionService {
     const { promise, resolve } = Promise.withResolvers<AskUserAnswer>();
     this.#questions.set(question.id, { resolve });
     this.#saveQuestion(question);
-    this.#patchAgent(ask.agentId, { status: "waiting_answer" });
+    this.#patchAgent(ask.agentId, {
+      status: "waiting_answer",
+      waitingReason: "answer",
+    });
     return promise;
   }
 
@@ -1559,7 +1889,10 @@ export class MissionService {
       status: request.cancelled ? "cancelled" : "answered",
     };
     this.#saveQuestion(answered);
-    this.#patchAgent(question.agentId, { status: "working" });
+    this.#patchAgent(question.agentId, {
+      status: "working",
+      waitingReason: null,
+    });
     pending.resolve({
       answers: request.answers.map((answer) => ({
         answer: answer.answer,
@@ -1609,6 +1942,11 @@ export class MissionService {
 
   // ----------------------------------------------------------------- plan
 
+  /**
+   * Answers the exact live native ExitSpecMode request bound to this
+   * revision: approve proceeds once, reject cancels and returns feedback.
+   * Without a live binding nothing is approved, whatever the stored status.
+   */
   decidePlan(missionId: string, request: DecidePlanRequest): PlanRevision {
     const mission = this.get(missionId);
     if (FENCED.has(mission.status)) {
@@ -1623,8 +1961,20 @@ export class MissionService {
     if (plan.status !== "proposed") {
       throw stale("This plan revision was already decided or replaced");
     }
+    const binding = this.#planBindings.get(plan.id);
+    if (
+      !(plan.actionable && binding) ||
+      plan.epoch !== mission.epoch ||
+      !this.#isCurrent(binding.live.agentId, binding.live)
+    ) {
+      throw stale(
+        "This plan is no longer waiting for approval. Resume the mission so the agent can present it again"
+      );
+    }
+    this.#planBindings.delete(plan.id);
     const decided: PlanRevision = {
       ...plan,
+      actionable: false,
       decidedAt: this.#iso(),
       feedback: request.feedback?.trim() || null,
       status: request.approve ? "approved" : "rejected",
@@ -1633,15 +1983,169 @@ export class MissionService {
       this.#savePlan(decided, emit);
       this.#saveMission(emit, {
         ...mission,
-        status: request.approve ? "running" : "exploring",
+        executionMode: request.approve ? "work" : mission.executionMode,
+        pendingExecutionMode: null,
+        status: "running",
       });
     });
-    const orchestrator = this.#orchestrator(missionId);
-    const text = request.approve
-      ? planApprovedMessage(decided)
-      : planRejectedMessage(decided, decided.feedback);
-    void this.#systemSubmit(orchestrator.id, text, "steer");
+    binding.resolve(request.approve);
+    if (!request.approve) {
+      void this.#systemSubmit(
+        binding.live.agentId,
+        planRejectedMessage(decided, decided.feedback),
+        "steer"
+      );
+    }
+    this.#scheduleDelivery(binding.live.agentId);
     return decided;
+  }
+
+  /** Records a native ExitSpecMode proposal and waits for the user's decision. */
+  async #proposeNativePlan(
+    live: LiveAgent,
+    use: PermissionToolUse
+  ): Promise<boolean> {
+    const current = this.#isCurrent(live.agentId, live);
+    if (!current) {
+      return false;
+    }
+    const { agent, mission } = current;
+    const title =
+      typeof use.details.title === "string" && use.details.title.trim()
+        ? use.details.title.trim()
+        : "Plan";
+    const plans = this.#store.plans.list(mission.id);
+    const plan: PlanRevision = {
+      actionable: true,
+      agentId: agent.id,
+      createdAt: this.#iso(),
+      decidedAt: null,
+      epoch: mission.epoch,
+      feedback: null,
+      guidanceVersion: live.planGuidance ? PLAN_GUIDANCE_VERSION : null,
+      id: randomUUID(),
+      markdown: typeof use.details.plan === "string" ? use.details.plan : "",
+      missionId: mission.id,
+      revision: Math.max(0, ...plans.map((p) => p.revision)) + 1,
+      sessionId: agent.sessionId,
+      status: "proposed",
+      title,
+      toolUseId: use.toolUseId || null,
+    };
+    const { promise, resolve } = Promise.withResolvers<boolean>();
+    this.#log.commit((emit) => {
+      for (const previous of plans.filter((p) => p.status === "proposed")) {
+        this.#planBindings.get(previous.id)?.resolve(false);
+        this.#planBindings.delete(previous.id);
+        this.#savePlan(
+          { ...previous, actionable: false, status: "superseded" },
+          emit
+        );
+      }
+      this.#savePlan(plan, emit);
+      this.#saveMission(emit, { ...mission, status: "awaiting_approval" });
+    });
+    this.#planBindings.set(plan.id, { live, resolve });
+    this.#saveSharedFile(
+      mission.id,
+      `plans/plan-${plan.revision}.md`,
+      `# ${plan.title}\n\n${plan.markdown}\n`
+    );
+    // The native request blocks the turn exactly like a tool permission.
+    this.#patchAgent(agent.id, {
+      status: "waiting_permission",
+      waitingReason: "permission",
+    });
+    try {
+      const approved = await promise;
+      return approved && this.#isCurrent(live.agentId, live) !== null;
+    } finally {
+      if (
+        this.#isCurrent(live.agentId, live) &&
+        this.#store.getAgent(agent.id)?.status === "waiting_permission"
+      ) {
+        this.#patchAgent(agent.id, { status: "working", waitingReason: null });
+      }
+    }
+  }
+
+  /**
+   * Pause, crash or replacement ends the native request: its card becomes
+   * non-actionable and the agent must present the plan again after Resume.
+   */
+  #unbindPlans(owner: LiveAgent) {
+    for (const [planId, binding] of this.#planBindings) {
+      if (binding.live !== owner) {
+        continue;
+      }
+      this.#planBindings.delete(planId);
+      binding.resolve(false);
+      const plan = this.#store.plans
+        .list(owner.missionId)
+        .find((entry) => entry.id === planId);
+      if (plan?.actionable) {
+        this.#log.commit((emit) =>
+          this.#savePlan({ ...plan, actionable: false }, emit)
+        );
+      }
+    }
+  }
+
+  #enterPlan(agentId: string, reason: string | undefined, owner: LiveAgent) {
+    const { agent, mission } = this.#requireCurrent(agentId, owner);
+    if (agent.role !== "orchestrator") {
+      throw new Error("Only the main agent can enter Plan mode.");
+    }
+    if (mission.executionMode === "plan") {
+      return "Plan mode is already active. Continue planning and present the plan with ExitSpecMode.";
+    }
+    this.#mutateMission(mission.id, (m) => ({
+      ...m,
+      executionMode: "plan",
+      pendingExecutionMode: null,
+    }));
+    this.#planEntries.set(mission.id, reason?.trim() || null);
+    return "Plan mode recorded: every agent is now read-only. End your turn now; planning continues automatically in Spec mode.";
+  }
+
+  /** The main loop yielded: apply a requested Plan entry or a waiting transition. */
+  #onAgentIdle(agent: Agent, mission: Mission) {
+    if (agent.role !== "orchestrator") {
+      return;
+    }
+    if (this.#planEntries.has(mission.id)) {
+      const reason = this.#planEntries.get(mission.id) ?? null;
+      this.#planEntries.delete(mission.id);
+      this.#own(this.#activatePlanEntry(agent.id, reason));
+      return;
+    }
+    if (deliverableFor(this.#store.queue.list(mission.id), agent.id).length) {
+      this.#scheduleDelivery(agent.id);
+    }
+  }
+
+  async #activatePlanEntry(agentId: string, reason: string | null) {
+    const owner = this.#live.get(agentId);
+    const current = owner ? this.#isCurrent(agentId, owner) : null;
+    if (
+      !(owner && current) ||
+      owner.phase !== "ready" ||
+      current.mission.executionMode !== "plan"
+    ) {
+      return;
+    }
+    try {
+      await this.#syncNativeMode(owner);
+    } catch (error) {
+      this.#notice(
+        current.mission.id,
+        "run_failed",
+        "error",
+        `Could not switch the main agent to Plan mode: ${errorMessage(error)}`
+      );
+      return;
+    }
+    await this.#sendSystem(agentId, planEnteredMessage(reason), "steer");
   }
 
   #orchestrator(missionId: string) {
@@ -1698,13 +2202,19 @@ export class MissionService {
         check(agentId);
         return await Promise.resolve(this.#dispatchWorker(agentId, input));
       },
-      messageWorker: async (agentId, input) => {
+      enterPlan: async (agentId, input) => {
         check(agentId);
-        return await this.#messageWorker(agentId, input, owner);
+        return await Promise.resolve(
+          this.#enterPlan(agentId, input.reason, owner)
+        );
       },
-      proposePlan: async (agentId, input) => {
+      readHistory: async (agentId, input) => {
         check(agentId);
-        return await Promise.resolve(this.#proposePlan(agentId, input));
+        return await Promise.resolve(this.#readHistory(agentId, input));
+      },
+      sendMessage: async (agentId, input) => {
+        check(agentId);
+        return await Promise.resolve(this.#sendMessage(agentId, input, owner));
       },
       submitHandoff: async (agentId, input) => {
         check(agentId);
@@ -1725,43 +2235,14 @@ export class MissionService {
     return current;
   }
 
-  #proposePlan(agentId: string, input: { title: string; markdown: string }) {
-    const { mission } = this.#requireCurrent(agentId);
-    const plans = this.#store.plans.list(mission.id);
-    const plan: PlanRevision = {
-      createdAt: this.#iso(),
-      decidedAt: null,
-      feedback: null,
-      id: randomUUID(),
-      markdown: input.markdown,
-      missionId: mission.id,
-      revision: Math.max(0, ...plans.map((p) => p.revision)) + 1,
-      status: "proposed",
-      title: input.title,
-    };
-    this.#log.commit((emit) => {
-      for (const previous of plans.filter((p) => p.status === "proposed")) {
-        this.#savePlan({ ...previous, status: "superseded" }, emit);
-      }
-      this.#savePlan(plan, emit);
-      this.#saveMission(emit, { ...mission, status: "awaiting_approval" });
-    });
-    this.#saveSharedFile(
-      mission.id,
-      `plans/plan-${plan.revision}.md`,
-      `# ${plan.title}\n\n${plan.markdown}\n`
-    );
-    return `Plan revision ${plan.revision} submitted for review. Wait for the user's decision; it arrives as a message. Do not change files until then.`;
-  }
-
   #dispatchWorker(
     agentId: string,
     input: { title: string; instructions: string; needsWrite: boolean }
   ) {
     const { mission } = this.#requireCurrent(agentId);
-    if (this.#latestPlan(mission.id)?.status !== "approved") {
+    if (mission.executionMode === "plan" && input.needsWrite) {
       throw new Error(
-        "Workers can only be dispatched after the user approves a plan."
+        "Plan mode is read-only: dispatch research or review Workers with needsWrite=false until the user approves the plan."
       );
     }
     const queued = this.#store.assignments.list(mission.id, ["queued"]).length;
@@ -1794,11 +2275,7 @@ export class MissionService {
 
   async #pump(missionId: string) {
     const mission = this.get(missionId);
-    if (
-      this.#closing ||
-      FENCED.has(mission.status) ||
-      this.#latestPlan(missionId)?.status !== "approved"
-    ) {
+    if (this.#closing || FENCED.has(mission.status)) {
       return;
     }
     const limit = this.#settings.get().maxConcurrentWorkers;
@@ -1813,8 +2290,13 @@ export class MissionService {
         (assignment) =>
           !assignment.workerAgentId || !this.#live.has(assignment.workerAgentId)
       ).length;
+    // Writable assignments wait while Plan mode keeps every agent read-only.
     const next = this.#store.assignments
       .list(missionId, ["queued"])
+      .filter(
+        (assignment) =>
+          !(mission.executionMode === "plan" && assignment.needsWrite)
+      )
       .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))
       .slice(0, Math.max(0, limit - running - starting));
     await Promise.all(
@@ -1842,92 +2324,567 @@ export class MissionService {
     const worker =
       saved ??
       this.#newAgent(mission, "worker", `Worker ${workers + 1}`, assignment.id);
+    // A legacy session gets a v2 successor whose continuation packet
+    // already restates the assignment.
+    const { legacy, resumed } = this.#workerStart(saved, assignment.id);
     this.#saveAgent(worker);
-    this.#saveAssignment({
+    const running = this.#saveAssignment({
       ...assignment,
       status: "running",
       workerAgentId: worker.id,
     });
+    if (!saved) {
+      this.#acceptAgentMessage({
+        id: `assign:${assignment.id}`,
+        purpose: "assignment",
+        recipient: worker,
+        sender: this.#orchestrator(mission.id),
+        text: assignmentMessage(running),
+      });
+    }
     try {
-      if (saved && !saved.sessionId) {
+      if (resumed && !saved?.sessionId) {
         throw new Error(
           "The saved worker session is unavailable; no replacement was created"
         );
       }
       const runtime = await this.#ensureRuntime(worker.id);
       this.#requireRuntime(worker.id, runtime);
-      await this.#execute(worker.id, runtime, () =>
-        runtime.submit(
-          `${SYSTEM_PREFIX}${saved ? `resume:${mission.epoch}` : "assign"}:${assignment.id}`,
-          saved
-            ? `[Missions] The user resumed this mission. Continue assignment ${assignment.id} from your saved context. Re-read shared files and inspect the workspace before continuing. Do not repeat completed work.`
-            : assignmentMessage(assignment),
-          "steer"
-        )
-      );
+      if (resumed && !legacy) {
+        await this.#execute(worker.id, runtime, () =>
+          runtime.submit(
+            `${SYSTEM_PREFIX}resume:${mission.epoch}:${assignment.id}`,
+            `[Missions] The user resumed this mission. Continue assignment ${assignment.id} from your saved context. Re-read shared files and inspect the workspace before continuing. Do not repeat completed work.`,
+            "steer"
+          )
+        );
+      }
+      this.#scheduleDelivery(worker.id);
     } catch (error) {
-      const result = await this.#closeRuntime(worker.id);
-      if (!FENCED.has(this.get(mission.id).status)) {
-        this.#patchAgent(worker.id, { status: "failed" });
-      }
-      const latest = this.#store.assignments.get(assignment.id) ?? assignment;
-      if (latest.status === "running") {
-        this.#saveAssignment({ ...latest, status: "failed" });
-      }
-      if (!FENCED.has(this.get(mission.id).status) && !this.#closing) {
-        this.#notice(
-          mission.id,
-          "run_failed",
-          "error",
-          `Assignment ${assignment.title} could not start: ${errorMessage(error)}`
-        );
-        this.#saveSharedFile(
-          mission.id,
-          `errors/${worker.id}-${mission.epoch}.md`,
-          `# ${assignment.title}\n\n${errorMessage(error)}\n`
-        );
-        void this.#systemSubmit(
-          this.#orchestrator(mission.id).id,
-          `[Missions] Assignment ${assignment.id} could not start: ${errorMessage(error)}`,
-          "steer"
-        );
-        if (result.stopped) {
-          await this.#pumpAssignments(mission.id);
-        }
+      await this.#assignmentStartFailed(mission, assignment, worker, error);
+    }
+  }
+
+  /** How a saved Worker restarts: a resumed session, a legacy successor, or fresh. */
+  #workerStart(saved: Agent | null, assignmentId: string) {
+    // A Worker stopped before its first delivery has no session to resume;
+    // it starts fresh and its still-accepted assignment message is delivered.
+    const neverStarted =
+      saved !== null &&
+      !saved.sessionId &&
+      this.#store.queue.get(`assign:${assignmentId}`)?.state === "accepted";
+    const resumed = saved !== null && !neverStarted;
+    return {
+      legacy: resumed && saved.promptVersion !== PROMPT_VERSION,
+      resumed,
+    };
+  }
+
+  async #assignmentStartFailed(
+    mission: Mission,
+    assignment: Assignment,
+    worker: Agent,
+    error: unknown
+  ) {
+    this.#failUndelivered(worker.id, "The Worker could not start");
+    const result = await this.#closeRuntime(worker.id);
+    if (!FENCED.has(this.get(mission.id).status)) {
+      this.#patchAgent(worker.id, { status: "failed" });
+    }
+    const latest = this.#store.assignments.get(assignment.id) ?? assignment;
+    if (latest.status === "running") {
+      this.#saveAssignment({ ...latest, status: "failed" });
+    }
+    if (!FENCED.has(this.get(mission.id).status) && !this.#closing) {
+      this.#notice(
+        mission.id,
+        "run_failed",
+        "error",
+        `Assignment ${assignment.title} could not start: ${errorMessage(error)}`
+      );
+      this.#saveSharedFile(
+        mission.id,
+        `errors/${worker.id}-${mission.epoch}.md`,
+        `# ${assignment.title}\n\n${errorMessage(error)}\n`
+      );
+      void this.#systemSubmit(
+        this.#orchestrator(mission.id).id,
+        `[Missions] Assignment ${assignment.id} could not start: ${errorMessage(error)}`,
+        "steer"
+      );
+      if (result.stopped) {
+        await this.#pumpAssignments(mission.id);
       }
     }
   }
 
-  async #messageWorker(
-    agentId: string,
-    input: { assignmentId: string; text: string; mode: DeliveryMode },
-    owner: LiveAgent
-  ) {
-    const { mission } = this.#requireCurrent(agentId);
-    const assignment = this.#store.assignments.get(input.assignmentId);
+  /**
+   * Agent-to-agent messages: sender identity is bound by the tool server,
+   * the recipient must belong to the same mission, and messages always steer.
+   */
+  #sendMessage(agentId: string, input: SendMessageInput, owner: LiveAgent) {
+    const { agent, mission } = this.#requireCurrent(agentId, owner);
+    const text = input.text.trim();
+    if (!text || text.length > MAX_AGENT_MESSAGE) {
+      throw new Error(
+        `Messages must be 1-${MAX_AGENT_MESSAGE} characters; put longer reports in shared files.`
+      );
+    }
+    const recipient = this.#recipientOf(agent, mission, input.to);
+    const id = `msg:${agent.id}:${input.messageId}`;
+    const existing = this.#store.queue.get(id);
+    if (existing) {
+      if (
+        !sameMessage(existing, {
+          agentId: recipient.agent.id,
+          executionMode: null,
+          missionId: mission.id,
+          mode: "steer",
+          text,
+        })
+      ) {
+        throw new Error(
+          `messageId ${input.messageId} was already used for a different message; use a new messageId.`
+        );
+      }
+      return `Message ${input.messageId} was already accepted (${existing.state}); it was not sent again.`;
+    }
+    const outstanding = this.#store.queue
+      .list(mission.id)
+      .filter(
+        (item) =>
+          item.agentId === recipient.agent.id &&
+          item.origin === "agent" &&
+          item.purpose === "message" &&
+          isOutstanding(item)
+      ).length;
+    if (outstanding >= MAX_OUTSTANDING_MESSAGES) {
+      throw new Error(
+        `${recipient.label} already has ${outstanding} undelivered messages. Wait for it to catch up, then send again.`
+      );
+    }
+    this.#acceptAgentMessage({
+      id,
+      purpose: "message",
+      recipient: recipient.agent,
+      sender: agent,
+      text,
+    });
+    return `Message ${input.messageId} accepted for ${recipient.label}. It is delivered at the recipient's next tool boundary; acceptance does not mean it was read.`;
+  }
+
+  #recipientOf(sender: Agent, mission: Mission, to: string) {
+    const target = to.trim();
+    if (sender.role === "worker") {
+      if (target.toLowerCase() !== MAIN_RECIPIENT) {
+        throw new Error(
+          `Workers can only message the main agent; use to="${MAIN_RECIPIENT}".`
+        );
+      }
+      return { agent: this.#orchestrator(mission.id), label: "the main agent" };
+    }
+    if (target.toLowerCase() === MAIN_RECIPIENT) {
+      throw new Error(
+        "You are the main agent; address a Worker by its assignment id."
+      );
+    }
+    const assignment = this.#store.assignments.get(target);
     if (
       !assignment ||
       assignment.missionId !== mission.id ||
       !assignment.workerAgentId
     ) {
-      throw new Error(`Unknown or unstarted assignment ${input.assignmentId}`);
+      throw new Error(`Unknown or unstarted assignment ${target}.`);
     }
     if (assignment.status !== "running") {
       throw new Error(
         `Assignment ${assignment.id} is ${assignment.status}; its Worker is not running.`
       );
     }
-    const runtime = await this.#ensureRuntime(assignment.workerAgentId);
-    this.#requireCurrent(agentId, owner);
-    this.#requireRuntime(assignment.workerAgentId, runtime);
-    await this.#execute(assignment.workerAgentId, runtime, () =>
-      runtime.submit(
-        `${SYSTEM_PREFIX}${randomUUID()}`,
-        workerMessage(input.text),
-        input.mode
-      )
+    const worker = this.#store.getAgent(assignment.workerAgentId);
+    if (!worker) {
+      throw new Error(`The Worker on ${assignment.id} is unavailable.`);
+    }
+    return { agent: worker, label: `${worker.title} (${assignment.id})` };
+  }
+
+  /**
+   * Persists an agent message and its one canonical transcript record in a
+   * single transaction, then schedules delivery. `alsoCommit` lets a handoff
+   * persist together with its outbound receipt.
+   */
+  #acceptAgentMessage(message: {
+    id: string;
+    purpose: MessagePurpose;
+    sender: Agent;
+    recipient: Agent;
+    text: string;
+    alsoCommit?: (emit: Emit) => void;
+  }): QueueItem {
+    const { missionId } = message.recipient;
+    const sender = MissionService.#party(message.sender);
+    const item = this.#newQueueItem({
+      agentId: message.recipient.id,
+      id: message.id,
+      missionId,
+      mode: "steer",
+      origin: "agent",
+      purpose: message.purpose,
+      sender,
+      sequence: nextSequence(this.#store.queue.list(missionId)),
+      text: message.text,
+    });
+    const record = agentMessageItem(
+      { agentId: message.sender.id, createdAt: item.createdAt, missionId },
+      {
+        purpose: message.purpose,
+        queueItemId: item.id,
+        recipient: MissionService.#party(message.recipient),
+        sender,
+        text: message.text,
+      }
     );
-    return `Message ${input.mode === "steer" ? "steered" : "queued"} to the Worker on ${assignment.id}.`;
+    this.#log.commit((emit) => {
+      message.alsoCommit?.(emit);
+      this.#store.queue.put(item);
+      emit(missionId, { data: { item }, type: "queue.updated" });
+      if (!this.#store.getTranscriptItem(record.id)) {
+        const saved = this.#store.appendTranscript(record);
+        emit(missionId, { data: { item: saved }, type: "transcript.item" });
+      }
+    });
+    this.#timing.mark(item.id, "message.accepted", {
+      agentId: item.agentId,
+      missionId,
+    });
+    this.#scheduleDelivery(item.agentId);
+    return item;
+  }
+
+  // -------------------------------------------------------------- outbox
+
+  /** One delivery loop per recipient; later acceptances rerun it. */
+  #scheduleDelivery(agentId: string) {
+    if (this.#closing) {
+      return;
+    }
+    const running = this.#deliveries.get(agentId);
+    if (running) {
+      running.again = true;
+      return;
+    }
+    const state = { again: false };
+    this.#deliveries.set(agentId, state);
+    this.#own(this.#deliver(agentId, state));
+  }
+
+  async #deliver(agentId: string, state: { again: boolean }) {
+    try {
+      do {
+        state.again = false;
+        // oxlint-disable-next-line no-await-in-loop -- passes must not overlap
+        await this.#deliverPass(agentId);
+      } while (state.again && !this.#closing);
+    } finally {
+      this.#deliveries.delete(agentId);
+    }
+  }
+
+  async #deliverPass(agentId: string) {
+    const agent = this.#store.getAgent(agentId);
+    const mission = agent ? this.#store.getMission(agent.missionId) : null;
+    if (!(agent && mission) || this.#closing || FENCED.has(mission.status)) {
+      return;
+    }
+    if (
+      deliverableFor(this.#store.queue.list(mission.id), agentId).length === 0
+    ) {
+      return;
+    }
+    if (agent.role === "worker") {
+      const assignment = agent.assignmentId
+        ? this.#store.assignments.get(agent.assignmentId)
+        : null;
+      if (assignment?.status !== "running") {
+        this.#failUndelivered(agentId, "The Worker is no longer running");
+        return;
+      }
+      if (!this.#live.has(agentId)) {
+        // Worker startup belongs to its assignment; it reschedules delivery.
+        return;
+      }
+    }
+    let runtime: RuntimeHandle;
+    try {
+      runtime = await this.#ensureRuntime(agentId);
+    } catch (error) {
+      if (!(this.#closing || FENCED.has(this.get(mission.id).status))) {
+        this.#notice(
+          mission.id,
+          "run_failed",
+          "warning",
+          `Messages to ${agent.title} are waiting: it could not start (${errorMessage(error)}).`
+        );
+      }
+      return;
+    }
+    const current = this.#isCurrent(agentId);
+    if (!current || current.live.runtime !== runtime) {
+      return;
+    }
+    await this.#drainOutbox(current.live, runtime);
+  }
+
+  async #drainOutbox(live: LiveAgent, runtime: RuntimeHandle) {
+    const { agentId } = live;
+    for (;;) {
+      const current = this.#isCurrent(agentId, live);
+      if (!current || live.phase !== "ready") {
+        return;
+      }
+      const [next] = deliverableFor(
+        this.#store.queue.list(current.mission.id),
+        agentId
+      );
+      if (!next) {
+        return;
+      }
+      const ready =
+        current.agent.role !== "orchestrator" ||
+        // oxlint-disable-next-line no-await-in-loop -- strict admission order
+        (await this.#applyRequestedMode(live, next));
+      // oxlint-disable-next-line no-await-in-loop -- strict admission order
+      if (!(ready && (await this.#submitAccepted(live, runtime, next)))) {
+        return;
+      }
+    }
+  }
+
+  /**
+   * A requested mode is an ordered boundary: it applies only once the main
+   * loop and shared writes are quiescent; until then this and every later
+   * message stay in the outbox.
+   */
+  async #applyRequestedMode(live: LiveAgent, item: QueueItem) {
+    const mission = this.get(live.missionId);
+    const target = item.executionMode;
+    if (target === null || target === mission.executionMode) {
+      if (mission.pendingExecutionMode !== null) {
+        this.#mutateMission(mission.id, (m) => ({
+          ...m,
+          pendingExecutionMode: null,
+        }));
+      }
+      return true;
+    }
+    if (!this.#quiescent(live)) {
+      if (mission.pendingExecutionMode !== target) {
+        this.#mutateMission(mission.id, (m) => ({
+          ...m,
+          pendingExecutionMode: target,
+        }));
+      }
+      return false;
+    }
+    const previous = mission.executionMode;
+    this.#mutateMission(mission.id, (m) => ({
+      ...m,
+      executionMode: target,
+      pendingExecutionMode: null,
+    }));
+    try {
+      await this.#syncNativeMode(live);
+      return true;
+    } catch (error) {
+      // Keep the transition pending so the next pass retries the native switch.
+      this.#mutateMission(mission.id, (m) =>
+        m.executionMode === target
+          ? { ...m, executionMode: previous, pendingExecutionMode: target }
+          : m
+      );
+      if (this.#isCurrent(live.agentId, live)) {
+        this.#notice(
+          mission.id,
+          "run_failed",
+          "error",
+          `Could not switch the main agent to ${target === "plan" ? "Plan" : "Work"} mode: ${errorMessage(error)}`
+        );
+      }
+      return false;
+    }
+  }
+
+  #quiescent(live: LiveAgent) {
+    const agent = this.#store.getAgent(live.agentId);
+    if (!agent) {
+      return false;
+    }
+    const busy =
+      agent.status === "working" ||
+      agent.status === "waiting_permission" ||
+      agent.status === "waiting_answer" ||
+      (agent.workingState !== null && agent.workingState !== "idle");
+    const nativeOpen = this.#store.queue
+      .list(agent.missionId)
+      .some(
+        (item) =>
+          item.agentId === agent.id &&
+          (item.state === "submitting" ||
+            item.state === "queued" ||
+            item.state === "removing")
+      );
+    return !(busy || nativeOpen) && this.leases.holder(live.workspace) === null;
+  }
+
+  /** Persists `submitting` before native I/O; returns whether to continue. */
+  async #submitAccepted(
+    live: LiveAgent,
+    runtime: RuntimeHandle,
+    item: QueueItem
+  ): Promise<boolean> {
+    const latest = this.#store.queue.get(item.id);
+    if (latest?.state !== "accepted") {
+      // Edited or cancelled locally since it was picked.
+      return true;
+    }
+    const submitting = this.#saveQueueItem({
+      ...latest,
+      revision: latest.revision + 1,
+      state: "submitting",
+      updatedAt: this.#iso(),
+    });
+    const ids = { agentId: live.agentId, missionId: live.missionId };
+    live.awaitingText = item.id;
+    this.#timing.mark(item.id, "delivery.submitting", ids);
+    try {
+      await this.#execute(live.agentId, runtime, () =>
+        runtime.submit(
+          latest.id,
+          this.#nativeText(latest),
+          latest.mode,
+          this.#submitOptions(latest)
+        )
+      );
+      this.#timing.mark(item.id, "delivery.admitted", ids);
+      return true;
+    } catch (error) {
+      const after = this.#store.queue.get(item.id) ?? submitting;
+      if (after.state === "submitting") {
+        this.#saveQueueItem({
+          ...after,
+          error: errorMessage(error),
+          revision: after.revision + 1,
+          state: isDefiniteFailure(error) ? "failed" : "unknown",
+          updatedAt: this.#iso(),
+        });
+      }
+      // A definite rejection affects only this message; anything uncertain
+      // stops the pass so nothing races an ambiguous transport.
+      const outcome = this.#store.queue.get(item.id)?.state;
+      if (outcome === "unknown" && this.#isCurrent(live.agentId, live)) {
+        this.#notice(
+          live.missionId,
+          "run_failed",
+          "warning",
+          `Delivery of a message is uncertain (${errorMessage(error)}). It is never sent again automatically; check the conversation and retry it if needed.`
+        );
+      }
+      return outcome === "failed";
+    }
+  }
+
+  #nativeText(item: QueueItem) {
+    if (item.origin !== "agent" || item.purpose !== "message" || !item.sender) {
+      return item.text;
+    }
+    const sender = this.#store.getAgent(item.sender.agentId);
+    const reference = sender?.assignmentId
+      ? `assignment ${sender.assignmentId}`
+      : null;
+    return agentMessageText(item.sender.title, reference, item.text);
+  }
+
+  #submitOptions(item: QueueItem): SubmitOptions {
+    const sender = item.sender
+      ? this.#store.getAgent(item.sender.agentId)
+      : null;
+    if (!sender?.sessionId) {
+      return {};
+    }
+    return {
+      sender:
+        sender.role === "orchestrator"
+          ? { kind: "orchestrator", sessionId: sender.sessionId }
+          : { kind: "agent", sessionId: sender.sessionId, title: sender.title },
+    };
+  }
+
+  /** Definitely unsent messages to a recipient that can no longer take them. */
+  #failUndelivered(agentId: string, reason: string) {
+    const agent = this.#store.getAgent(agentId);
+    if (!agent) {
+      return;
+    }
+    for (const item of deliverableFor(
+      this.#store.queue.list(agent.missionId),
+      agentId
+    )) {
+      this.#saveQueueItem({
+        ...item,
+        error: reason,
+        revision: item.revision + 1,
+        state: "failed",
+        updatedAt: this.#iso(),
+      });
+    }
+  }
+
+  #readHistory(agentId: string, input: HistoryInput) {
+    const { mission } = this.#requireCurrent(agentId);
+    const page = this.#store.transcriptPage(
+      mission.id,
+      input.before ?? null,
+      Math.min(Math.max(input.limit ?? 40, 1), 100)
+    );
+    const titles = new Map(
+      this.#store.listAgents(mission.id).map((agent) => [agent.id, agent.title])
+    );
+    const lines = page.items.map((item) => {
+      const who =
+        item.kind === "user" ? "User" : (titles.get(item.agentId) ?? "Agent");
+      const to = item.recipient ? ` → ${item.recipient.title}` : "";
+      const tool = item.toolName ? ` ${item.toolName}` : "";
+      const text =
+        item.text.length > HISTORY_ENTRY_LIMIT
+          ? `${item.text.slice(0, HISTORY_ENTRY_LIMIT)}…`
+          : item.text;
+      return `#${item.seq} ${who}${to} [${item.kind}${tool}]: ${text}`;
+    });
+    const more = page.hasMore
+      ? `Older entries exist: call read_history with before=${page.items[0]?.seq ?? ""}.`
+      : "This is the start of the mission history.";
+    return `${lines.join("\n") || "No history yet."}\n\n${more}`;
+  }
+
+  #observeGit(missionId: string) {
+    const observer = this.#gitObserver;
+    if (!observer || this.#closing) {
+      return;
+    }
+    this.#own(this.#runGitObserver(observer, missionId));
+  }
+
+  async #runGitObserver(observer: GitObserver, missionId: string) {
+    try {
+      await observer(missionId);
+    } catch (error) {
+      this.#notice(
+        missionId,
+        "info",
+        "warning",
+        `Could not re-read the repository after a Git action: ${errorMessage(error)}`
+      );
+    }
   }
 
   #updateTodos(agentId: string, todos: TodoInput[]) {
@@ -1975,24 +2932,34 @@ export class MissionService {
     if (!assignment || assignment.status !== "running") {
       throw new Error("You have no running assignment to hand off.");
     }
-    const handed = this.#saveAssignment({
+    const handed: Assignment = {
       ...assignment,
       handoff: input,
       status: "handed_off",
+      updatedAt: this.#iso(),
+    };
+    // The handoff and its outbound receipt persist together; native delivery follows.
+    this.#acceptAgentMessage({
+      alsoCommit: (emit) => {
+        this.#store.assignments.put(handed);
+        emit(handed.missionId, {
+          data: { assignment: handed },
+          type: "assignment.updated",
+        });
+      },
+      id: `handoff:${assignment.id}`,
+      purpose: "handoff",
+      recipient: this.#orchestrator(mission.id),
+      sender: agent,
+      text: handoffMessage(agent.title, handed, input),
     });
     this.#saveSharedFile(
       mission.id,
       `handoffs/${assignment.id}.md`,
       `# ${assignment.title}\n\n${input.summary}\n\n## Files\n${input.filesChanged.map((file) => `- \`${file}\``).join("\n")}\n\n## Checks\n${input.checks.map((check) => `- ${check.command}: ${check.outcome}`).join("\n")}\n\n## Follow-ups\n${input.followUps.map((followUp) => `- ${followUp}`).join("\n")}\n`
     );
-    const orchestrator = this.#orchestrator(mission.id);
-    void this.#systemSubmit(
-      orchestrator.id,
-      handoffMessage(agent.title, handed, input),
-      "steer"
-    );
     this.#own(this.#retireWorker(agent.id, mission.id));
-    return "Handoff recorded. Stop now; the Orchestrator will review your work.";
+    return "Handoff recorded and queued for the main agent. Stop now.";
   }
 
   async #retireWorker(agentId: string, missionId: string) {
@@ -2087,110 +3054,126 @@ export class MissionService {
     if (this.#closing) {
       return Promise.reject(conflict("The daemon is stopping"));
     }
-    return this.#own(this.#submitMessageIntent(missionId, request));
+    try {
+      return Promise.resolve(this.#acceptUserMessage(missionId, request));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
-  async #submitMessageIntent(
-    missionId: string,
-    request: SubmitMessageRequest
-  ): Promise<QueueItem> {
-    const agentId = request.agentId ?? this.#orchestrator(missionId).id;
-    const identity = { kind: "mission.message", missionId };
-    const saved = this.#journal.get(request.operationId, identity);
+  /** The receipt for a retried operation ID, or a conflict if its intent differs. */
+  #acceptedBefore(
+    operationId: string,
+    intent: Pick<QueueItem, "agentId" | "executionMode" | "mode" | "text"> & {
+      missionId: string;
+    }
+  ) {
+    const saved = this.#journal.get(operationId, {
+      kind: "mission.message",
+      missionId: intent.missionId,
+    });
+    if (saved) {
+      // The journal keeps the original intent; the item's placement may have changed since.
+      const { detail } = saved.operation;
+      if (
+        detail.agentId !== intent.agentId ||
+        detail.text !== intent.text ||
+        detail.mode !== intent.mode ||
+        (detail.executionMode ?? null) !== intent.executionMode
+      ) {
+        throw conflict(DUPLICATE_OPERATION);
+      }
+    }
+    const existing = this.#store.queue.get(operationId);
     if (
-      saved &&
-      (saved.operation.detail.agentId !== agentId ||
-        saved.operation.detail.text !== request.text ||
-        saved.operation.detail.mode !== request.mode)
+      existing &&
+      (existing.missionId !== intent.missionId ||
+        (!saved && !sameMessage(existing, intent)))
     ) {
-      throw conflict("This operation ID was already used for another message");
+      throw conflict(DUPLICATE_OPERATION);
     }
-    const existing = this.#store.queue.get(request.operationId);
-    if (existing) {
-      if (
-        existing.missionId !== missionId ||
-        existing.agentId !== agentId ||
-        existing.text !== request.text ||
-        (!saved && existing.mode !== request.mode) ||
-        existing.replacesId !== null
-      ) {
-        throw conflict(
-          "This operation ID was already used for another message"
-        );
-      }
-      return existing;
-    }
-    const { result } = await this.#journal.run(
-      {
-        ...identity,
-        detail: { agentId, mode: request.mode, text: request.text },
-        id: request.operationId,
-      },
-      async () => await this.#submitMessage(missionId, request)
-    );
-    return this.#store.queue.get(result.id) ?? result;
+    return existing;
   }
 
-  async #submitMessage(
-    missionId: string,
-    request: SubmitMessageRequest
-  ): Promise<QueueItem> {
+  #requireRunningWorker(agent: Agent) {
+    if (agent.role !== "worker") {
+      return;
+    }
+    const assignment = agent.assignmentId
+      ? this.#store.assignments.get(agent.assignmentId)
+      : null;
+    if (assignment?.status !== "running") {
+      throw conflict("This Worker is not running");
+    }
+  }
+
+  /**
+   * Durable acceptance only: the receipt returns before native I/O, and the
+   * outbox delivers in sequence order once the recipient can take it, even
+   * while its startup is still in progress.
+   */
+  #acceptUserMessage(missionId: string, request: SubmitMessageRequest) {
     const mission = this.get(missionId);
-    const existing = this.#store.queue.get(request.operationId);
+    const agentId = request.agentId ?? this.#orchestrator(missionId).id;
+    const intent = {
+      agentId,
+      executionMode: request.executionMode ?? null,
+      missionId,
+      mode: request.mode,
+      text: request.text,
+    };
+    const existing = this.#acceptedBefore(request.operationId, intent);
     if (existing) {
-      const agentId = request.agentId ?? this.#orchestrator(missionId).id;
-      if (
-        existing.missionId !== missionId ||
-        existing.agentId !== agentId ||
-        existing.text !== request.text ||
-        existing.mode !== request.mode ||
-        existing.replacesId !== null
-      ) {
-        throw conflict(
-          "This operation ID was already used for another message"
-        );
-      }
       return existing;
     }
     if (FENCED.has(mission.status)) {
       throw conflict("Resume the mission before sending messages");
     }
-    const agent = request.agentId
-      ? this.#store.getAgent(request.agentId)
-      : this.#orchestrator(missionId);
+    const agent = this.#store.getAgent(agentId);
     if (!agent || agent.missionId !== missionId) {
       throw notFound("Agent");
     }
-    const item = this.#saveQueueItem(
-      this.#newQueueItem(
-        missionId,
-        agent.id,
-        request.operationId,
-        request.text,
-        request.mode
-      )
-    );
-    try {
-      const runtime = await this.#ensureRuntime(agent.id);
-      this.#requireRuntime(agent.id, runtime);
-      await this.#execute(agent.id, runtime, () =>
-        runtime.submit(item.id, item.text, item.mode)
-      );
-    } catch (error) {
-      const latest = this.#store.queue.get(item.id) ?? item;
-      if (latest.state === "submitting") {
-        this.#saveQueueItem({
-          ...latest,
-          error: errorMessage(error),
-          revision: latest.revision + 1,
-          state: isDefiniteFailure(error) ? "failed" : "unknown",
-          updatedAt: this.#iso(),
-        });
-      }
+    if (agent.role === "worker" && intent.executionMode !== null) {
+      throw conflict("Only messages to the main agent can change the mode");
     }
-    return this.#store.queue.get(item.id) ?? item;
+    this.#requireRunningWorker(agent);
+    const items = this.#store.queue.list(missionId);
+    const outstanding = items.filter(
+      (item) =>
+        item.agentId === agentId &&
+        item.origin === "user" &&
+        isOutstanding(item)
+    ).length;
+    if (outstanding >= MAX_OUTSTANDING_MESSAGES) {
+      throw conflict(
+        `${agent.title} already has ${outstanding} undelivered messages. Wait for them to be delivered or remove some`
+      );
+    }
+    const item = this.#newQueueItem({
+      ...intent,
+      id: request.operationId,
+      sequence: nextSequence(items),
+    });
+    const at = this.#iso();
+    const operation = {
+      createdAt: at,
+      detail: { ...intent },
+      id: request.operationId,
+      kind: "mission.message",
+      missionId,
+      status: "succeeded" as const,
+      updatedAt: at,
+    };
+    this.#log.commit((emit) => {
+      this.#store.putOperation(operation, item);
+      emit(missionId, { data: { operation }, type: "operation.updated" });
+      this.#store.queue.put(item);
+      emit(missionId, { data: { item }, type: "queue.updated" });
+    });
+    this.#timing.mark(item.id, "message.accepted", { agentId, missionId });
+    this.#scheduleDelivery(agentId);
+    return item;
   }
-
   #queueItem(missionId: string, itemId: string, expectedRevision: number) {
     const item = this.#store.queue.get(itemId);
     if (!item || item.missionId !== missionId) {
@@ -2199,6 +3182,11 @@ export class MissionService {
     if (item.revision !== expectedRevision) {
       throw stale("This message changed; refresh and try again");
     }
+    return item;
+  }
+
+  /** Native queue operations need the recipient's current ready runtime. */
+  #nativeQueueRuntime(item: QueueItem) {
     const live = this.#live.get(item.agentId);
     if (
       !live ||
@@ -2207,7 +3195,21 @@ export class MissionService {
     ) {
       throw conflict("The agent for this message is not running");
     }
-    return { item, runtime: live.runtime };
+    return live.runtime;
+  }
+
+  /** Applies a local change to a still-accepted message; null once it left the outbox. */
+  #reviseAccepted(itemId: string, change: Partial<QueueItem>) {
+    const latest = this.#store.queue.get(itemId);
+    if (latest?.state !== "accepted") {
+      return null;
+    }
+    return this.#saveQueueItem({
+      ...latest,
+      ...change,
+      revision: latest.revision + 1,
+      updatedAt: this.#iso(),
+    });
   }
 
   async changeQueueMode(
@@ -2216,26 +3218,30 @@ export class MissionService {
     request: ChangeQueueModeRequest
   ) {
     return await this.#whileBusy(itemId, async () => {
-      const { item, runtime } = this.#queueItem(
-        missionId,
-        itemId,
-        request.expectedRevision
-      );
-      if (item.state !== "queued") {
+      const item = this.#queueItem(missionId, itemId, request.expectedRevision);
+      if (item.state === "accepted") {
+        const revised = this.#reviseAccepted(item.id, { mode: request.mode });
+        if (revised) {
+          return revised;
+        }
+      }
+      const latest = this.#store.queue.get(item.id) ?? item;
+      if (latest.state !== "queued") {
         throw conflict(
-          item.state === "sent"
+          latest.state === "sent"
             ? "This message was already delivered"
-            : `Cannot change a ${item.state} message`
+            : `Cannot change a ${latest.state} message`
         );
       }
+      const runtime = this.#nativeQueueRuntime(latest);
       try {
-        await this.#execute(item.agentId, runtime, () =>
-          runtime.changeMode(item.id, request.mode)
+        await this.#execute(latest.agentId, runtime, () =>
+          runtime.changeMode(latest.id, request.mode)
         );
       } catch (error) {
         throw conflict(`The runner refused the change: ${errorMessage(error)}`);
       }
-      return this.#store.queue.get(item.id) ?? item;
+      return this.#store.queue.get(item.id) ?? latest;
     });
   }
 
@@ -2244,18 +3250,106 @@ export class MissionService {
     itemId: string,
     expectedRevision: number
   ) {
-    const { item, runtime } = this.#queueItem(
-      missionId,
-      itemId,
-      expectedRevision
-    );
+    const item = this.#queueItem(missionId, itemId, expectedRevision);
     if (TERMINAL_QUEUE.has(item.state)) {
       return item;
     }
+    if (item.state === "accepted") {
+      const removed = this.#reviseAccepted(item.id, { state: "removed" });
+      if (removed) {
+        this.#scheduleDelivery(removed.agentId);
+        return removed;
+      }
+    }
+    const runtime = this.#nativeQueueRuntime(item);
     return await this.#whileBusy(item.id, async () => {
       await this.#execute(item.agentId, runtime, () => runtime.remove(item.id));
       return this.#store.queue.get(item.id) ?? item;
     });
+  }
+
+  /**
+   * Sends a failed or uncertain message again as a new message. Never
+   * automatic: an `unknown` original may already have been delivered.
+   */
+  retryQueueItem(
+    missionId: string,
+    itemId: string,
+    request: RetryQueueItemRequest
+  ): Promise<QueueItem> {
+    if (this.#closing) {
+      return Promise.reject(conflict("The daemon is stopping"));
+    }
+    try {
+      return Promise.resolve(this.#retryQueueItem(missionId, itemId, request));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  #retryQueueItem(
+    missionId: string,
+    itemId: string,
+    request: RetryQueueItemRequest
+  ): QueueItem {
+    const previous = this.#store.queue.get(request.operationId);
+    if (previous) {
+      if (previous.missionId !== missionId || previous.retryOf !== itemId) {
+        throw conflict(DUPLICATE_OPERATION);
+      }
+      return previous;
+    }
+    const item = this.#queueItem(missionId, itemId, request.expectedRevision);
+    if (item.state !== "failed" && item.state !== "unknown") {
+      throw conflict(
+        `Only failed or uncertain messages can be retried; this one is ${item.state}`
+      );
+    }
+    if (FENCED.has(this.get(missionId).status)) {
+      throw conflict("Resume the mission before retrying messages");
+    }
+    const recipient = this.#store.getAgent(item.agentId);
+    if (!recipient) {
+      throw notFound("Agent");
+    }
+    this.#requireRunningWorker(recipient);
+    const items = this.#store.queue.list(missionId);
+    if (items.some((entry) => entry.retryOf === item.id)) {
+      throw conflict(
+        "This message was already retried; retry the newest attempt"
+      );
+    }
+    const outstanding = items.filter(
+      (entry) =>
+        entry.agentId === item.agentId &&
+        entry.origin === item.origin &&
+        isOutstanding(entry)
+    ).length;
+    if (outstanding >= MAX_OUTSTANDING_MESSAGES) {
+      throw conflict(
+        `${recipient.title} already has ${outstanding} undelivered messages. Wait for them to be delivered or remove some`
+      );
+    }
+    const retry = this.#newQueueItem({
+      agentId: item.agentId,
+      executionMode: item.executionMode,
+      id: request.operationId,
+      missionId,
+      mode: item.mode,
+      origin: item.origin,
+      purpose: item.purpose,
+      retryOf: item.id,
+      sender: item.sender,
+      sequence: nextSequence(items),
+      text: item.text,
+    });
+    this.#saveQueueItem(retry);
+    this.#timing.mark(retry.id, "message.accepted", {
+      agentId: retry.agentId,
+      missionId,
+    });
+    this.#scheduleDelivery(retry.agentId);
+    return retry;
   }
 
   #whileBusy<T>(itemId: string, work: () => Promise<T>): Promise<T> {
@@ -2286,9 +3380,7 @@ export class MissionService {
         previous.missionId !== missionId ||
         previous.text !== request.text
       ) {
-        throw conflict(
-          "This operation ID was already used for another message"
-        );
+        throw conflict(DUPLICATE_OPERATION);
       }
       if (
         previous.state === "failed" &&
@@ -2308,22 +3400,64 @@ export class MissionService {
       kind: "mission.queue.edit",
       missionId,
     });
-    const { item, runtime } = this.#queueItem(
-      missionId,
-      itemId,
-      request.expectedRevision
-    );
+    const item = this.#queueItem(missionId, itemId, request.expectedRevision);
     if (item.state === "sent") {
       return { outcome: "already_sent", replacementId: null };
     }
     if (TERMINAL_QUEUE.has(item.state)) {
       throw conflict(`This message was already ${item.state}`);
     }
+    if (item.state === "accepted" && this.#replaceAccepted(item, request)) {
+      return { outcome: "replaced", replacementId: request.operationId };
+    }
+    const runtime = this.#nativeQueueRuntime(item);
     return await this.#whileBusy(item.id, () =>
       this.#whileBusy(request.operationId, () =>
         this.#replaceQueueItem(missionId, item, runtime, request)
       )
     );
+  }
+
+  /** Swaps an unsent message for its edit in place, keeping its delivery position. */
+  #replaceAccepted(item: QueueItem, request: EditQueueItemRequest) {
+    const latest = this.#store.queue.get(item.id);
+    if (latest?.state !== "accepted") {
+      return false;
+    }
+    const replacement = this.#newQueueItem({
+      agentId: latest.agentId,
+      executionMode: latest.executionMode,
+      id: request.operationId,
+      missionId: latest.missionId,
+      mode: latest.mode,
+      origin: latest.origin,
+      purpose: latest.purpose,
+      replacesId: latest.id,
+      sender: latest.sender,
+      sequence: latest.sequence,
+      text: request.text,
+    });
+    this.#log.commit((emit) => {
+      const removed: QueueItem = {
+        ...latest,
+        replacedById: replacement.id,
+        revision: latest.revision + 1,
+        state: "removed",
+        updatedAt: this.#iso(),
+      };
+      this.#store.queue.put(removed);
+      emit(latest.missionId, {
+        data: { item: removed },
+        type: "queue.updated",
+      });
+      this.#store.queue.put(replacement);
+      emit(latest.missionId, {
+        data: { item: replacement },
+        type: "queue.updated",
+      });
+    });
+    this.#scheduleDelivery(replacement.agentId);
+    return true;
   }
 
   async #replaceQueueItem(
@@ -2333,15 +3467,22 @@ export class MissionService {
     request: EditQueueItemRequest
   ): Promise<EditQueueItemResponse> {
     const replacementId = request.operationId;
-    const replacement = {
-      ...this.#newQueueItem(
+    const replacement: QueueItem = {
+      ...this.#newQueueItem({
+        agentId: item.agentId,
+        executionMode: item.executionMode,
+        id: replacementId,
         missionId,
-        item.agentId,
-        replacementId,
-        request.text,
-        item.mode
-      ),
-      replacesId: item.id,
+        mode: item.mode,
+        origin: item.origin,
+        purpose: item.purpose,
+        replacesId: item.id,
+        sender: item.sender,
+        sequence: item.sequence,
+        text: request.text,
+      }),
+      // The runtime submits the replacement itself as part of the native edit.
+      state: "submitting",
     };
     this.#log.commit((emit) => {
       const linked = {
@@ -2660,7 +3801,12 @@ export class MissionService {
       this.#saveAssignment({ ...assignment, status: "cancelled" });
     }
     for (const item of this.#store.queue.list(missionId)) {
-      if (!TERMINAL_QUEUE.has(item.state) && item.state !== "unknown") {
+      // Accepted messages were never sent; they stay durable until Resume.
+      if (
+        !TERMINAL_QUEUE.has(item.state) &&
+        item.state !== "unknown" &&
+        item.state !== "accepted"
+      ) {
         this.#saveQueueItem({
           ...item,
           error: "The runner stopped before this was confirmed",
@@ -2707,10 +3853,7 @@ export class MissionService {
             throw conflict(problems.join(". "));
           }
           this.#mutateMission(missionId, (mission) => {
-            const status = resumePhase(
-              this.#store.plans.list(missionId),
-              mission
-            );
+            const status = resumePhase(mission);
             return {
               ...mission,
               endedAt: status === "completed" ? mission.endedAt : null,
@@ -2726,20 +3869,21 @@ export class MissionService {
             (assignment) =>
               !assignment.handoff && assignment.epoch === mission.epoch - 1
           );
-        const next = mission;
         const orchestrator = this.#orchestrator(missionId);
-        // Only a never-attempted goal may be sent. Transport ambiguity is not proof of non-delivery.
-        const goal = this.#store.queue.get(`${missionId}:goal`);
-        const resubmitGoal = goal !== null && goal.state === "failed";
-        if (next.status === "completed") {
-          return next;
+        if (mission.status === "completed") {
+          return mission;
         }
+        // A goal still in the outbox was never sent; its own delivery is the restart.
+        const goal = this.#store.queue.get(`${missionId}:goal`);
+        const goalPending = goal?.state === "accepted";
         try {
           const runtime = await this.#ensureRuntime(orchestrator.id);
           this.#requireRuntime(orchestrator.id, runtime);
-          if (goal && resubmitGoal) {
-            await this.#execute(orchestrator.id, runtime, () =>
-              runtime.submit(goal.id, goal.text, goal.mode)
+          if (!goalPending) {
+            await this.#sendSystem(
+              orchestrator.id,
+              this.#resumeNotice(missionId, interrupted),
+              "steer"
             );
           }
         } catch (error) {
@@ -2763,17 +3907,22 @@ export class MissionService {
           });
         }
         await this.#pumpAssignments(missionId);
-        if (!resubmitGoal) {
-          void this.#systemSubmit(
-            orchestrator.id,
-            resumedMessage(interrupted),
-            "steer"
-          );
-        }
+        this.#scheduleDelivery(orchestrator.id);
         return this.get(missionId);
       }
     );
     return result;
+  }
+
+  /** Resume context, including Plan revisions whose native approval ended with the stop. */
+  #resumeNotice(missionId: string, interrupted: readonly Assignment[]) {
+    const [ended] = this.#store.plans
+      .list(missionId)
+      .filter((plan) => plan.status === "proposed" && !plan.actionable)
+      .toSorted((a, b) => b.revision - a.revision);
+    return ended
+      ? `${resumedMessage(interrupted)}\n\n${planReissueMessage(ended)}`
+      : resumedMessage(interrupted);
   }
 
   /** Stop-failed missions must prove their recorded processes are gone before resuming. */
@@ -2849,6 +3998,16 @@ export class MissionService {
     }
     for (const question of this.#store.questions.listByStatus(["pending"])) {
       this.#saveQuestion({ ...question, status: "cancelled" });
+    }
+    // Native approval requests died with the old process; Resume asks again.
+    for (const mission of this.#store.listMissions()) {
+      for (const plan of this.#store.plans.list(mission.id)) {
+        if (plan.actionable) {
+          this.#log.commit((emit) =>
+            this.#savePlan({ ...plan, actionable: false }, emit)
+          );
+        }
+      }
     }
   }
 

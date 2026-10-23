@@ -17,6 +17,8 @@ import { registerProjectRoutes } from "./http/project-routes";
 import { registerPublishRoutes } from "./http/publish-routes";
 import { registerPullRequestRoutes } from "./http/pull-request-routes";
 import { registerSystemRoutes } from "./http/system-routes";
+import { TimingLog, timingSinksFromEnv } from "./lib/timing";
+import type { TimingSink } from "./lib/timing";
 import { MissionService } from "./missions/mission-service";
 import type { RuntimeFactory } from "./missions/mission-service";
 import { ProcessRecordRepository } from "./processes/process-record-repository";
@@ -52,6 +54,8 @@ export interface DaemonOptions {
   startedAt?: Date;
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
+  /** Extra in-process timing consumers, e.g. the first-token harness. */
+  timingSinks?: TimingSink[];
   /** Test seam: substitutes scripted agents for real Droid sessions. */
   createRuntime?: RuntimeFactory;
   /** Test seam: a scripted GitHub CLI. */
@@ -140,6 +144,10 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
       sharedFiles,
       store,
       supervisor,
+      timing: new TimingLog([
+        ...timingSinksFromEnv(options.env),
+        ...(options.timingSinks ?? []),
+      ]),
       workspaces,
     });
     owners.push(() => missions.shutdown());
@@ -148,6 +156,9 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
       journal,
       missions,
       settings,
+    });
+    missions.setGitObserver(async (missionId) => {
+      await publish.observeAgentGit(missionId);
     });
 
     journal.recoverInterrupted();

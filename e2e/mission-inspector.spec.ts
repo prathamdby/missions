@@ -151,7 +151,7 @@ test("Digest renders agent Markdown as headings, lists, code and safe links", as
       : null,
   }));
   await page.route(
-    `**/api/daemon/v1/missions/${snapshot.mission.id}/snapshot`,
+    `**/api/daemon/v2/missions/${snapshot.mission.id}/snapshot`,
     async (route) => {
       await route.fulfill({ json: { ...snapshot, assignments } });
     }

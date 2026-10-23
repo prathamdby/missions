@@ -3,7 +3,10 @@ import { z } from "zod";
 import {
   AutonomySchema,
   DeliveryModeSchema,
+  ExecutionModeSchema,
   IdSchema,
+  MessageOriginSchema,
+  MessagePurposeSchema,
   ReasoningEffortSchema,
   RevisionSchema,
   RoleSchema,
@@ -76,6 +79,8 @@ export const MissionSchema = z.object({
   endedAt: TimestampSchema.nullable().default(null),
   /** Bumped by Pause; late results tagged with an older epoch are ignored. */
   epoch: z.int().nonnegative(),
+  /** The mode the main agent currently runs in. Records before v2 default to Work. */
+  executionMode: ExecutionModeSchema.default("work"),
   goal: z.string(),
   id: IdSchema,
   lastError: z
@@ -86,6 +91,8 @@ export const MissionSchema = z.object({
     })
     .nullable(),
   orchestrator: AgentModelSettingsSchema,
+  /** A requested mode transition that applies once earlier work is quiescent. */
+  pendingExecutionMode: ExecutionModeSchema.nullable().default(null),
   projectId: IdSchema,
   publish: PublishStateSchema,
   revision: RevisionSchema,
@@ -121,6 +128,18 @@ export const AgentStatusSchema = z.enum([
 ]);
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
+/** Why an agent is not producing output yet; shown instead of a bare spinner. */
+export const WaitingReasonSchema = z.enum([
+  "startup",
+  "model",
+  "permission",
+  "answer",
+  "write_lease",
+  "retry",
+  "reconnecting",
+]);
+export type WaitingReason = z.infer<typeof WaitingReasonSchema>;
+
 export const AgentSchema = z.object({
   assignmentId: IdSchema.nullable(),
   createdAt: TimestampSchema,
@@ -128,11 +147,17 @@ export const AgentSchema = z.object({
   id: IdSchema,
   missionId: IdSchema,
   model: AgentModelSettingsSchema,
+  /** Sessions this agent used before its current one, oldest first. */
+  previousSessionIds: z.array(z.string()).default([]),
+  /** Versioned system prompt of the current session; null marks a legacy session. */
+  promptVersion: z.string().nullable().default(null),
   role: RoleSchema,
+  sessionGeneration: z.int().nonnegative().default(0),
   sessionId: z.string().nullable(),
   status: AgentStatusSchema,
   title: z.string(),
   updatedAt: TimestampSchema,
+  waitingReason: WaitingReasonSchema.nullable().default(null),
   workingState: z.string().nullable(),
 });
 export type Agent = z.infer<typeof AgentSchema>;
@@ -145,15 +170,26 @@ export const PlanStatusSchema = z.enum([
 ]);
 
 export const PlanRevisionSchema = z.object({
+  /**
+   * True only while a live native approval request is bound to this revision.
+   * Pause, restart or session replacement clears it; legacy proposals never set it.
+   */
+  actionable: z.boolean().default(false),
+  agentId: IdSchema.nullable().default(null),
   createdAt: TimestampSchema,
   decidedAt: TimestampSchema.nullable(),
+  epoch: z.int().nonnegative().nullable().default(null),
   feedback: z.string().nullable(),
+  guidanceVersion: z.string().nullable().default(null),
   id: IdSchema,
   markdown: z.string(),
   missionId: IdSchema,
   revision: z.int().positive(),
+  sessionId: z.string().nullable().default(null),
   status: PlanStatusSchema,
   title: z.string(),
+  /** Native ExitSpecMode tool use the approval answers. */
+  toolUseId: z.string().nullable().default(null),
 });
 export type PlanRevision = z.infer<typeof PlanRevisionSchema>;
 
@@ -269,6 +305,8 @@ export type Grant = z.infer<typeof GrantSchema>;
  * these states describe what the daemon has observed.
  */
 export const QueueItemStateSchema = z.enum([
+  /** Durably accepted and definitely not yet submitted to the native runner. */
+  "accepted",
   "submitting",
   "queued",
   "sent",
@@ -280,17 +318,36 @@ export const QueueItemStateSchema = z.enum([
 ]);
 export type QueueItemState = z.infer<typeof QueueItemStateSchema>;
 
+/** A mission agent as a message endpoint. */
+export const MessagePartySchema = z.object({
+  agentId: IdSchema,
+  role: RoleSchema,
+  title: z.string(),
+});
+export type MessageParty = z.infer<typeof MessagePartySchema>;
+
 export const QueueItemSchema = z.object({
+  /** The recipient agent. */
   agentId: IdSchema,
   createdAt: TimestampSchema,
   error: z.string().nullable(),
+  /** Requested mode for the recipient's next work; null keeps the current mode. */
+  executionMode: ExecutionModeSchema.nullable().default(null),
   /** Stable correlation ID, also used as the SDK request ID. */
   id: IdSchema,
   missionId: IdSchema,
   mode: DeliveryModeSchema,
+  origin: MessageOriginSchema.default("user"),
+  purpose: MessagePurposeSchema.default("message"),
   replacedById: IdSchema.nullable(),
   replacesId: IdSchema.nullable(),
+  /** The failed or uncertain message this one explicitly retries. */
+  retryOf: IdSchema.nullable().default(null),
   revision: RevisionSchema,
+  /** Server-bound sender for agent messages; null for the user and the daemon. */
+  sender: MessagePartySchema.nullable().default(null),
+  /** Per-mission acceptance order; delivery to one recipient follows it. */
+  sequence: z.int().nonnegative().default(0),
   state: QueueItemStateSchema,
   text: z.string(),
   updatedAt: TimestampSchema,
@@ -333,10 +390,15 @@ export const TranscriptItemSchema = z.object({
     "tool_result",
     "system",
     "error",
+    /** One canonical record per agent-to-agent message, shown in both agents' views. */
+    "agent_message",
   ]),
   missionId: IdSchema,
+  purpose: MessagePurposeSchema.nullable().default(null),
+  recipient: MessagePartySchema.nullable().default(null),
   /** Correlates a user message to its queue item when known. */
   requestId: z.string().nullable(),
+  sender: MessagePartySchema.nullable().default(null),
   seq: z.int().nonnegative(),
   text: z.string(),
   toolInput: z.unknown().optional(),

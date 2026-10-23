@@ -1,13 +1,13 @@
-# Daemon HTTP API (v1)
+# Daemon HTTP API (v2)
 
 All paths come from `routes` in `src/routes.ts`. Bodies and responses use the schemas named below. Errors always use `ApiErrorSchema` with the status from `errorStatus`.
 
 ## Boundary
 
 - The daemon listens on `127.0.0.1:4317`, the web app on `127.0.0.1:4318`.
-- Every `/v1/*` route except `/v1/health` requires `Authorization: Bearer <token>`. The token lives in `<MISSIONS_HOME>/daemon-token`; only the Next.js server reads it.
+- Every `/v2/*` route except `/v2/health` requires `Authorization: Bearer <token>`. The token lives in `<MISSIONS_HOME>/daemon-token`; only the Next.js server reads it.
 - The daemon rejects requests whose `Host` is not a loopback name for its port and any request that carries an `Origin` header (browsers never call it directly).
-- The browser calls `PROXY_PREFIX + path` (`/api/daemon/v1/...`). The proxy validates `Host` against the web port, requires a same-origin `Origin` on mutations, drops `x-forwarded-*`, cookies and auth headers, then attaches the token.
+- The browser calls `PROXY_PREFIX + path` (`/api/daemon/v2/...`). The proxy validates `Host` against the web port, requires a same-origin `Origin` on mutations, drops `x-forwarded-*`, cookies and auth headers, then attaches the token.
 
 ## Live state
 
@@ -45,6 +45,7 @@ All paths come from `routes` in `src/routes.ts`. Bodies and responses use the sc
 | PATCH | `queueItem(id, item)` | `ChangeQueueModeRequest` | `QueueItem` |
 | DELETE | `queueItem(id, item)` | `RemoveQueueItemRequest` | `QueueItem` |
 | POST | `queueItemEdit(id, item)` | `EditQueueItemRequest` | `EditQueueItemResponse` |
+| POST | `queueItemRetry(id, item)` | `RetryQueueItemRequest` | `QueueItem` (a new item with `retryOf`; failed or unknown items only) |
 | POST | `permission(id, req)` | `DecidePermissionRequest` | `PermissionRequest` |
 | POST | `question(id, q)` | `AnswerQuestionRequest` | `Question` |
 | POST | `plan(id)` | `DecidePlanRequest` | `PlanRevision` |
@@ -57,7 +58,7 @@ All paths come from `routes` in `src/routes.ts`. Bodies and responses use the sc
 | POST | `commit(id)` | `CommitRequest` | `Mission` |
 | POST | `push(id)` | `PushRequest` | `Mission` |
 | GET/POST | `pullRequest(id)` | `CreatePullRequest` | `Mission` (GET refreshes PR/check/merge state) |
-| GET | `pullRequests()` (`/v1/pull-requests`) |  | `PullRequestList` (stored PRs, newest mission update first) |
+| GET | `pullRequests()` (`/v2/pull-requests`) |  | `PullRequestList` (stored PRs, newest mission update first) |
 | POST | `cleanup(id)` | `CleanupRequest` | `Mission` |
 
 Mutations are idempotent per `operationId`: repeating the same action for the same mission returns the recorded result instead of acting twice, even when transient preconditions have since changed. Reusing an ID for another action or mission returns `409`. Unknown outcomes are reconciled against their original recorded intent, never a retry's changed payload. Stale `expectedRevision`, `epoch`, `planRevision`, `expectedHead` or `expectedChangesHash` values on new operations return `409` (`stale_revision` or `conflict`).
@@ -67,3 +68,42 @@ Mutations are idempotent per `operationId`: repeating the same action for the sa
 - `ModelList` comes from the installed Droid CLI (cached for 10 minutes). `PATCH settings()` rejects model IDs that are not in it.
 - `PATCH mission(id)` accepts optional `orchestrator` and `worker` model/reasoning settings alongside `expectedRevision`, `title`, and `autonomy`. These affect only this mission, never Settings defaults. A ready Orchestrator uses native session settings for subsequent turns without interrupting or replaying work; existing Workers keep their settings and only newly started Workers use the preference. During startup the mission records the desired choice promptly and reconciles it before sending the goal. Catalog validation and native acknowledgement must succeed before a ready session's choice is saved. A stale revision is rejected even if it becomes stale during validation or native acknowledgement; an applied native change is restored where possible, otherwise the confirmed current choice is published with an error so clients must refresh.
 - File routes resolve paths inside the mission workspace only; `..`, absolute paths, symlinks leaving the workspace and `.git` return `403` (`forbidden`). Artifacts are served by ID with `nosniff` and a sandboxed CSP.
+
+## Messages and delivery
+
+The queue is a durable outbox. Every logical message (user prompt, agent message, assignment, handoff) is a `QueueItem` with a stable `id`, recipient `agentId`, `origin` (`user`, `agent`, `daemon`), `purpose` (`message`, `assignment`, `handoff`, `control`), placement `mode` (`steer`, `queue`), an optional requested `executionMode`, a server-bound `sender` for agent messages, and a per-mission `sequence`.
+
+- `POST missionMessages(id)` returns as soon as the message is durably `accepted`; it does not wait for the agent to start. Delivery to one recipient follows `sequence`. Before native I/O the item moves to `submitting`; native admission and consumption move it to `queued` and `sent`.
+- `accepted` items have definitely not been sent. They can be edited, removed or switched between steer and queue locally, even while the agent is still starting. After a restart they stay `accepted` and are delivered only after Resume.
+- `unknown` means the message may or may not have reached the runner. It is never replayed automatically. `queueItemRetry` sends it again as a new message after the user chooses to; for `unknown` originals this can deliver it twice.
+- Reusing an `operationId` with a different recipient, text, placement or `executionMode` returns `409`. Text is never used to merge two intentional messages.
+- Each recipient holds at most 20 outstanding user messages and 20 outstanding agent messages; beyond that the request fails with an explicit capacity error.
+- Agent messages (`send_message`, assignments and handoffs) are persisted with exactly one `agent_message` `TranscriptItem` carrying `sender`, `recipient`, `purpose` and the queue item ID as `requestId`. The SDK receives the structured sender; the recipient's native echo is not projected again.
+- `steer` maps to native `end_of_turn` (the next tool-completion boundary), `queue` to native `end_of_loop`. Steers admitted before the same boundary are consumed together before the next model continuation.
+- `Agent.waitingReason` explains a waiting agent: `startup`, `model`, `permission`, `answer`, `write_lease` or `retry`.
+
+## Work mode and Plan mode
+
+`Mission.executionMode` is `work` by default. A message or mission creation with `executionMode: "plan"` requests Plan mode; the transition applies in order, after earlier admitted work is quiescent (`Mission.pendingExecutionMode` shows a waiting transition). The main agent can also call `enter_plan`.
+
+- In Plan mode every agent is read-only (writes, Git administration and publishing are denied) and the main agent runs in native Spec mode with the planning guidance added once as model-only context.
+- The main agent presents a plan with native `ExitSpecMode`. The resulting `PlanRevision` is `actionable` only while that native request is live and bound to the same session and epoch. `POST plan(id)` with `approve: true` proceeds once and returns the mission to `work`; `approve: false` cancels the request and sends the feedback back. A non-actionable revision returns `409` (`stale_revision`); after Resume the agent is asked to present it again.
+
+## Agent Git actions
+
+The main agent may commit, push and open pull requests itself within the mission's autonomy level; Workers cannot. High-impact Git commands (reset, clean, rebase, checkout/switch, branch or tag deletion, force pushes and similar) require high autonomy or approval, and repository administration is blocked while another agent holds write access. After an agent runs a Git or `gh` command the daemon re-reads the branch, commits since the mission's start revision, upstream and any pull request into `Mission.publish`. These reads are best effort and never retried as side effects.
+
+## Timing
+
+`MISSIONS_TIMING=1` writes content-free JSON timing records (`[timing] {...}`) to the daemon's stderr: message acceptance, delivery submission and admission, runtime startup stages, and the first thinking and assistant text per request. Records carry IDs, stage names and durations only.
+
+## Upgrade and rollback
+
+Database migrations run when the daemon opens `<MISSIONS_HOME>/missions.db`.
+
+1. Stop the old app and daemon pair before upgrading. Missions that were running come back `interrupted` and wait for Resume.
+2. Before applying a pending migration, the daemon writes a consistent copy next to the database: `missions.db.pre-migration-<applied>.bak` (mode `0600`, created once per starting schema).
+3. Older daemons refuse a database written by a newer schema, so an old binary cannot write upgraded records.
+4. Old JSON documents are normalized when read. Sessions started under older app instructions are kept read-only; on Resume the agent continues in a new session that receives a bounded continuation summary instead of a replay.
+
+To roll back, stop the new daemon, move `missions.db` (and its `-wal`/`-shm` files) aside, copy the matching `.bak` file to `missions.db`, then start the previous app and daemon pair. Downgrading a database in place over upgraded records is not supported; anything done after the upgrade is lost by the restore.

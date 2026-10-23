@@ -882,6 +882,104 @@ export class GitService {
     }));
   }
 
+  /**
+   * Re-reads repository facts after an agent ran a Git or gh action: branch,
+   * HEAD, commits since the mission started, upstream and an existing pull
+   * request. Read-only and best effort; agents own these actions, the UI
+   * only reflects what actually happened.
+   */
+  async observeAgentGit(missionId: string): Promise<Mission> {
+    const mission = this.#missions.get(missionId);
+    const binding = mission.workspace;
+    if (!binding) {
+      return mission;
+    }
+    const commits = binding.startRevision
+      ? await this.#commitsSince(binding, binding.startRevision)
+      : null;
+    const upstream = await this.#upstream(binding);
+    const pr = upstream ? await this.#observedPr(binding, upstream) : null;
+    return this.#missions.patch(missionId, (m) => ({
+      ...m,
+      publish: {
+        ...m.publish,
+        commits: commits ?? m.publish.commits,
+        pr: pr ?? m.publish.pr,
+        pushedBranch: upstream?.branch ?? m.publish.pushedBranch,
+        remote: upstream?.remote ?? m.publish.remote,
+      },
+    }));
+  }
+
+  async #commitsSince(binding: WorkspaceBinding, start: string) {
+    const result = await git(
+      binding.path,
+      ["log", "--reverse", "--format=%H%x1f%s", `${start}..HEAD`],
+      { timeoutMs: this.#timeoutMs }
+    );
+    if (!result.ok) {
+      return null;
+    }
+    return result.stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [sha = "", message = ""] = line.split("\u001F");
+        return { message, sha };
+      });
+  }
+
+  async #upstream(binding: WorkspaceBinding) {
+    const result = await git(
+      binding.path,
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+      { timeoutMs: this.#timeoutMs }
+    );
+    const ref = result.ok ? result.stdout.trim() : "";
+    const slash = ref.indexOf("/");
+    if (slash <= 0) {
+      return null;
+    }
+    const remoteName = ref.slice(0, slash);
+    const url = await git(binding.path, ["remote", "get-url", remoteName], {
+      timeoutMs: this.#timeoutMs,
+    });
+    if (!url.ok) {
+      return null;
+    }
+    return {
+      branch: ref.slice(slash + 1),
+      remote: redactUrl(url.stdout.trim()),
+    };
+  }
+
+  async #observedPr(
+    binding: WorkspaceBinding,
+    upstream: { branch: string; remote: string }
+  ) {
+    try {
+      const prs = await this.#ghJson<GhPr[]>(binding, [
+        "pr",
+        "list",
+        "--repo",
+        githubRepository(upstream.remote),
+        "--head",
+        upstream.branch,
+        "--state",
+        "all",
+        "--json",
+        PR_FIELDS,
+        "--limit",
+        "1",
+      ]);
+      const [found] = prs ?? [];
+      return found ? prState(found) : null;
+    } catch {
+      // gh missing, signed out or offline: keep the last known PR state.
+      return null;
+    }
+  }
+
   async refreshPullRequest(missionId: string): Promise<Mission> {
     const mission = this.#missions.get(missionId);
     const { pr } = mission.publish;
