@@ -17,6 +17,10 @@ export class FakeRuntime implements RuntimeHandle {
   sessionId: string | null = null;
   interrupts = 0;
   closed = false;
+  /** PIDs that close() reports as still running. */
+  survivors: number[] = [];
+  /** When set and returning true, every submit rejects. */
+  failSubmits: (() => boolean) | null = null;
 
   constructor(options: AgentRuntimeOptions) {
     this.options = options;
@@ -38,6 +42,9 @@ export class FakeRuntime implements RuntimeHandle {
   }
 
   submit(id: string, text: string, mode: DeliveryMode) {
+    if (this.failSubmits?.()) {
+      return Promise.reject(new Error("spawn failed"));
+    }
     this.submitted.push({ id, mode, text });
     this.queue.submitted(id, text, mode);
     this.queue.admitted(id);
@@ -81,7 +88,10 @@ export class FakeRuntime implements RuntimeHandle {
 
   close(): Promise<StopResult> {
     this.closed = true;
-    return Promise.resolve({ stopped: true, survivors: [] });
+    return Promise.resolve({
+      stopped: this.survivors.length === 0,
+      survivors: this.survivors,
+    });
   }
 
   emit(event: AgentEvent) {

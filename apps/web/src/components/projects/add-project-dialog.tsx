@@ -1,7 +1,7 @@
 "use client";
 
 import type { CloneSource, Project } from "@missions/protocol/projects";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -9,7 +9,10 @@ import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
 import { useGithubAuth } from "@/lib/api/queries";
 import { queryKeys } from "@/lib/api/query-keys";
-import { useOperationIds } from "@/lib/api/use-operation";
+import {
+  useOperationIds,
+  useSingleFlightMutation,
+} from "@/lib/api/use-operation";
 import { upsertById } from "@/lib/live/global-cache";
 
 import { CloneProgress } from "./clone-progress";
@@ -72,7 +75,7 @@ export const AddProjectDialog = ({
   const [url, setUrl] = useState("");
   const size = useDialogSize(step, open);
 
-  const add = useMutation({
+  const add = useSingleFlightMutation({
     mutationFn: ({
       initializeGit,
       path,
@@ -99,7 +102,7 @@ export const AddProjectDialog = ({
     },
   });
 
-  const clone = useMutation({
+  const clone = useSingleFlightMutation({
     mutationFn: (source: CloneSource) =>
       api.clone({
         destinationParent: cloneParent,

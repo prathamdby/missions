@@ -38,6 +38,9 @@ export interface Daemon {
   close: () => Promise<void>;
 }
 
+/** The daemon only ever binds loopback; the boundary enforces it. */
+const HOST = "127.0.0.1";
+
 export interface DaemonOptions {
   config: DaemonConfig;
   version: string;
@@ -129,6 +132,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
         settings,
         startedAt,
         store,
+        url: `http://${HOST}:${config.port}`,
         version,
       });
       registerProjectRoutes(hono, projects);

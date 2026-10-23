@@ -162,6 +162,12 @@ const TERMINAL_QUEUE = new Set<QueueItem["state"]>([
   "discarded",
   "failed",
 ]);
+/** Statuses that stop the mission clock; archiving keeps the original end. */
+const ENDED_STATUSES = new Set<Mission["status"]>([
+  "completed",
+  "failed",
+  "archived",
+]);
 
 const isDefiniteFailure = (error: unknown) => error instanceof AppError;
 
@@ -201,6 +207,8 @@ export class MissionService {
   readonly #questions = new Map<string, PendingQuestion>();
   readonly #deltas: DeltaCoalescer;
   readonly #starting = new Map<string, Promise<RuntimeHandle>>();
+  /** Queue items with a remove or edit in flight; a second change must wait. */
+  readonly #queueBusy = new Set<string>();
   readonly #artifacts: ArtifactStore;
   /** Tool inputs awaiting their result, for artifact detection. */
   readonly #toolCalls = new Map<
@@ -330,10 +338,14 @@ export class MissionService {
   // -------------------------------------------------------------- writes
 
   #saveMission(emit: Emit, mission: Mission) {
+    const at = this.#iso();
     const next = {
       ...mission,
+      endedAt: ENDED_STATUSES.has(mission.status)
+        ? (mission.endedAt ?? at)
+        : null,
       revision: mission.revision + 1,
-      updatedAt: this.#iso(),
+      updatedAt: at,
     };
     this.#store.putMission(next);
     emit(next.id, { data: { mission: next }, type: "mission.updated" });
@@ -538,6 +550,7 @@ export class MissionService {
         const mission: Mission = {
           autonomy: request.autonomy ?? settings.defaultAutonomy,
           createdAt: at,
+          endedAt: null,
           epoch: 0,
           goal: request.goal,
           id,
@@ -647,6 +660,16 @@ export class MissionService {
       const runtime = await this.#ensureRuntime(orchestrator.id);
       await runtime.submit(goal.id, goal.text, "steer");
     } catch (error) {
+      const stuck = this.#store.queue.get(goal.id);
+      if (stuck && stuck.state === "submitting") {
+        this.#saveQueueItem({
+          ...stuck,
+          error: errorMessage(error),
+          revision: stuck.revision + 1,
+          state: "unknown",
+          updatedAt: this.#iso(),
+        });
+      }
       this.#fail(
         mission.id,
         "environment",
@@ -1543,8 +1566,22 @@ export class MissionService {
     if (TERMINAL_QUEUE.has(item.state)) {
       return item;
     }
-    await runtime.remove(item.id);
-    return this.#store.queue.get(item.id) ?? item;
+    return await this.#whileBusy(item.id, async () => {
+      await runtime.remove(item.id);
+      return this.#store.queue.get(item.id) ?? item;
+    });
+  }
+
+  async #whileBusy<T>(itemId: string, work: () => Promise<T>): Promise<T> {
+    if (this.#queueBusy.has(itemId)) {
+      throw conflict("This message is already being changed");
+    }
+    this.#queueBusy.add(itemId);
+    try {
+      return await work();
+    } finally {
+      this.#queueBusy.delete(itemId);
+    }
   }
 
   async editQueueItem(
@@ -1552,6 +1589,15 @@ export class MissionService {
     itemId: string,
     request: EditQueueItemRequest
   ): Promise<EditQueueItemResponse> {
+    const previous = this.#store.queue.get(request.operationId);
+    if (previous) {
+      if (previous.replacesId !== itemId || previous.missionId !== missionId) {
+        throw conflict(
+          "This operation ID was already used for another message"
+        );
+      }
+      return { outcome: "replaced", replacementId: previous.id };
+    }
     const { item, runtime } = this.#queueItem(
       missionId,
       itemId,
@@ -1560,6 +1606,20 @@ export class MissionService {
     if (item.state === "sent") {
       return { outcome: "already_sent", replacementId: null };
     }
+    if (TERMINAL_QUEUE.has(item.state)) {
+      throw conflict(`This message was already ${item.state}`);
+    }
+    return await this.#whileBusy(item.id, () =>
+      this.#replaceQueueItem(missionId, item, runtime, request)
+    );
+  }
+
+  async #replaceQueueItem(
+    missionId: string,
+    item: QueueItem,
+    runtime: RuntimeHandle,
+    request: EditQueueItemRequest
+  ): Promise<EditQueueItemResponse> {
     const replacementId = request.operationId;
     const outcome = await runtime.remove(item.id);
     if (outcome !== "removed") {
@@ -1626,7 +1686,7 @@ export class MissionService {
           throw stale("The mission changed; refresh and try again");
         }
         if (!ACTIVE.has(mission.status) && mission.status !== "completed") {
-          throw conflict(`Cannot pause a ${mission.status} mission`);
+          throw conflict(`Cannot pause a mission that is ${mission.status}`);
         }
         return await this.#stopMission(missionId, "paused");
       }
@@ -1646,10 +1706,13 @@ export class MissionService {
         if (mission.revision !== request.expectedRevision) {
           throw stale("The mission changed; refresh and try again");
         }
-        if (!ARCHIVABLE.has(mission.status)) {
+        if (mission.status === "stop_failed") {
           throw conflict(
-            `Pause the mission before archiving it (${mission.status})`
+            "Some agent processes did not stop. Resume the mission to stop them before archiving"
           );
+        }
+        if (!ARCHIVABLE.has(mission.status)) {
+          throw conflict(`A ${mission.status} mission cannot be archived`);
         }
         const stopped = await this.#stopMission(missionId, "paused");
         if (stopped.status === "stop_failed") {
@@ -1757,7 +1820,7 @@ export class MissionService {
           throw stale("The mission changed; refresh and try again");
         }
         if (!RESUMABLE.has(mission.status)) {
-          throw conflict(`Cannot resume a ${mission.status} mission`);
+          throw conflict(`Cannot resume a mission that is ${mission.status}`);
         }
         await this.#confirmStopped(missionId);
         const problems = mission.workspace
@@ -1776,8 +1839,17 @@ export class MissionService {
           status: resumePhase(this.#store.plans.list(missionId), m),
         }));
         const orchestrator = this.#orchestrator(missionId);
+        // A failed mission never got going: retry means the goal goes again.
+        const goal =
+          mission.status === "failed"
+            ? this.#store.queue.get(`${missionId}:goal`)
+            : null;
+        const resubmitGoal = goal !== null && !TERMINAL_QUEUE.has(goal.state);
         try {
-          await this.#ensureRuntime(orchestrator.id);
+          const runtime = await this.#ensureRuntime(orchestrator.id);
+          if (goal && resubmitGoal) {
+            await runtime.submit(goal.id, goal.text, goal.mode);
+          }
         } catch (error) {
           this.#fail(
             missionId,
@@ -1786,7 +1858,7 @@ export class MissionService {
           );
           throw conflict("Could not restart the Orchestrator");
         }
-        if (next.status !== "completed") {
+        if (next.status !== "completed" && !resubmitGoal) {
           void this.#systemSubmit(
             orchestrator.id,
             resumedMessage(interrupted),

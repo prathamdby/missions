@@ -55,6 +55,11 @@ export type PublishState = z.infer<typeof PublishStateSchema>;
 export const MissionSchema = z.object({
   autonomy: AutonomySchema,
   createdAt: TimestampSchema,
+  /**
+   * When the mission last became completed or failed; null while it can still
+   * run. Defaults for records written before the field existed.
+   */
+  endedAt: TimestampSchema.nullable().default(null),
   /** Bumped by Pause; late results tagged with an older epoch are ignored. */
   epoch: z.int().nonnegative(),
   goal: z.string(),

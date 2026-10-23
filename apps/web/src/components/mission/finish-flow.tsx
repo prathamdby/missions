@@ -2,7 +2,7 @@
 
 import type { Changes } from "@missions/protocol/files";
 import type { Mission } from "@missions/protocol/missions";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -31,7 +31,10 @@ import { Markdown } from "@/components/ui/markdown";
 import { api } from "@/lib/api/endpoints";
 import { useChanges, useGithubAuth } from "@/lib/api/queries";
 import { queryKeys } from "@/lib/api/query-keys";
-import { useOperationIds } from "@/lib/api/use-operation";
+import {
+  useOperationIds,
+  useSingleFlightMutation,
+} from "@/lib/api/use-operation";
 import { formatDuration } from "@/lib/format";
 import { displayStatus } from "@/lib/mission/display-status";
 import {
@@ -55,7 +58,7 @@ const useFinishMutation = <T,>(
   const { applyLocal, missionId, refresh } = useMission();
   const queryClient = useQueryClient();
   const ops = useOperationIds();
-  return useMutation({
+  return useSingleFlightMutation({
     mutationFn: (input: T) => run(ops.idFor(intent(input)), input),
     onError: (error) => {
       ops.release(error);
@@ -125,13 +128,14 @@ const CommitCard = ({
         operationId,
       })
   );
-  const additions = pending.reduce((sum, file) => sum + file.additions, 0);
-  const deletions = pending.reduce((sum, file) => sum + file.deletions, 0);
-  const blocked = preExisting.length > 0 && !includePreExisting;
+  const included = includePreExisting ? [...pending, ...preExisting] : pending;
+  const additions = included.reduce((sum, file) => sum + file.additions, 0);
+  const deletions = included.reduce((sum, file) => sum + file.deletions, 0);
+  const blocked = included.length === 0;
   return (
     <ChatCard label="Commit changes" testId="commit-card">
       <ChatCardHeader icon={<CheckIcon className="text-text-secondary" />}>
-        Commit {pending.length} file{pending.length === 1 ? "" : "s"}
+        Commit {included.length} file{included.length === 1 ? "" : "s"}
       </ChatCardHeader>
       <ChatCardBody>
         <div className="flex items-center gap-md">
@@ -160,7 +164,7 @@ const CommitCard = ({
           >
             Include {preExisting.length} file
             {preExisting.length === 1 ? "" : "s"} changed before the mission
-            started
+            started. Review first: they may mix your edits with the droids’.
           </CheckboxRow>
         ) : null}
       </ChatCardBody>
@@ -173,7 +177,7 @@ const CommitCard = ({
           }
           title={
             blocked
-              ? "Tick the box to include files changed before the mission"
+              ? "Only files changed before the mission remain. Review and include them to commit."
               : undefined
           }
           variant="primary"
@@ -250,6 +254,8 @@ const CreatePrCard = ({ head }: { head: string | null }) => {
       })
   );
   const signedOut = auth.data !== undefined && auth.data.state !== "signed_in";
+  const base = mission.workspace?.baseRef ?? "main";
+  const onBase = mission.publish.pushedBranch === base;
   return (
     <ChatCard label="Open a pull request" testId="pr-create-card">
       <ChatCardHeader
@@ -259,9 +265,14 @@ const CreatePrCard = ({ head }: { head: string | null }) => {
       </ChatCardHeader>
       <ChatCardBody>
         <span className="font-mono text-2xs leading-xs text-text-tertiary">
-          {mission.workspace?.baseRef ?? "main"} ←{" "}
-          {mission.publish.pushedBranch}
+          {base} ← {mission.publish.pushedBranch}
         </span>
+        {onBase ? (
+          <output className="text-xs leading-sm text-warning">
+            The commits are on {base}, the base branch, so there is nothing to
+            compare. Start the mission in a new worktree to open a pull request.
+          </output>
+        ) : null}
         <label className="flex flex-col gap-sm">
           <span className="text-xs leading-sm font-medium text-text-secondary">
             Title
@@ -290,7 +301,9 @@ const CreatePrCard = ({ head }: { head: string | null }) => {
       <ChatCardFooter>
         <Button
           data-testid="pr-submit"
-          disabled={create.isPending || !head || !title.trim() || signedOut}
+          disabled={
+            create.isPending || !head || !title.trim() || signedOut || onBase
+          }
           onClick={() => create.mutate({ body, title: title.trim() })}
           variant="primary"
         >
@@ -313,7 +326,7 @@ const PrCard = ({ changes }: { changes: Changes | undefined }) => {
   const { mission } = live;
   const { pr } = mission.publish;
   const status = displayStatus(live);
-  const sync = useMutation({
+  const sync = useSingleFlightMutation({
     mutationFn: () => api.pullRequest(missionId),
     onError: (error) =>
       reportMutationError(error, refresh, "Could not refresh the pull request"),
@@ -499,7 +512,8 @@ const CompleteCard = ({ changes }: { changes: Changes | undefined }) => {
       ? `+${changes.totals.additions} −${changes.totals.deletions}`
       : "—",
     Duration: formatDuration(
-      Date.parse(mission.updatedAt) - Date.parse(mission.createdAt)
+      Date.parse(mission.endedAt ?? mission.updatedAt) -
+        Date.parse(mission.createdAt)
     ),
     Files: changes ? String(changes.totals.files) : "—",
     Todos: `${done} of ${todos.length}`,
@@ -542,7 +556,7 @@ const ArchiveRow = () => {
   const { applyLocal, live, missionId, refresh } = useMission();
   const ops = useOperationIds();
   const { revision, status } = live.mission;
-  const archive = useMutation({
+  const archive = useSingleFlightMutation({
     mutationFn: () =>
       api.archiveMission(missionId, {
         expectedRevision: revision,

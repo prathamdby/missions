@@ -90,8 +90,9 @@ const PAUSABLE: ReadonlySet<MissionStatus> = new Set([
 ]);
 
 const RESUMABLE: ReadonlySet<MissionStatus> = new Set([
-  "paused",
+  "failed",
   "interrupted",
+  "paused",
   "stop_failed",
 ]);
 

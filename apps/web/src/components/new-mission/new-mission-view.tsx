@@ -1,7 +1,7 @@
 "use client";
 
 import type { MissionSummary } from "@missions/protocol/missions";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import type { FormEvent, KeyboardEvent } from "react";
 
@@ -45,7 +45,10 @@ import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
 import { useConnectionStatus } from "@/lib/api/queries";
 import { queryKeys } from "@/lib/api/query-keys";
-import { useOperationIds } from "@/lib/api/use-operation";
+import {
+  useOperationIds,
+  useSingleFlightMutation,
+} from "@/lib/api/use-operation";
 import { nextAutonomy } from "@/lib/autonomy";
 import { tildePath } from "@/lib/format";
 import { upsertById } from "@/lib/live/global-cache";
@@ -328,7 +331,7 @@ export const NewMissionView = () => {
   const client = useQueryClient();
   const ops = useOperationIds();
 
-  const create = useMutation({
+  const create = useSingleFlightMutation({
     mutationFn: async (draft: NonNullable<NewMissionForm["draft"]>) => {
       const operationId = ops.idFor(JSON.stringify(draft));
       return await api.createMission({ ...draft, operationId });

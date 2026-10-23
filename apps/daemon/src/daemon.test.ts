@@ -177,6 +177,8 @@ describe("daemon", () => {
       );
       expect(failed.status).toBe("failed");
       expect(existsSync(path.join(parent, "nope"))).toBeFalsy();
+      const relative = await clone("not a url", "clone-relative-1");
+      expect(relative.status).toBe(400);
     });
   });
 

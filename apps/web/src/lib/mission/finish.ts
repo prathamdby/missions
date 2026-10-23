@@ -51,13 +51,15 @@ export const finishState = (
   if (!changes) {
     return { ...idle, step: "none" };
   }
-  const pending = changes.files.filter((file) => !file.committed);
-  if (pending.length > 0) {
-    return {
-      pending,
-      preExisting: pending.filter((file) => file.preExisting),
-      step: "commit",
-    };
+  const uncommitted = changes.files.filter((file) => !file.committed);
+  const pending = uncommitted.filter((file) => !file.preExisting);
+  const preExisting = uncommitted.filter((file) => file.preExisting);
+  // The user's earlier edits are optional once the mission's own files are
+  // committed; before that they may be the only place the mission's work is.
+  const offerPreExisting =
+    preExisting.length > 0 && publish.commits.length === 0;
+  if (pending.length > 0 || offerPreExisting) {
+    return { pending, preExisting, step: "commit" };
   }
   if (publish.pushedBranch) {
     return { ...idle, step: "pr" };

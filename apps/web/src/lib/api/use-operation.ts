@@ -1,5 +1,11 @@
 "use client";
 
+import { useMutation } from "@tanstack/react-query";
+import type {
+  DefaultError,
+  UseMutationOptions,
+  UseMutationResult,
+} from "@tanstack/react-query";
 import { useMemo, useRef } from "react";
 
 import { isApiError } from "@/lib/api/api-error";
@@ -20,6 +26,37 @@ export const isDefiniteFailure = (error: unknown) =>
  * failure reuses its ID so the daemon can deduplicate; `settle` forgets it so
  * a later identical request counts as new.
  */
+/**
+ * `useMutation` that ignores calls while one is in flight. React Query
+ * publishes `isPending` on its notify schedule, after the click handler, so
+ * a fast double click would otherwise send the request twice.
+ */
+export const useSingleFlightMutation = <
+  TData = unknown,
+  TError = DefaultError,
+  TVariables = void,
+  TContext = unknown,
+>(
+  options: UseMutationOptions<TData, TError, TVariables, TContext>
+): UseMutationResult<TData, TError, TVariables, TContext> => {
+  const inFlight = useRef(false);
+  const mutation = useMutation({
+    ...options,
+    onSettled: (...args) => {
+      inFlight.current = false;
+      return options.onSettled?.(...args);
+    },
+  });
+  const mutate: typeof mutation.mutate = (...args) => {
+    if (inFlight.current) {
+      return;
+    }
+    inFlight.current = true;
+    mutation.mutate(...args);
+  };
+  return { ...mutation, mutate };
+};
+
 export const useOperationIds = () => {
   const current = useRef<{ id: string; key: string } | null>(null);
   return useMemo(

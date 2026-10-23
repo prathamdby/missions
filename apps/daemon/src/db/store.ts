@@ -36,6 +36,12 @@ import {
 
 type MissionDocTable = typeof plans;
 
+/** Rows written before `endedAt` existed lack it; the schema default is null. */
+const toMission = (data: unknown): Mission => {
+  const mission = data as Mission;
+  return { ...mission, endedAt: mission.endedAt ?? null };
+};
+
 interface MissionDoc {
   id: string;
   missionId: string;
@@ -257,7 +263,7 @@ export class Store {
       .from(missions)
       .where(eq(missions.id, id))
       .get();
-    return row ? (row.data as Mission) : null;
+    return row ? toMission(row.data) : null;
   }
 
   listMissions(projectId?: string): Mission[] {
@@ -268,7 +274,7 @@ export class Store {
     return rows
       .orderBy(desc(missions.updatedAt))
       .all()
-      .map((row) => row.data as Mission);
+      .map((row) => toMission(row.data));
   }
 
   listMissionsByStatus(statuses: readonly Mission["status"][]): Mission[] {
@@ -277,7 +283,7 @@ export class Store {
       .from(missions)
       .where(inArray(missions.status, [...statuses]))
       .all()
-      .map((row) => row.data as Mission);
+      .map((row) => toMission(row.data));
   }
 
   putAgent(agent: Agent) {

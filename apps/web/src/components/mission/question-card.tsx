@@ -1,7 +1,6 @@
 "use client";
 
 import type { Question, QuestionItem } from "@missions/protocol/missions";
-import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
@@ -18,6 +17,7 @@ import {
   RadioGroupItem,
 } from "@/components/ui/selection";
 import { api } from "@/lib/api/endpoints";
+import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { answerLabel, parseOption } from "@/lib/mission/questions";
 import { cn } from "@/lib/utils";
 
@@ -328,7 +328,7 @@ const PendingQuestions = ({ question }: { question: Question }) => {
   const items = question.questions;
   const item = items[step];
 
-  const answer = useMutation({
+  const answer = useSingleFlightMutation({
     mutationFn: () =>
       api.answerQuestion(missionId, question.id, {
         answers: items.map((entry) => ({

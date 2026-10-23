@@ -275,6 +275,123 @@ describe("mission service", () => {
     ).toStrictEqual([true]);
   });
 
+  it("lets one edit win, replays a retried edit, and never sends twice", async () => {
+    const { daemon, missionId, orchestrator } = await startMission();
+    await daemon.missions.submitMessage(missionId, {
+      mode: "queue",
+      operationId: "race-msg",
+      text: "first",
+    });
+    const revision = daemon.store.queue.get("race-msg")?.revision ?? -1;
+    const edit = (operationId: string, expectedRevision = revision) =>
+      daemon.missions.editQueueItem(missionId, "race-msg", {
+        expectedRevision,
+        operationId,
+        text: `edited by ${operationId}`,
+      });
+    const [winner, loser] = await Promise.allSettled([
+      edit("race-a"),
+      edit("race-b"),
+    ]);
+    const retried = await edit("race-a");
+    const fresh = daemon.store.queue.get("race-msg")?.revision ?? -1;
+    await expect(edit("race-c", fresh)).rejects.toThrow(/already removed/u);
+    expect({
+      loser: loser.status === "rejected" && String(loser.reason),
+      retried,
+      sent: orchestrator.submitted
+        .filter((entry) => entry.id.startsWith("race-"))
+        .map((entry) => entry.id),
+      winner: winner.status === "fulfilled" && winner.value,
+    }).toStrictEqual({
+      loser: expect.stringMatching(/already being changed|changed; refresh/u),
+      retried: { outcome: "replaced", replacementId: "race-a" },
+      sent: ["race-msg", "race-a"],
+      winner: { outcome: "replaced", replacementId: "race-a" },
+    });
+  });
+
+  it("lets a failed mission retry by resubmitting the goal, honestly", async () => {
+    let failing = true;
+    const runtimes: FakeRuntime[] = [];
+    const daemon = await createDaemon({
+      config: await testConfig(),
+      createRuntime: (options) => {
+        const runtime = new FakeRuntime(options);
+        runtime.failSubmits = () => failing;
+        runtimes.push(runtime);
+        return runtime;
+      },
+      version: "test",
+    });
+    opened.push(daemon);
+    const repo = await gitRepo();
+    const added = await daemon.projects.addLocal({
+      operationId: "add-project-1",
+      path: repo,
+    });
+    if (added.status !== "added") {
+      throw new Error("project not added");
+    }
+    const { mission } = await daemon.missions.create({
+      autonomy: "high",
+      goal: "Add a greeting file",
+      operationId: "create-mission-1",
+      orchestrator: MODEL,
+      projectId: added.project.id,
+      worker: MODEL,
+      workspace: { mode: "current_checkout" },
+    });
+    const failed = await waitFor(
+      () => daemon.missions.get(mission.id),
+      (entry) => entry.status === "failed"
+    );
+    const goal = daemon.store.queue.get(`${mission.id}:goal`);
+    expect([failed.lastError?.code, goal?.state]).toStrictEqual([
+      "environment",
+      "unknown",
+    ]);
+    failing = false;
+    const resumed = await daemon.missions.resume(mission.id, {
+      expectedRevision: failed.revision,
+      operationId: "retry-op-1",
+    });
+    const orchestrator = runtimes.at(-1);
+    expect({
+      goalState: daemon.store.queue.get(`${mission.id}:goal`)?.state,
+      resubmissions: orchestrator?.submitted.map((entry) => entry.id),
+      status: resumed.status,
+    }).toStrictEqual({
+      goalState: "queued",
+      resubmissions: [`${mission.id}:goal`],
+      status: "exploring",
+    });
+  });
+
+  it("reports a failed stop and blocks new work until processes are gone", async () => {
+    const { daemon, missionId, orchestrator } = await startMission();
+    orchestrator.survivors = [4242];
+    const control = (operationId: string) => ({
+      expectedRevision: daemon.missions.get(missionId).revision,
+      operationId,
+    });
+    const stopped = await daemon.missions.pause(missionId, control("sf-pause"));
+    expect([stopped.status, stopped.lastError?.code]).toStrictEqual([
+      "stop_failed",
+      "stop_failed",
+    ]);
+    await expect(
+      daemon.missions.submitMessage(missionId, {
+        mode: "steer",
+        operationId: "sf-msg",
+        text: "x",
+      })
+    ).rejects.toThrow(/Resume/u);
+    await expect(
+      daemon.missions.archive(missionId, control("sf-archive"))
+    ).rejects.toThrow(/did not stop/u);
+  });
+
   it("archives only stopped or finished missions and fences them for good", async () => {
     const { daemon, missionId, orchestrator } = await startMission();
     const control = (operationId: string) => ({
@@ -283,7 +400,7 @@ describe("mission service", () => {
     });
     await expect(
       daemon.missions.archive(missionId, control("archive-early"))
-    ).rejects.toThrow(/Pause the mission/u);
+    ).rejects.toThrow(/cannot be archived/u);
     await daemon.missions.pause(missionId, control("archive-pause"));
     const archived = await daemon.missions.archive(
       missionId,

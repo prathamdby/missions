@@ -1,7 +1,6 @@
 "use client";
 
 import type { Mission } from "@missions/protocol/missions";
-import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
@@ -33,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { ProgressBar } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/selection";
 import { api } from "@/lib/api/endpoints";
+import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration, isMissionActive, secondsUntil } from "@/lib/format";
 import type { LiveNotice } from "@/lib/live/mission-state";
 import { groupTodos } from "@/lib/mission/overview";
@@ -252,7 +252,7 @@ const RETRY_BLOCKED =
 /** Retrying a blocked worker goes through the Orchestrator, which owns dispatch. */
 const RetryBlockedButton = () => {
   const { missionId, refresh } = useMission();
-  const retry = useMutation({
+  const retry = useSingleFlightMutation({
     mutationFn: () =>
       api.submitMessage(missionId, {
         mode: "steer",
@@ -389,12 +389,10 @@ const FailedCard = ({ mission }: { mission: Mission }) => {
         </span>
       </div>
       <ChatCardFooter>
-        <UnavailableButton
-          reason="The daemon cannot restart a failed mission. Start a follow-up mission instead."
+        <ResumeButton
+          label={stopIndex === -1 ? "Retry" : `Retry todo ${stopIndex + 1}`}
           variant="primary"
-        >
-          {stopIndex === -1 ? "Retry" : `Retry todo ${stopIndex + 1}`}
-        </UnavailableButton>
+        />
         <UnavailableButton reason={MODEL_LOCKED}>
           Retry with another worker model
         </UnavailableButton>
@@ -445,7 +443,7 @@ const MergeConflictCard = ({
   const { live, missionId, refresh } = useMission();
   const [choice, setChoice] = useState<string>("droids");
   const base = live.mission.workspace?.baseRef ?? "main";
-  const steer = useMutation({
+  const steer = useSingleFlightMutation({
     mutationFn: () =>
       api.submitMessage(missionId, {
         mode: "steer",

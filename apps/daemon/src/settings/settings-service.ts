@@ -49,8 +49,15 @@ export class SettingsService {
   update(request: UpdateSettingsRequest): Settings {
     const next: Settings = { ...this.get(), ...request };
     if (request.worktreeRoot !== undefined) {
-      const root = path.resolve(expandHome(request.worktreeRoot));
-      if (!path.isAbsolute(root) || root === path.parse(root).root) {
+      const expanded = expandHome(request.worktreeRoot.trim());
+      // A relative path would resolve against the daemon's own directory.
+      if (!path.isAbsolute(expanded)) {
+        throw badRequest(
+          "Use a full path for the worktree folder, like ~/code/worktrees"
+        );
+      }
+      const root = path.resolve(expanded);
+      if (root === path.parse(root).root) {
         throw badRequest("Choose a specific folder for mission worktrees");
       }
       next.worktreeRoot = root;

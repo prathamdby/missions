@@ -4,7 +4,6 @@ import type {
   PermissionDecision,
   PermissionRequest,
 } from "@missions/protocol/missions";
-import { useMutation } from "@tanstack/react-query";
 
 import { ChatCard } from "@/components/mission/chat-cards";
 import { CheckIcon, CloseIcon, ShieldIcon } from "@/components/mission/icons";
@@ -12,6 +11,7 @@ import { useMission } from "@/components/mission/mission-context";
 import { reportMutationError } from "@/components/mission/report-error";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/endpoints";
+import { useSingleFlightMutation } from "@/lib/api/use-operation";
 
 const titleOf = (request: PermissionRequest) => {
   if (request.kind === "publish") {
@@ -86,7 +86,7 @@ const ToolUse = ({ use }: { use: PermissionRequest["toolUses"][number] }) => (
 /** Paper SPM: pending tool or publish gate with Allow once / Always allow / Deny. */
 export const PermissionCard = ({ request }: { request: PermissionRequest }) => {
   const { agentLabels, applyLocal, missionId, refresh } = useMission();
-  const decide = useMutation({
+  const decide = useSingleFlightMutation({
     mutationFn: (decision: PermissionDecision) =>
       api.decidePermission(missionId, request.id, {
         decision,

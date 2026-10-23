@@ -256,31 +256,43 @@ export const parsePatch = (lines: readonly string[]) => parseHunkLines(lines);
 
 const untrackedDiff = async (
   root: string,
-  rel: string,
-  digest: ReturnType<typeof createHash>
-): Promise<ParsedPatch> => {
+  rel: string
+): Promise<{ hex: string; parsed: ParsedPatch }> => {
+  // Hash per file, not into the shared digest: these run concurrently and a
+  // shared digest would make the review hash depend on I/O timing.
+  const digest = createHash("sha256");
   const file = path.join(root, rel);
   const info = await lstat(file);
   digest.update(`${rel}\0${info.size}\0${info.mtimeMs}\0`);
   if (!info.isFile()) {
-    return { additions: 0, binary: true, deletions: 0, hunks: [] };
+    return {
+      hex: digest.digest("hex"),
+      parsed: { additions: 0, binary: true, deletions: 0, hunks: [] },
+    };
   }
   const buffer = await readHead(file, Math.min(info.size, UNTRACKED_LIMIT));
   digest.update(buffer);
+  const empty = { additions: 0, binary: false, deletions: 0, hunks: [] };
   if (isBinary(buffer)) {
-    return { additions: 0, binary: true, deletions: 0, hunks: [] };
+    return {
+      hex: digest.digest("hex"),
+      parsed: { ...empty, binary: true },
+    };
   }
   const text = buffer.toString("utf-8");
   const lines = text.endsWith("\n")
     ? text.slice(0, -1).split("\n")
     : text.split("\n");
   if (text === "") {
-    return { additions: 0, binary: false, deletions: 0, hunks: [] };
+    return { hex: digest.digest("hex"), parsed: empty };
   }
-  return parseHunkLines([
-    `@@ -0,0 +1,${lines.length} @@`,
-    ...lines.map((line) => `+${line}`),
-  ]);
+  return {
+    hex: digest.digest("hex"),
+    parsed: parseHunkLines([
+      `@@ -0,0 +1,${lines.length} @@`,
+      ...lines.map((line) => `+${line}`),
+    ]),
+  };
 };
 
 const budget = (parsed: ParsedPatch, remaining: number) => {
@@ -373,13 +385,15 @@ export const workspaceChanges = async (
       truncated: cut.truncated,
     });
   }
+  // Promise.all preserves input order, so the digest updates stay ordered.
   const untrackedDiffs = await Promise.all(
     untracked.map(async (rel) => ({
-      parsed: await untrackedDiff(root, rel, digest),
+      ...(await untrackedDiff(root, rel)),
       rel,
     }))
   );
-  for (const { parsed, rel } of untrackedDiffs) {
+  for (const { hex, parsed, rel } of untrackedDiffs) {
+    digest.update(hex);
     const cut = budget(parsed, remaining);
     remaining -= cut.used;
     files.push({

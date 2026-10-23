@@ -102,7 +102,7 @@ export const CommitRequestSchema = z.strictObject({
   expectedChangesHash: z.string().min(1),
   /** Must match the reviewed HEAD; a moved HEAD rejects the approval. */
   expectedHead: z.string().nullable(),
-  /** Required when the workspace had changes before the mission started. */
+  /** Also commit files that had changes before the mission started. */
   includePreExisting: z.boolean().default(false),
   message: z.string().trim().min(1).max(5000),
   operationId: OperationIdSchema,

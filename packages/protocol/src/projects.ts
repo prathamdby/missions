@@ -35,6 +35,13 @@ export type AddLocalProjectResponse = z.infer<
   typeof AddLocalProjectResponseSchema
 >;
 
+/**
+ * Remote URLs, scp-style SSH remotes, or an absolute local path. Relative
+ * strings would resolve against the daemon's working directory.
+ */
+const GIT_REMOTE =
+  /^(?:(?:https?|ssh|git|file):\/\/\S+|[\w.-]+@[\w.-]+:\S+|\/\S.*)$/u;
+
 export const CloneSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("github"),
@@ -42,7 +49,10 @@ export const CloneSourceSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("url"),
-    url: z.string().min(1).max(2048),
+    url: z
+      .string()
+      .max(2048)
+      .regex(GIT_REMOTE, "Use an HTTPS or SSH remote URL"),
   }),
 ]);
 export type CloneSource = z.infer<typeof CloneSourceSchema>;
