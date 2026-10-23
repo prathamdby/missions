@@ -166,6 +166,16 @@ export const registerMissionRoutes = (app: Hono, missions: MissionService) => {
       )
     )
   );
+  app.post(routes.missionArchive(M), async (c) =>
+    reply(
+      c,
+      MissionSchema,
+      await missions.archive(
+        id(c),
+        await parseBody(c, MissionControlRequestSchema)
+      )
+    )
+  );
   app.post(routes.missionResume(M), async (c) =>
     reply(
       c,

@@ -19,6 +19,8 @@ export const routes = {
   grant: (grantId: string) => apiPath(`/grants/${grantId}`),
   grants: () => apiPath("/grants"),
   mission: (missionId: string) => apiPath(`/missions/${missionId}`),
+  missionArchive: (missionId: string) =>
+    apiPath(`/missions/${missionId}/archive`),
   missionMessages: (missionId: string) =>
     apiPath(`/missions/${missionId}/messages`),
   missionPause: (missionId: string) => apiPath(`/missions/${missionId}/pause`),

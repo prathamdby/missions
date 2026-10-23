@@ -48,6 +48,7 @@ All paths come from `routes` in `src/routes.ts`. Bodies and responses use the sc
 | POST | `question(id, q)` | `AnswerQuestionRequest` | `Question` |
 | POST | `plan(id)` | `DecidePlanRequest` | `PlanRevision` |
 | POST | `missionPause(id)` / `missionResume(id)` | `MissionControlRequest` | `Mission` |
+| POST | `missionArchive(id)` | `MissionControlRequest` | `Mission` (completed, paused, interrupted or failed missions only; stops idle agents, keeps the worktree) |
 | GET | `changes(id)` |  | `Changes` |
 | GET | `files(id)?dir=` |  | `FileTree` |
 | GET | `file(id)?path=` |  | `FileContent` |

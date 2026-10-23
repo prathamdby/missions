@@ -32,6 +32,13 @@ export const RESUMABLE: ReadonlySet<MissionStatus> = new Set([
   "stop_failed",
 ]);
 
+export const ARCHIVABLE: ReadonlySet<MissionStatus> = new Set([
+  "completed",
+  "paused",
+  "interrupted",
+  "failed",
+]);
+
 export const MAX_PENDING_ASSIGNMENTS = 20;
 export const SNAPSHOT_TRANSCRIPT = 200;
 

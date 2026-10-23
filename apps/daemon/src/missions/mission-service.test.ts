@@ -275,6 +275,29 @@ describe("mission service", () => {
     ).toStrictEqual([true]);
   });
 
+  it("archives only stopped or finished missions and fences them for good", async () => {
+    const { daemon, missionId, orchestrator } = await startMission();
+    const control = (operationId: string) => ({
+      expectedRevision: daemon.missions.get(missionId).revision,
+      operationId,
+    });
+    await expect(
+      daemon.missions.archive(missionId, control("archive-early"))
+    ).rejects.toThrow(/Pause the mission/u);
+    await daemon.missions.pause(missionId, control("archive-pause"));
+    const archived = await daemon.missions.archive(
+      missionId,
+      control("archive-op")
+    );
+    await expect(
+      daemon.missions.resume(missionId, control("archive-resume"))
+    ).rejects.toThrow(/Cannot resume/u);
+    expect([archived.status, orchestrator.closed]).toStrictEqual([
+      "archived",
+      true,
+    ]);
+  });
+
   it("serves registered artifacts and refuses paths outside the mission folder", async () => {
     const { daemon, missionId, orchestrator, repo } = await startMission();
     await writeFile(

@@ -77,6 +77,7 @@ import {
   ACTIVE,
   assignmentMessage,
   FENCED,
+  ARCHIVABLE,
   handoffMessage,
   isSystemRequest,
   MAX_PENDING_ASSIGNMENTS,
@@ -1628,6 +1629,36 @@ export class MissionService {
           throw conflict(`Cannot pause a ${mission.status} mission`);
         }
         return await this.#stopMission(missionId, "paused");
+      }
+    );
+    return result;
+  }
+
+  /** Stops any idle agents and hides the mission from active work; the worktree is left alone. */
+  async archive(
+    missionId: string,
+    request: MissionControlRequest
+  ): Promise<Mission> {
+    const { result } = await this.#journal.run(
+      { id: request.operationId, kind: "mission.archive", missionId },
+      async () => {
+        const mission = this.get(missionId);
+        if (mission.revision !== request.expectedRevision) {
+          throw stale("The mission changed; refresh and try again");
+        }
+        if (!ARCHIVABLE.has(mission.status)) {
+          throw conflict(
+            `Pause the mission before archiving it (${mission.status})`
+          );
+        }
+        const stopped = await this.#stopMission(missionId, "paused");
+        if (stopped.status === "stop_failed") {
+          throw conflict("Some agent processes did not stop");
+        }
+        return this.#mutateMission(missionId, (m) => ({
+          ...m,
+          status: "archived",
+        }));
       }
     );
     return result;
