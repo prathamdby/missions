@@ -340,18 +340,7 @@ export class ScriptedRuntime implements RuntimeHandle {
       return;
     }
     if (text.includes("approved plan revision")) {
-      await this.#roleTool("update_todos", {
-        todos: [
-          { content: `Write ${NOTES_FILE}`, status: "in_progress" },
-          { content: "Review the change", status: "pending" },
-        ],
-      });
-      await this.#roleTool("dispatch_worker", {
-        instructions: `Create ${NOTES_FILE} with a short summary of the mission goal.`,
-        needsWrite: true,
-        title: `Write ${NOTES_FILE}`,
-      });
-      this.#say("A Worker is writing the notes. I will review its handoff.");
+      await this.#startDefaultWork();
       return;
     }
     if (text.includes("finished assignment")) {
@@ -375,6 +364,17 @@ export class ScriptedRuntime implements RuntimeHandle {
       return;
     }
     if (isSystemRequest(requestId) && this.#turns > 0) {
+      // After a restart the scenario marker is gone; the interrupted
+      // assignment titles in the resume message identify the work.
+      if (text.includes("Add Clock interface")) {
+        this.#say("Re-dispatching the interrupted assignment.");
+        await this.#startRichWork();
+        return;
+      }
+      if (text.includes(NOTES_FILE)) {
+        await this.#startDefaultWork();
+        return;
+      }
       this.#say("Re-checked the workspace; continuing from where we left off.");
       return;
     }
@@ -395,6 +395,21 @@ export class ScriptedRuntime implements RuntimeHandle {
       return;
     }
     this.#say(`Noted: ${text.slice(0, 200)}`);
+  }
+
+  async #startDefaultWork() {
+    await this.#roleTool("update_todos", {
+      todos: [
+        { content: `Write ${NOTES_FILE}`, status: "in_progress" },
+        { content: "Review the change", status: "pending" },
+      ],
+    });
+    await this.#roleTool("dispatch_worker", {
+      instructions: `Create ${NOTES_FILE} with a short summary of the mission goal.`,
+      needsWrite: true,
+      title: `Write ${NOTES_FILE}`,
+    });
+    this.#say("A Worker is writing the notes. I will review its handoff.");
   }
 
   async #propose(title: string) {

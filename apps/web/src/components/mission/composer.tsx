@@ -1,6 +1,7 @@
 "use client";
 
 import type { Autonomy, DeliveryMode } from "@missions/protocol/common";
+import type { MissionStatus } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
@@ -14,9 +15,12 @@ import { Textarea } from "@/components/ui/input";
 import { Kbd, KbdSizeContext } from "@/components/ui/kbd";
 import { Hint } from "@/components/ui/tooltip";
 import { api } from "@/lib/api/endpoints";
-import { useOperationIds } from "@/lib/api/use-operation";
+import {
+  useOperationIds,
+  useSingleFlightMutation,
+} from "@/lib/api/use-operation";
 import { nextAutonomy } from "@/lib/autonomy";
-import { isMissionActive } from "@/lib/format";
+import { canResume, isMissionActive } from "@/lib/format";
 
 const UNSUPPORTED = "Attachments and mentions are not supported yet.";
 
@@ -32,12 +36,15 @@ const ToolbarIcon = ({ icon, label }: { icon: ReactNode; label: string }) => (
   </button>
 );
 
-const placeholderFor = (status: string) => {
+const placeholderFor = (status: MissionStatus) => {
   if (status === "archived") {
     return "This mission is archived";
   }
   if (status === "completed") {
     return "Start a follow-up from this mission…";
+  }
+  if (canResume(status)) {
+    return "Resume the mission to send a message…";
   }
   return "Reply to the orchestrator…";
 };
@@ -72,6 +79,8 @@ export const MissionComposer = () => {
   const archived = mission.status === "archived";
   const queued = useVisibleQueue().length > 0;
 
+  // Not single-flight: a second message typed while the first is in flight
+  // is a separate intent and must not be dropped.
   const send = useMutation({
     mutationFn: (input: { mode: DeliveryMode; text: string }) =>
       api.submitMessage(missionId, {
@@ -89,7 +98,7 @@ export const MissionComposer = () => {
     },
   });
 
-  const autonomy = useMutation({
+  const autonomy = useSingleFlightMutation({
     mutationFn: (value: Autonomy) =>
       api.updateMission(missionId, {
         autonomy: value,

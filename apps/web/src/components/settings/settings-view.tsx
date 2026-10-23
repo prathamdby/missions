@@ -471,7 +471,7 @@ const Connections = () => {
         label="Daemon"
       >
         <StatusLine
-          detail={`v${daemon.version}`}
+          detail={`${daemon.url} · v${daemon.version}`}
           label="Connected"
           tone="success"
         />

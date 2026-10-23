@@ -31,6 +31,7 @@ const mission = (
 ): Mission => ({
   autonomy: "medium",
   createdAt: AT,
+  endedAt: null,
   epoch: 0,
   goal: "Fix the flaky test",
   id: MISSION_ID,

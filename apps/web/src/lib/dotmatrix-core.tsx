@@ -835,8 +835,10 @@ export function DotMatrixBase({
     );
   });
 
+  // Spans, not the upstream library's divs: keeps the loader phrasing
+  // content so it can sit inside <button>/<span> (tool rows, tray chips).
   const matrix = (
-    <div
+    <span
       className={cx(
         "dmx-root",
         `dmx-dot-shape-${dotShape}`,
@@ -847,13 +849,13 @@ export function DotMatrixBase({
       )}
       style={dmxVarStyle}
     >
-      <div className="dmx-grid" style={{ gap }}>{dots}</div>
-    </div>
+      <span className="dmx-grid" style={{ gap }}>{dots}</span>
+    </span>
   );
 
   if (useWrapper) {
     return (
-      <div
+      <span
         role="status"
         aria-live="polite"
         aria-label={ariaLabel}
@@ -872,12 +874,12 @@ export function DotMatrixBase({
         onMouseLeave={onMouseLeave}
       >
         {matrix}
-      </div>
+      </span>
     );
   }
 
   return (
-    <div
+    <span
       role="status"
       aria-live="polite"
       aria-label={ariaLabel}
@@ -893,8 +895,8 @@ export function DotMatrixBase({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <div className="dmx-grid" style={{ gap }}>{dots}</div>
-    </div>
+      <span className="dmx-grid" style={{ gap }}>{dots}</span>
+    </span>
   );
 }
 
@@ -1314,7 +1316,7 @@ export function DotMatrix3Base({
   });
 
   const matrix = (
-    <div
+    <span
       className={cx(
         "dmx-root",
         "dmx-matrix-3",
@@ -1326,13 +1328,13 @@ export function DotMatrix3Base({
       )}
       style={dmxVarStyle}
     >
-      <div className="dmx-grid" style={gridStyle}>{dots}</div>
-    </div>
+      <span className="dmx-grid" style={gridStyle}>{dots}</span>
+    </span>
   );
 
   if (useWrapper) {
     return (
-      <div
+      <span
         role="status"
         aria-live="polite"
         aria-label={ariaLabel}
@@ -1351,12 +1353,12 @@ export function DotMatrix3Base({
         onMouseLeave={onMouseLeave}
       >
         {matrix}
-      </div>
+      </span>
     );
   }
 
   return (
-    <div
+    <span
       role="status"
       aria-live="polite"
       aria-label={ariaLabel}
@@ -1373,8 +1375,8 @@ export function DotMatrix3Base({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <div className="dmx-grid" style={gridStyle}>{dots}</div>
-    </div>
+      <span className="dmx-grid" style={gridStyle}>{dots}</span>
+    </span>
   );
 }
 

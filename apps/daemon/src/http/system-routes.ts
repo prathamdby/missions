@@ -26,6 +26,7 @@ export interface SystemDeps {
   settings: SettingsService;
   models: ModelCatalog;
   droidPath: string;
+  url: string;
   version: string;
   startedAt: Date;
 }
@@ -52,7 +53,11 @@ const connection = async (deps: SystemDeps): Promise<ConnectionStatus> => {
     droidState = "missing";
   }
   return {
-    daemon: { startedAt: deps.startedAt.toISOString(), version: deps.version },
+    daemon: {
+      startedAt: deps.startedAt.toISOString(),
+      url: deps.url,
+      version: deps.version,
+    },
     droid: {
       message: droid.ok ? null : `Droid CLI not usable at ${deps.droidPath}`,
       state: droidState,

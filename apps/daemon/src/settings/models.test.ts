@@ -1,3 +1,6 @@
+import os from "node:os";
+import path from "node:path";
+
 import { routes } from "@missions/protocol/routes";
 import { ModelListSchema } from "@missions/protocol/settings";
 import { afterEach, describe, expect, it } from "vitest";
@@ -90,5 +93,34 @@ describe(ModelCatalog, () => {
       "glm-5.3-flash",
       "plain",
     ]);
+  });
+
+  it("accepts only full, specific worktree folders", async () => {
+    const daemon = await createDaemon({
+      config: await testConfig(),
+      loadModels: () => Promise.resolve(RAW),
+      version: "test",
+    });
+    opened.push(daemon);
+    const patch = (worktreeRoot: string) =>
+      daemon.app.request(routes.settings(), {
+        body: JSON.stringify({ worktreeRoot }),
+        headers: {
+          authorization: `Bearer ${daemon.token}`,
+          "content-type": "application/json",
+          host: "127.0.0.1:4317",
+        },
+        method: "PATCH",
+      });
+    const relative = await patch("relative/path");
+    const root = await patch("/");
+    const home = await patch("~/missions-worktrees");
+    expect({
+      saved: daemon.settings.get().worktreeRoot,
+      statuses: [relative.status, root.status, home.status],
+    }).toStrictEqual({
+      saved: path.join(os.homedir(), "missions-worktrees"),
+      statuses: [400, 400, 200],
+    });
   });
 });

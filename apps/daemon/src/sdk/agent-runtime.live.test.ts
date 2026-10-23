@@ -343,72 +343,77 @@ describe.runIf(process.env.MISSIONS_LIVE === "1")("live Droid runner", () => {
     await reloaded.close();
   }, 240_000);
 
-  it("serves app-owned MCP role tools and enforces the plan gate on writes", async () => {
-    const dir = await workspace();
-    const rec = recorder();
-    const todos: unknown[] = [];
-    const handlers = {
-      updateTodos: (_agentId: string, input: { todos: unknown[] }) => {
-        todos.push(...input.todos);
-        return Promise.resolve("Todos saved");
-      },
-    } as unknown as RoleToolHandlers;
-    let planApproved = false;
-    const context = (): AgentContext => ({
-      autonomy: "high",
-      epoch: 0,
-      fenced: false,
-      missionId: "m",
-      planApproved,
-      projectId: "p",
-      role: "worker",
-      workspacePath: dir,
-    });
-    const leases = new WriteLeaseRegistry();
-    const broker = new PermissionBroker({
-      acquireWriteLease: (agentId, signal) =>
-        leases.acquire(dir, agentId, signal),
-      context,
-      roleToolServer: ROLE_TOOL_SERVER,
-      store: {
-        addGrant: () => {},
-        listGrants: () => [],
-        saveRequest: () => {},
-      },
-    });
-    const runtime = makeRuntime(dir, supervisorFor(dir), rec, {
-      agentId: "gate",
-      mcpServers: [createRoleToolServer("worker", "gate", handlers)],
-      onPermission: async (ask) => {
-        const result = await broker.ask(ask.agentId, ask.toolUses);
-        return result.approved;
-      },
-    });
-    await runtime.start();
-    await runtime.submit(
-      "todo",
-      "Call the missions update_todos tool with one pending todo 'probe'. Then use the Create tool to create note.txt containing hi. Then reply DONE.",
-      "steer"
-    );
-    await rec.until(turnDone, 180_000);
-    expect({
-      noteWritten: existsSync(path.join(dir, "note.txt")),
-      todos: todos.length,
-    }).toStrictEqual({ noteWritten: false, todos: 1 });
+  // Retry: the cheap live model sometimes skips the MCP tool call.
+  it(
+    "serves app-owned MCP role tools and enforces the plan gate on writes",
+    { retry: 1, timeout: 400_000 },
+    async () => {
+      const dir = await workspace();
+      const rec = recorder();
+      const todos: unknown[] = [];
+      const handlers = {
+        updateTodos: (_agentId: string, input: { todos: unknown[] }) => {
+          todos.push(...input.todos);
+          return Promise.resolve("Todos saved");
+        },
+      } as unknown as RoleToolHandlers;
+      let planApproved = false;
+      const context = (): AgentContext => ({
+        autonomy: "high",
+        epoch: 0,
+        fenced: false,
+        missionId: "m",
+        planApproved,
+        projectId: "p",
+        role: "worker",
+        workspacePath: dir,
+      });
+      const leases = new WriteLeaseRegistry();
+      const broker = new PermissionBroker({
+        acquireWriteLease: (agentId, signal) =>
+          leases.acquire(dir, agentId, signal),
+        context,
+        roleToolServer: ROLE_TOOL_SERVER,
+        store: {
+          addGrant: () => {},
+          listGrants: () => [],
+          saveRequest: () => {},
+        },
+      });
+      const runtime = makeRuntime(dir, supervisorFor(dir), rec, {
+        agentId: "gate",
+        mcpServers: [createRoleToolServer("worker", "gate", handlers)],
+        onPermission: async (ask) => {
+          const result = await broker.ask(ask.agentId, ask.toolUses);
+          return result.approved;
+        },
+      });
+      await runtime.start();
+      await runtime.submit(
+        "todo",
+        "First call the missions update_todos tool with one pending todo 'probe'. Then use the Create tool to create note.txt containing hi. Then reply DONE.",
+        "steer"
+      );
+      await rec.until(turnDone, 180_000);
+      expect({
+        noteWritten: existsSync(path.join(dir, "note.txt")),
+        todos: todos.length,
+      }).toStrictEqual({ noteWritten: false, todos: 1 });
 
-    planApproved = true;
-    await runtime.submit(
-      "write",
-      "The plan is approved now. Use the Create tool to create note.txt containing hi, then reply DONE.",
-      "steer"
-    );
-    await rec.until(turnDone, 180_000);
-    await expect(
-      readFile(path.join(dir, "note.txt"), "utf-8")
-    ).resolves.toContain("hi");
-    expect(leases.holder(dir)).toBe("gate");
-    await runtime.close();
-  }, 400_000);
+      planApproved = true;
+      await runtime.submit(
+        "write",
+        "The plan is approved now. Use the Create tool to create note.txt containing hi, then reply DONE.",
+        "steer"
+      );
+      await rec.until(turnDone, 180_000);
+      await expect(
+        readFile(path.join(dir, "note.txt"), "utf-8")
+      ).resolves.toContain("hi");
+      expect(leases.holder(dir)).toBe("gate");
+      await runtime.close();
+    }
+  );
 
   it("stops fire-and-forget tool processes with the agent's session", async () => {
     const dir = await workspace();

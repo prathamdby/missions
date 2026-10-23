@@ -1,7 +1,6 @@
 "use client";
 
 import type { TranscriptItem } from "@missions/protocol/missions";
-import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
 import { MissionComposer } from "@/components/mission/composer";
@@ -20,6 +19,7 @@ import {
 } from "@/components/mission/transcript";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/endpoints";
+import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration, isMissionActive } from "@/lib/format";
 import { deliveredRequestIds, showGoalBubble } from "@/lib/mission/queue";
 import { buildTimeline } from "@/lib/mission/timeline";
@@ -34,7 +34,7 @@ const EarlierMessages = ({ onLoaded }: { onLoaded: () => void }) => {
   const oldest = Math.min(
     ...Object.values(live.transcript).map((item) => item.seq)
   );
-  const load = useMutation({
+  const load = useSingleFlightMutation({
     mutationFn: () => api.missionTranscript(missionId, oldest, PAGE_SIZE),
     onError: (error) =>
       reportMutationError(error, refresh, "Could not load earlier messages"),

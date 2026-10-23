@@ -1,7 +1,6 @@
 "use client";
 
 import type { PermissionDecision } from "@missions/protocol/missions";
-import { useMutation } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { ReactNode } from "react";
 
@@ -14,6 +13,7 @@ import { useMission } from "@/components/mission/mission-context";
 import { DotLoader, Meta, PanelSection } from "@/components/mission/panel-kit";
 import { reportMutationError } from "@/components/mission/report-error";
 import { api } from "@/lib/api/endpoints";
+import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { shortAge } from "@/lib/format";
 import { buildDigest } from "@/lib/mission/digest";
 import type { DigestItem, DigestNeed } from "@/lib/mission/digest";
@@ -30,7 +30,7 @@ const smallButton =
 
 const NeedActions = ({ need }: { need: DigestNeed }) => {
   const { applyLocal, missionId, refresh } = useMission();
-  const decide = useMutation({
+  const decide = useSingleFlightMutation({
     mutationFn: (decision: PermissionDecision) => {
       if (need.kind !== "permission") {
         throw new Error("Only permission requests take a decision here");

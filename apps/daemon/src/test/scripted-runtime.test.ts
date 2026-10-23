@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import { afterEach, describe, expect, it } from "vitest";
@@ -77,6 +78,17 @@ describe(ScriptedRuntime, () => {
         summary:
           "Added NOTES.md and reviewed it.\n\nChecks:\n- test -f NOTES.md: passed",
       });
+      const endedAt = done.mission.endedAt ?? "";
+      await sleep(5);
+      const published = daemon.missions.patch(id, (mission) => ({
+        ...mission,
+        publish: { ...mission.publish, remote: "origin" },
+      }));
+      expect({
+        ended: Date.parse(endedAt) >= Date.parse(done.mission.createdAt),
+        endedAt: published.endedAt,
+        movedUpdatedAt: published.updatedAt > endedAt,
+      }).toStrictEqual({ ended: true, endedAt, movedUpdatedAt: true });
     }
   );
 });

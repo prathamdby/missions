@@ -1,11 +1,12 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
-
 import { useMission } from "@/components/mission/mission-context";
 import { reportMutationError } from "@/components/mission/report-error";
 import { api } from "@/lib/api/endpoints";
-import { useOperationIds } from "@/lib/api/use-operation";
+import {
+  useOperationIds,
+  useSingleFlightMutation,
+} from "@/lib/api/use-operation";
 
 /** Pause and Resume, bound to the mission revision the user saw. */
 export const useMissionControl = () => {
@@ -13,7 +14,7 @@ export const useMissionControl = () => {
   const ops = useOperationIds();
   const { revision } = live.mission;
 
-  const control = useMutation({
+  const control = useSingleFlightMutation({
     mutationFn: (action: "pause" | "resume") => {
       const body = {
         expectedRevision: revision,

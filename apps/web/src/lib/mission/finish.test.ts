@@ -83,13 +83,26 @@ describe(finishState, () => {
       ])
     );
     expect(state.step).toBe("commit");
-    expect(state.pending.map((entry) => entry.path)).toStrictEqual([
-      "a.ts",
-      "b.ts",
-    ]);
+    expect(state.pending.map((entry) => entry.path)).toStrictEqual(["a.ts"]);
     expect(state.preExisting.map((entry) => entry.path)).toStrictEqual([
       "b.ts",
     ]);
+  });
+
+  it("offers earlier edits until something is committed, then moves on", () => {
+    const leftover = changes([
+      file("a.ts", { committed: true }),
+      file("b.ts", { preExisting: true }),
+    ]);
+    const status = "completed" as const;
+    const commits = [{ message: "Add a", sha: "def" }];
+    expect([
+      finishState({ publish, status, workspace }, leftover).step,
+      finishState(
+        { publish: { ...publish, commits }, status, workspace },
+        leftover
+      ).step,
+    ]).toStrictEqual(["commit", "push"]);
   });
 
   it("moves from push to PR to review as the publish record fills in", () => {

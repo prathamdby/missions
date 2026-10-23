@@ -155,7 +155,9 @@ export const MissionHeader = ({
   const status = displayStatus(live);
   const elapsed = useElapsed(
     mission.createdAt,
-    isMissionActive(mission.status) ? null : mission.updatedAt
+    isMissionActive(mission.status)
+      ? null
+      : (mission.endedAt ?? mission.updatedAt)
   );
   return (
     <header className="flex h-13 shrink-0 items-center gap-control border-b border-border-subtle pr-xl pl-gutter max-md:pr-lg max-md:pl-lg">

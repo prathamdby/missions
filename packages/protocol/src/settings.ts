@@ -38,7 +38,11 @@ export const ModelListSchema = z.object({
 export type ModelList = z.infer<typeof ModelListSchema>;
 
 export const ConnectionStatusSchema = z.object({
-  daemon: z.object({ startedAt: z.string(), version: z.string() }),
+  daemon: z.object({
+    startedAt: z.string(),
+    url: z.string(),
+    version: z.string(),
+  }),
   droid: z.object({
     message: z.string().nullable(),
     state: z.enum(["ready", "missing", "error"]),

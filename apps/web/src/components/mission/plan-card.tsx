@@ -1,7 +1,6 @@
 "use client";
 
 import type { PlanRevision } from "@missions/protocol/missions";
-import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
 import {
@@ -22,6 +21,7 @@ import { Textarea } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { api } from "@/lib/api/endpoints";
 import { useModelName } from "@/lib/api/queries";
+import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { groupTodos } from "@/lib/mission/overview";
 import { parsePlan } from "@/lib/mission/plan";
 
@@ -32,7 +32,7 @@ const PlanReview = ({ plan }: { plan: PlanRevision }) => {
   const { applyLocal, missionId, refresh } = useMission();
   const [revising, setRevising] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const decide = useMutation({
+  const decide = useSingleFlightMutation({
     mutationFn: (input: { approve: boolean; feedback?: string }) =>
       api.decidePlan(missionId, { ...input, planRevision: plan.revision }),
     onError: (error) =>

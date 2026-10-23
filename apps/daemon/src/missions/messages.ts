@@ -27,8 +27,9 @@ export const ACTIVE: ReadonlySet<MissionStatus> = new Set([
   "pausing",
 ]);
 export const RESUMABLE: ReadonlySet<MissionStatus> = new Set([
-  "paused",
+  "failed",
   "interrupted",
+  "paused",
   "stop_failed",
 ]);
 

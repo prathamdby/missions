@@ -249,21 +249,21 @@ export class GitService {
             "The changes moved since you reviewed them; review again"
           );
         }
-        const preExisting = changes.files.filter(
-          (file) => file.preExisting && !file.committed
+        const uncommitted = changes.files.filter((file) => !file.committed);
+        // Files dirty before the mission may hold the user's own edits; they
+        // are committed only when the user reviewed them and opted in.
+        const included = request.includePreExisting
+          ? uncommitted
+          : uncommitted.filter((file) => !file.preExisting);
+        const paths = included.flatMap((file) =>
+          file.oldPath ? [file.oldPath, file.path] : [file.path]
         );
-        if (preExisting.length > 0 && !request.includePreExisting) {
-          throw conflict(
-            `Some files had changes before the mission started (${preExisting.map((file) => file.path).join(", ")}). Review them and confirm to include them.`
-          );
-        }
-        const paths = changes.files
-          .filter((file) => !file.committed)
-          .flatMap((file) =>
-            file.oldPath ? [file.oldPath, file.path] : [file.path]
-          );
         if (paths.length === 0) {
-          throw conflict("There is nothing to commit");
+          throw conflict(
+            uncommitted.length > 0
+              ? "Only files changed before the mission started remain. Review them and include them to commit."
+              : "There is nothing to commit"
+          );
         }
         const added = await this.#git(binding, ["add", "-A", "--", ...paths]);
         if (!added.ok) {
@@ -417,6 +417,11 @@ export class GitService {
     const branch = mission.publish.pushedBranch;
     if (!branch) {
       throw conflict("Push the branch before opening a pull request");
+    }
+    if (branch === binding.baseRef) {
+      throw conflict(
+        `The commits are on ${branch}, the base branch, so there is nothing to compare. Start the mission in a new worktree to open a pull request.`
+      );
     }
     await this.#reconcileIfUnknown(request.operationId, async () => {
       const found = await this.#findPr(binding, branch);

@@ -57,9 +57,13 @@ if (args[0] === "pr" && args[1] === "list") {
 `;
 
 const setup = async (
-  mode: "new_worktree" | "current_checkout" = "new_worktree"
+  mode: "new_worktree" | "current_checkout" = "new_worktree",
+  userFile?: string
 ) => {
   const repoDir = await gitRepo();
+  if (userFile) {
+    await writeFile(path.join(repoDir, userFile), "the user's draft\n");
+  }
   const bare = path.join(await tempDir("remote"), "origin.git");
   execFileSync("git", ["clone", "-q", "--bare", repoDir, bare]);
   sh(repoDir, ["remote", "add", "origin", bare]);
@@ -87,7 +91,9 @@ const setup = async (
     operationId: "create-mission-1",
     projectId: added.project.id,
     workspace:
-      mode === "new_worktree" ? { baseBranch: "main", mode } : { mode },
+      mode === "new_worktree"
+        ? { baseBranch: "main", mode }
+        : { acknowledgeDirty: userFile !== undefined, mode },
   });
   const missionId = snapshot.mission.id;
   const workspace = snapshot.mission.workspace?.path ?? "";
@@ -179,6 +185,34 @@ describe("publish lifecycle", () => {
       again.publish.commits.length,
     ]).toStrictEqual([1, 1]);
     expect(sh(ctx.workspace, ["rev-list", "--count", "HEAD"])).toBe("2");
+  });
+
+  it("leaves the user's earlier edits out of the commit unless they opt in", async () => {
+    const ctx = await setup("current_checkout", "mine.txt");
+    await writeFile(path.join(ctx.workspace, "hello.txt"), "hi\n");
+    await commitAll(ctx, "commit-mission-1");
+    const committed = sh(ctx.workspace, ["show", "--name-only", "--format="]);
+    const status = sh(ctx.workspace, ["status", "--porcelain"]);
+    await expect(commitAll(ctx, "commit-mission-2")).rejects.toThrow(
+      /Only files changed before the mission/u
+    );
+    const remaining = await ctx.review();
+    await ctx.daemon.publish.commit(ctx.missionId, {
+      expectedChangesHash: remaining.hash,
+      expectedHead: remaining.head,
+      includePreExisting: true,
+      message: "Include my draft",
+      operationId: "commit-mission-3",
+    });
+    expect({
+      committed,
+      included: sh(ctx.workspace, ["show", "--name-only", "--format="]),
+      status,
+    }).toStrictEqual({
+      committed: "hello.txt",
+      included: "mine.txt",
+      status: "?? mine.txt",
+    });
   });
 
   it("reconciles an unknown push against the remote instead of pushing again", async () => {

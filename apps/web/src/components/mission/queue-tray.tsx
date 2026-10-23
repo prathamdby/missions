@@ -1,7 +1,6 @@
 "use client";
 
 import type { QueueItem } from "@missions/protocol/missions";
-import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import {
@@ -17,7 +16,10 @@ import { Button, IconButton } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { api } from "@/lib/api/endpoints";
-import { useOperationIds } from "@/lib/api/use-operation";
+import {
+  useOperationIds,
+  useSingleFlightMutation,
+} from "@/lib/api/use-operation";
 import {
   deliveredRequestIds,
   goalRequestId,
@@ -104,38 +106,27 @@ const EDIT_OUTCOME = {
   },
   delete_unconfirmed: {
     description:
-      "The original could not be confirmed removed and may still be delivered.",
-    title: "Edit sent, original may arrive too",
+      "The original could not be confirmed removed, so the edit was not sent and the original may still be delivered. Your draft is kept.",
+    title: "Edit not sent",
     tone: "warning",
   },
 } as const;
 
-const QueueRow = ({ item }: { item: QueueItem }) => {
-  const { applyLocal, missionId, refresh } = useMission();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(item.text);
+const QueueEditor = ({
+  draft,
+  item,
+  onClose,
+  onDraft,
+}: {
+  draft: string;
+  item: QueueItem;
+  onClose: () => void;
+  onDraft: (draft: string) => void;
+}) => {
+  const { missionId, refresh } = useMission();
   const ops = useOperationIds();
   const editable = isEditable(item);
-
-  const mode = useMutation({
-    mutationFn: () =>
-      api.changeQueueMode(missionId, item.id, {
-        expectedRevision: item.revision,
-        mode: item.mode === "steer" ? "queue" : "steer",
-      }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not change delivery"),
-    onSuccess: (value) => applyLocal({ kind: "queue", value }),
-  });
-
-  const remove = useMutation({
-    mutationFn: () => api.removeQueueItem(missionId, item.id, item.revision),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not remove the message"),
-    onSuccess: (value) => applyLocal({ kind: "queue", value }),
-  });
-
-  const edit = useMutation({
+  const edit = useSingleFlightMutation({
     mutationFn: (text: string) =>
       api.editQueueItem(missionId, item.id, {
         expectedRevision: item.revision,
@@ -146,38 +137,72 @@ const QueueRow = ({ item }: { item: QueueItem }) => {
       reportMutationError(error, refresh, "Could not edit the message"),
     onSuccess: (result) => {
       ops.settle();
-      setEditing(false);
+      if (result.outcome !== "delete_unconfirmed") {
+        onClose();
+      }
       if (result.outcome !== "replaced") {
         toast(EDIT_OUTCOME[result.outcome]);
       }
     },
   });
+  return (
+    <li className="flex flex-col gap-sm px-md py-sm">
+      <Textarea
+        aria-label="Edit queued message"
+        onChange={(event) => onDraft(event.target.value)}
+        value={draft}
+      />
+      {editable ? null : (
+        <output className="type-caption text-warning">
+          {item.state === "sent"
+            ? "The agent received the original before you saved. Your draft is still here to copy."
+            : "This message can no longer be edited. Your draft is still here to copy."}
+        </output>
+      )}
+      <div className="flex justify-end gap-sm">
+        <Button onClick={onClose} size="sm" variant="ghost">
+          {editable ? "Cancel" : "Close"}
+        </Button>
+        <Button
+          disabled={!(editable && draft.trim()) || edit.isPending}
+          onClick={() => edit.mutate(draft.trim())}
+          size="sm"
+          variant="primary"
+        >
+          {edit.isPending ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    </li>
+  );
+};
 
-  if (editing) {
-    return (
-      <li className="flex flex-col gap-sm px-md py-sm">
-        <Textarea
-          aria-label="Edit queued message"
-          onChange={(event) => setDraft(event.target.value)}
-          value={draft}
-        />
-        <div className="flex justify-end gap-sm">
-          <Button onClick={() => setEditing(false)} size="sm" variant="ghost">
-            Cancel
-          </Button>
-          <Button
-            disabled={!draft.trim() || edit.isPending}
-            onClick={() => edit.mutate(draft.trim())}
-            size="sm"
-            variant="primary"
-          >
-            {edit.isPending ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </li>
-    );
-  }
+const QueueRow = ({
+  item,
+  onEdit,
+}: {
+  item: QueueItem;
+  onEdit: () => void;
+}) => {
+  const { applyLocal, missionId, refresh } = useMission();
+  const editable = isEditable(item);
 
+  const mode = useSingleFlightMutation({
+    mutationFn: () =>
+      api.changeQueueMode(missionId, item.id, {
+        expectedRevision: item.revision,
+        mode: item.mode === "steer" ? "queue" : "steer",
+      }),
+    onError: (error) =>
+      reportMutationError(error, refresh, "Could not change delivery"),
+    onSuccess: (value) => applyLocal({ kind: "queue", value }),
+  });
+
+  const remove = useSingleFlightMutation({
+    mutationFn: () => api.removeQueueItem(missionId, item.id, item.revision),
+    onError: (error) =>
+      reportMutationError(error, refresh, "Could not remove the message"),
+    onSuccess: (value) => applyLocal({ kind: "queue", value }),
+  });
   return (
     <li className="flex items-start gap-md px-md py-sm">
       <span className="mt-2xs">
@@ -202,14 +227,7 @@ const QueueRow = ({ item }: { item: QueueItem }) => {
           >
             {item.mode === "steer" ? "Queue instead" : "Steer instead"}
           </Button>
-          <Button
-            onClick={() => {
-              setDraft(item.text);
-              setEditing(true);
-            }}
-            size="sm"
-            variant="ghost"
-          >
+          <Button onClick={onEdit} size="sm" variant="ghost">
             Edit
           </Button>
           <IconButton
@@ -242,8 +260,19 @@ export const useVisibleQueue = () => {
 
 /** Messages waiting for delivery, above the composer. */
 export const QueueTray = () => {
+  const { live } = useMission();
   const items = useVisibleQueue();
-  if (items.length === 0) {
+  // Held here, not in the row, so a draft survives the row leaving the
+  // visible list when the original is delivered mid-edit.
+  const [editing, setEditing] = useState<{ draft: string; id: string } | null>(
+    null
+  );
+  const editingItem = editing ? live.queue[editing.id] : undefined;
+  const rows =
+    editingItem && !items.some((item) => item.id === editingItem.id)
+      ? [...items, editingItem]
+      : items;
+  if (rows.length === 0) {
     return null;
   }
   return (
@@ -251,9 +280,23 @@ export const QueueTray = () => {
       aria-label="Message queue"
       className="mx-md flex flex-col divide-y divide-border-subtle rounded-md bg-surface-raised shadow-sm"
     >
-      {items.map((item) => (
-        <QueueRow item={item} key={item.id} />
-      ))}
+      {rows.map((item) =>
+        editing?.id === item.id ? (
+          <QueueEditor
+            draft={editing.draft}
+            item={item}
+            key={item.id}
+            onClose={() => setEditing(null)}
+            onDraft={(draft) => setEditing({ draft, id: item.id })}
+          />
+        ) : (
+          <QueueRow
+            item={item}
+            key={item.id}
+            onEdit={() => setEditing({ draft: item.text, id: item.id })}
+          />
+        )
+      )}
     </ul>
   );
 };

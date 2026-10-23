@@ -122,7 +122,9 @@ export class WorkspaceService {
     ]);
     return {
       ...base,
-      baseRef: branch,
+      // Pull requests target the repository's default branch, not the branch
+      // the user happens to have checked out.
+      baseRef: project.defaultBranch ?? branch,
       baselineDirtyFiles: entries.map((entry) => entry.path),
       branch,
       mode: request.mode,
