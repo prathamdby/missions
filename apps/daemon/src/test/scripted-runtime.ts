@@ -13,6 +13,20 @@ import type {
   RuntimeStartResult,
 } from "../sdk/agent-runtime";
 import { NativeQueueTracker } from "../sdk/native-queue";
+import {
+  EXPLORE_TOOLS,
+  INSTALL_RUN,
+  QUESTIONS,
+  RICH_PLAN,
+  RICH_TODOS,
+  START_FAILURE,
+  TEST_RUN,
+  WORKER_INSTALL,
+  WORKER_RATE_LIMIT,
+  WORKER_TODOS,
+  scenarioOf,
+} from "./scripted-scenarios";
+import type { Scenario, ScriptedTool } from "./scripted-scenarios";
 
 const NOTES_FILE = "NOTES.md";
 
@@ -49,6 +63,7 @@ export class ScriptedRuntime implements RuntimeHandle {
   #turns = 0;
   #seq = 0;
   #planRevision = 0;
+  #scenario: Scenario = "default";
 
   constructor(options: AgentRuntimeOptions, delayMs = 250) {
     this.#options = options;
@@ -74,6 +89,15 @@ export class ScriptedRuntime implements RuntimeHandle {
   }
 
   submit(id: string, text: string, mode: DeliveryMode) {
+    if (
+      this.#options.role === "orchestrator" &&
+      this.#turns === 0 &&
+      START_FAILURE.test(text)
+    ) {
+      return Promise.reject(
+        new Error("droid exited with code 1: could not load the model")
+      );
+    }
     this.queue.submitted(id, text, mode);
     this.queue.admitted(id);
     this.#inbox.push(id);
@@ -238,16 +262,38 @@ export class ScriptedRuntime implements RuntimeHandle {
     return { content, isError };
   }
 
-  async #read(file: string, content: string) {
+  async #tool({ content, input, isError = false, name }: ScriptedTool) {
     const toolUseId = this.#id("tool");
+    this.#emit({ input, name, toolUseId, type: "tool_call" });
+    this.#emit({ content, isError, toolUseId, type: "tool_result" });
+    await this.#step();
+  }
+
+  /** Runs tools one after another, as a real agent's turn does. */
+  async #tools(list: readonly ScriptedTool[]): Promise<void> {
+    const [first, ...rest] = list;
+    if (!first) {
+      return;
+    }
+    await this.#tool(first);
+    await this.#tools(rest);
+  }
+
+  async #rateLimited(attempt: number) {
     this.#emit({
+      attempt,
+      reason: "429 Too Many Requests: rate limit reached for requests",
+      type: "retry",
+    });
+    await this.#step();
+  }
+
+  async #read(file: string, content: string) {
+    await this.#tool({
+      content,
       input: { file_path: path.join(this.#options.cwd, file) },
       name: "Read",
-      toolUseId,
-      type: "tool_call",
     });
-    this.#emit({ content, isError: false, toolUseId, type: "tool_result" });
-    await this.#step();
   }
 
   async #create(file: string, content: string) {
@@ -286,6 +332,13 @@ export class ScriptedRuntime implements RuntimeHandle {
       await this.#workerTurn(text);
       return;
     }
+    if (
+      text.includes("approved plan revision") &&
+      this.#scenario !== "default"
+    ) {
+      await this.#startRichWork();
+      return;
+    }
     if (text.includes("approved plan revision")) {
       await this.#roleTool("update_todos", {
         todos: [
@@ -303,11 +356,12 @@ export class ScriptedRuntime implements RuntimeHandle {
     }
     if (text.includes("finished assignment")) {
       await this.#read(NOTES_FILE, "# Notes");
+      const finished =
+        this.#scenario === "default"
+          ? [`Write ${NOTES_FILE}`, "Review the change"]
+          : RICH_TODOS;
       await this.#roleTool("update_todos", {
-        todos: [
-          { content: `Write ${NOTES_FILE}`, status: "completed" },
-          { content: "Review the change", status: "completed" },
-        ],
+        todos: finished.map((content) => ({ content, status: "completed" })),
       });
       await this.#roleTool("complete_mission", {
         checks: [{ command: `test -f ${NOTES_FILE}`, outcome: "passed" }],
@@ -325,6 +379,13 @@ export class ScriptedRuntime implements RuntimeHandle {
       return;
     }
     if (this.#turns === 0) {
+      this.#scenario = scenarioOf(text);
+    }
+    if (this.#turns === 0 && this.#scenario !== "default") {
+      await this.#explore();
+      return;
+    }
+    if (this.#turns === 0) {
       this.#say(
         "I looked through the repository layout.",
         "Reading the README to understand the project."
@@ -338,6 +399,17 @@ export class ScriptedRuntime implements RuntimeHandle {
 
   async #propose(title: string) {
     this.#planRevision += 1;
+    if (this.#scenario !== "default") {
+      await this.#roleTool("update_todos", {
+        todos: RICH_TODOS.map((content) => ({ content, status: "pending" })),
+      });
+      this.#say("Here’s the plan. Nothing runs until you approve it.");
+      await this.#roleTool("propose_plan", {
+        markdown: RICH_PLAN,
+        title: "Make the webhook retry test deterministic",
+      });
+      return;
+    }
     await this.#roleTool("propose_plan", {
       markdown: `## ${title}\n\n1. Dispatch a Worker to write ${NOTES_FILE}.\n2. Review the result and finish.`,
       title: `${title} ${this.#planRevision}`,
@@ -345,14 +417,82 @@ export class ScriptedRuntime implements RuntimeHandle {
     this.#say("The plan is ready for your review.");
   }
 
+  /** Paper QAU to RHI: explore, run the failing test, ask two questions, plan. */
+  async #explore() {
+    this.#say("I’ll read the test and the retry code before planning.");
+    await this.#tools(EXPLORE_TOOLS);
+    await this.#tool(TEST_RUN);
+    this.#say(
+      "Found it. Backoff uses real timers and Date.now(), so on a slow CI runner the retry sometimes fires after the assertion. Two decisions before I plan."
+    );
+    await this.#options.onAskUser({
+      agentId: this.#options.agentId,
+      questions: QUESTIONS,
+      toolCallId: this.#id("ask"),
+    });
+    await this.#step();
+    await this.#propose("Plan");
+  }
+
+  async #startRichWork() {
+    await this.#roleTool("update_todos", {
+      todos: RICH_TODOS.map((content, index) => ({
+        content,
+        status: index === 0 ? "in_progress" : "pending",
+      })),
+    });
+    const extra = {
+      blocked: ` ${WORKER_INSTALL}`,
+      default: "",
+      explore: "",
+      rate_limit: ` ${WORKER_RATE_LIMIT}`,
+    }[this.#scenario];
+    this.#say("Starting with the clock. A worker is on it.");
+    await this.#roleTool("dispatch_worker", {
+      instructions: `Add src/time/clock.ts with a system clock and a fake clock, then inject it into retry-queue.ts.${extra}`,
+      needsWrite: true,
+      title: "Add Clock interface",
+    });
+  }
+
+  /** Worker side of the rich scenarios: rate limits or a failing install first. */
+  async #richWorkerPrelude(text: string) {
+    await this.#roleTool("update_todos", {
+      todos: WORKER_TODOS.map((content, index) => ({
+        content,
+        status: index === 0 ? "in_progress" : "pending",
+      })),
+    });
+    if (text.includes(WORKER_RATE_LIMIT)) {
+      await this.#rateLimited(1);
+      await this.#rateLimited(2);
+    }
+    if (text.includes(WORKER_INSTALL)) {
+      await this.#tool(INSTALL_RUN);
+      this.#emit({
+        errorType: "environment",
+        message: `$ pnpm install\n${INSTALL_RUN.content}`,
+        type: "error",
+      });
+      return false;
+    }
+    return true;
+  }
+
   async #workerTurn(text: string) {
     if (!text.includes("Assignment")) {
       this.#say(`Understood: ${text.slice(0, 200)}`);
       return;
     }
-    await this.#roleTool("update_todos", {
-      todos: [{ content: `Write ${NOTES_FILE}`, status: "in_progress" }],
-    });
+    const rich = text.includes("Add src/time/clock.ts");
+    if (rich && !(await this.#richWorkerPrelude(text))) {
+      return;
+    }
+    if (!rich) {
+      await this.#roleTool("update_todos", {
+        todos: [{ content: `Write ${NOTES_FILE}`, status: "in_progress" }],
+      });
+    }
     const created = await this.#create(
       NOTES_FILE,
       "# Notes\n\nWritten by the scripted Worker.\n"
