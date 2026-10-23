@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json && pnpm -r --parallel typecheck",
     "test": "vitest run",
     "test:live": "MISSIONS_LIVE=1 vitest run -c vitest.live.config.ts",
+    "test:e2e": "playwright test",
     "gate": "pnpm design:check && pnpm check && pnpm check:doctor && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
