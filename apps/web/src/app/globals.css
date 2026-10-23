@@ -34,3 +34,39 @@
     }
   }
 }
+
+/*
+ * Looping indicators. Paper defines no loop duration, so loops are multiples
+ * of --transition-duration-slow; reduced motion stops them via the base layer.
+ */
+@keyframes loader-cell {
+  0%,
+  100% {
+    background-color: var(--color-surface-active);
+  }
+
+  50% {
+    background-color: var(--color-accent);
+  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    background-color: var(--color-surface-overlay);
+  }
+
+  50% {
+    background-color: var(--color-surface-active);
+  }
+}
+
+@utility animate-loader-cell {
+  animation: loader-cell calc(var(--transition-duration-slow) * 4)
+    var(--ease-in-out) infinite;
+}
+
+@utility animate-skeleton {
+  animation: skeleton-pulse calc(var(--transition-duration-slow) * 5)
+    var(--ease-in-out) infinite;
+}
