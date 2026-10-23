@@ -90,7 +90,12 @@ export const isEditable = (item: QueueItem) =>
 
 export const isRetryable = (item: QueueItem) => UNRESOLVED.has(item.state);
 
-export type DeliveryState = "failed" | "pending" | "sent" | "unknown";
+export type DeliveryState =
+  | "failed"
+  | "pending"
+  | "removed"
+  | "sent"
+  | "unknown";
 
 /** Follows explicit retries from `item` to the newest attempt. */
 const latestAttempt = (
@@ -130,5 +135,5 @@ export const deliveryOf = (
   if (state === "sent" || state === "failed" || state === "unknown") {
     return state;
   }
-  return SETTLED.has(state) ? "failed" : "pending";
+  return SETTLED.has(state) ? "removed" : "pending";
 };

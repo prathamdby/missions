@@ -1079,6 +1079,64 @@ describe("mission service", () => {
     });
   });
 
+  it("keeps a failed native mode switch pending and retries it before delivery", async () => {
+    const ctx = await startMission();
+    const { daemon, missionId, orchestrator } = ctx;
+    orchestrator.consume(`${missionId}:goal`);
+    let failing = true;
+    orchestrator.failInteractionMode = () => failing;
+    await daemon.missions.submitMessage(missionId, {
+      executionMode: "plan",
+      mode: "steer",
+      operationId: "switch-msg",
+      text: "Plan this",
+    });
+    await waitFor(
+      () => daemon.log.replay(missionId, 0),
+      (events) =>
+        events.some(
+          (event) =>
+            event.type === "notice" &&
+            event.data.notice.message.includes("Could not switch")
+        )
+    );
+    const held = daemon.missions.get(missionId);
+    const heldState = daemon.store.queue.get("switch-msg")?.state;
+    failing = false;
+    await daemon.missions.submitMessage(missionId, {
+      mode: "steer",
+      operationId: "switch-next",
+      text: "Next",
+    });
+    await nativelyQueued(daemon, "switch-msg");
+    expect({
+      after: daemon.missions.get(missionId).executionMode,
+      held: [held.executionMode, held.pendingExecutionMode, heldState],
+      native: orchestrator.interactionModes,
+    }).toStrictEqual({
+      after: "plan",
+      held: ["work", "plan", "accepted"],
+      native: ["spec"],
+    });
+  });
+
+  it("clears live plan approvals left by a crashed daemon", async () => {
+    const ctx = await startMission(undefined, { executionMode: "plan" });
+    const { daemon, missionId, orchestrator } = ctx;
+    proposePlan(orchestrator);
+    const [live] = daemon.missions.snapshot(missionId).plans;
+    vi.spyOn(daemon.supervisor, "stopRecord").mockResolvedValue({
+      stopped: true,
+      survivors: [],
+    });
+    await daemon.missions.recover();
+    const [recovered] = daemon.missions.snapshot(missionId).plans;
+    expect([live?.actionable, recovered?.actionable]).toStrictEqual([
+      true,
+      false,
+    ]);
+  });
+
   it("ends a plan approval with its native request and asks for a fresh one after resume", async () => {
     const ctx = await startMission(undefined, { executionMode: "plan" });
     const { daemon, missionId, orchestrator } = ctx;
@@ -1296,6 +1354,12 @@ describe("mission service", () => {
         operationId: "retry-queued",
       })
     ).rejects.toThrow(/failed|uncertain|unknown/iu);
+    await expect(
+      ctx.daemon.missions.retryQueueItem(ctx.missionId, goalId, {
+        expectedRevision: ctx.daemon.store.queue.get(goalId)?.revision ?? -1,
+        operationId: "goal-retry-again",
+      })
+    ).rejects.toThrow(/already retried/u);
   });
 
   it("reports a failed stop and blocks new work until processes are gone", async () => {

@@ -107,6 +107,7 @@ describe(openDatabase, () => {
       )
       .run();
     const first = backupBeforeMigration(raw, file);
+    await writeFile(first ?? "", "stale");
     const again = backupBeforeMigration(raw, file);
     raw.close();
     const upgraded = openDatabase(file);

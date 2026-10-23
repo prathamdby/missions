@@ -139,7 +139,7 @@ describe("queue delivery", () => {
     };
     expect(deliveryOf(queue, "a")).toBe("sent");
     expect(deliveryOf({ a: queue.a, b: queue.b }, "a")).toBe("unknown");
-    expect(deliveryOf(queue, "d")).toBe("failed");
+    expect(deliveryOf(queue, "d")).toBe("removed");
     expect(deliveryOf({ x: entry("x", "accepted") }, "x")).toBe("pending");
   });
 
