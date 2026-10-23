@@ -7,8 +7,20 @@ import { createDaemon } from "./daemon";
 const HOST = "127.0.0.1";
 
 const config = loadConfig();
+const scripted =
+  process.env.MISSIONS_SCRIPTED_AGENTS === "1"
+    ? await import("./test/scripted-runtime")
+    : null;
 const daemon = await createDaemon({
   config,
+  ...(scripted && {
+    createRuntime: (options) =>
+      new scripted.ScriptedRuntime(
+        options,
+        Number(process.env.MISSIONS_SCRIPTED_DELAY_MS ?? 250)
+      ),
+    loadModels: scripted.scriptedModels,
+  }),
   version: process.env.npm_package_version ?? "0.0.0",
 });
 
