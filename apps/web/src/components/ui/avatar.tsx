@@ -6,13 +6,17 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 const avatarVariants = cva(
-  "inline-flex shrink-0 items-center justify-center rounded-full bg-surface-active font-medium text-text-secondary uppercase select-none",
+  "inline-flex shrink-0 items-center justify-center rounded-full bg-surface-active font-semibold tracking-tight text-text-secondary uppercase select-none",
   {
     defaultVariants: { size: "md" },
     variants: {
       size: {
-        md: "size-7 text-2xs",
-        sm: "size-5 text-2xs",
+        lg: "size-8 text-xs leading-xs",
+        /** Owner marks in repository lists (NAA). */
+        list: "size-6 text-2xs leading-xs",
+        md: "size-[26px] text-2xs leading-xs",
+        sm: "size-5 text-2xs leading-xs",
+        touch: "size-7 text-2xs leading-xs",
       },
     },
   }
@@ -26,6 +30,7 @@ const initialsOf = (name: string) =>
     .map((part) => part[0])
     .join("");
 
+/** Initials avatar: 20, 26, or 32px (28px in touch layouts). */
 export const Avatar = ({
   className,
   name,
@@ -51,7 +56,7 @@ const DOT_TONE: Record<AgentStatus, string> = {
   working: "bg-accent",
 };
 
-/** Agent status mark: the pixel loader while working, a dot otherwise. */
+/** Agent status mark: the Core Spiral while working, a dot otherwise. */
 export const AgentDot = ({ status }: { status: AgentStatus }) =>
   status === "working" ? (
     <Spinner label="Working" size="sm" />

@@ -12,6 +12,19 @@ import { renderTokensCss } from "../../design/scripts/build-tokens.ts";
 
 const manifest = loadManifest();
 
+// The Paper Foundations spacing scale; other steps are named off-grid values.
+const PAPER_SPACING = [
+  "2xs",
+  "xs",
+  "sm",
+  "md",
+  "lg",
+  "xl",
+  "2xl",
+  "3xl",
+  "4xl",
+];
+
 describe("token manifest", () => {
   it("generated tokens.css matches the manifest", () => {
     expect(readFileSync(TOKENS_CSS_PATH, "utf-8")).toBe(
@@ -20,20 +33,30 @@ describe("token manifest", () => {
   });
 
   it("keeps the Paper spacing scale and brand accent", () => {
-    expect(
-      Object.values(manifest.tokens.spacing).map((t) => t.value)
-    ).toStrictEqual([
-      "2px",
-      "4px",
-      "6px",
-      "8px",
-      "12px",
-      "16px",
-      "24px",
-      "32px",
-      "48px",
-    ]);
+    const { spacing } = manifest.tokens;
+    const scale = Object.fromEntries(
+      PAPER_SPACING.map((name) => [name, spacing[name]?.value])
+    );
+    expect(scale).toStrictEqual({
+      "2xl": "24px",
+      "2xs": "2px",
+      "3xl": "32px",
+      "4xl": "48px",
+      lg: "12px",
+      md: "8px",
+      sm: "6px",
+      xl: "16px",
+      xs: "4px",
+    });
     expect(manifest.tokens.color.accent?.value).toBe("#FF5A00");
+  });
+
+  it("documents where Paper uses every off-grid spacing step", () => {
+    const undocumented = Object.entries(manifest.tokens.spacing)
+      .filter(([name]) => !PAPER_SPACING.includes(name))
+      .filter(([, token]) => !token.description?.includes("Paper"))
+      .map(([name]) => name);
+    expect(undocumented).toStrictEqual([]);
   });
 
   it("defines shadcn aliases and Tailwind namespaces", () => {

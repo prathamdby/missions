@@ -1,20 +1,20 @@
 "use client";
 
-import { ChevronsUpDownIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { UnfoldIcon } from "@/components/ui/icons";
 
 type PickerButtonProps = Omit<ComponentProps<typeof Button>, "children"> & {
   icon: ReactNode;
   label: ReactNode;
 };
 
-/** Secondary pill with a leading icon and an up/down chevron, used as picker triggers. */
+/** LFE picker trigger: leading icon, label, and an up/down chevron. Opening adds an accent ring. */
 export const PickerButton = ({ icon, label, ...props }: PickerButtonProps) => (
-  <Button variant="secondary" {...props}>
+  <Button size="picker" variant="picker" {...props}>
     {icon}
     <span className="max-w-48 truncate">{label}</span>
-    <ChevronsUpDownIcon aria-hidden="true" />
+    <UnfoldIcon size="sm" tone="tertiary" />
   </Button>
 );

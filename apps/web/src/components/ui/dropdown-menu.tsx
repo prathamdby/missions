@@ -1,9 +1,11 @@
 "use client";
 
-import { CheckIcon, ChevronRightIcon } from "lucide-react";
+import { cva } from "class-variance-authority";
+import type { VariantProps } from "class-variance-authority";
 import { DropdownMenu as MenuPrimitive } from "radix-ui";
 import type { ComponentProps, ReactNode } from "react";
 
+import { CheckIcon, ChevronRightIcon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 export const DropdownMenu = MenuPrimitive.Root;
@@ -12,11 +14,30 @@ export const DropdownMenuGroup = MenuPrimitive.Group;
 export const DropdownMenuSub = MenuPrimitive.Sub;
 export const DropdownMenuRadioGroup = MenuPrimitive.RadioGroup;
 
-const menuSurface =
-  "z-popover min-w-48 overflow-hidden rounded-md bg-surface-overlay p-xs text-text shadow-lg outline-none";
+/** Paper menu surface; popovers that hold menu rows reuse it. */
+export const menuSurface =
+  "z-popover flex min-w-48 flex-col gap-hairline overflow-hidden rounded-md bg-surface-overlay p-xs text-text shadow-lg outline-none";
 
-const itemBase =
-  "relative flex cursor-pointer select-none items-center gap-md rounded-sm px-md py-sm text-sm leading-md outline-none transition-colors duration-fast data-[disabled]:pointer-events-none data-[highlighted]:bg-surface-active data-[disabled]:text-text-disabled [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-text-secondary";
+export const menuItemVariants = cva(
+  "relative flex shrink-0 cursor-pointer gap-control rounded-xs px-md text-left text-sm leading-sm font-book tracking-tight transition-colors duration-fast outline-none select-none focus-visible:shadow-none data-[disabled]:pointer-events-none data-[disabled]:text-text-disabled data-[highlighted]:bg-surface-active data-[highlighted]:text-text [&_svg]:shrink-0",
+  {
+    defaultVariants: { size: "md", variant: "default" },
+    variants: {
+      size: {
+        /** Icon, label, and optional shortcut on one 32px line. */
+        md: "h-8 items-center [&>svg]:size-4",
+        /** Icon, title with tag, and description (PNO workspace choices). */
+        option: "items-start px-md py-control",
+        /** Icon, title, description, and examples (autonomy levels). */
+        rich: "items-start p-md",
+      },
+      variant: {
+        danger: "text-danger data-[highlighted]:text-danger",
+        default: "text-text-secondary",
+      },
+    },
+  }
+);
 
 export const DropdownMenuContent = ({
   className,
@@ -26,32 +47,53 @@ export const DropdownMenuContent = ({
   <MenuPrimitive.Portal>
     <MenuPrimitive.Content
       className={cn(menuSurface, className)}
+      collisionPadding={8}
       sideOffset={sideOffset}
       {...props}
     />
   </MenuPrimitive.Portal>
 );
 
+type ItemVariants = VariantProps<typeof menuItemVariants>;
+
 export const DropdownMenuItem = ({
   className,
+  size,
+  variant,
   ...props
-}: ComponentProps<typeof MenuPrimitive.Item>) => (
-  <MenuPrimitive.Item className={cn(itemBase, className)} {...props} />
+}: ComponentProps<typeof MenuPrimitive.Item> & ItemVariants) => (
+  <MenuPrimitive.Item
+    className={cn(menuItemVariants({ size, variant }), className)}
+    {...props}
+  />
 );
 
 export const DropdownMenuRadioItem = ({
   children,
   className,
+  size,
   ...props
-}: ComponentProps<typeof MenuPrimitive.RadioItem>) => (
+}: ComponentProps<typeof MenuPrimitive.RadioItem> &
+  Pick<ItemVariants, "size">) => (
   <MenuPrimitive.RadioItem
-    className={cn(itemBase, "items-start pr-3xl", className)}
+    className={cn(
+      menuItemVariants({ size }),
+      "data-[state=checked]:text-text",
+      className
+    )}
     {...props}
   >
     {children}
-    <MenuPrimitive.ItemIndicator className="absolute top-sm right-md">
-      <CheckIcon />
-    </MenuPrimitive.ItemIndicator>
+    <span
+      className={cn(
+        "ml-auto flex w-3.5 shrink-0 justify-center",
+        (size === "rich" || size === "option") && "pt-hairline"
+      )}
+    >
+      <MenuPrimitive.ItemIndicator>
+        <CheckIcon size="sm" tone="text" />
+      </MenuPrimitive.ItemIndicator>
+    </span>
   </MenuPrimitive.RadioItem>
 );
 
@@ -61,7 +103,7 @@ export const DropdownMenuLabel = ({
 }: ComponentProps<typeof MenuPrimitive.Label>) => (
   <MenuPrimitive.Label
     className={cn(
-      "px-md pt-sm pb-xs type-caption text-text-tertiary",
+      "px-md pt-md pb-xs text-xs leading-sm font-medium tracking-tight text-text-tertiary",
       className
     )}
     {...props}
@@ -73,7 +115,21 @@ export const DropdownMenuSeparator = ({
   ...props
 }: ComponentProps<typeof MenuPrimitive.Separator>) => (
   <MenuPrimitive.Separator
-    className={cn("-mx-xs my-xs h-px bg-border-subtle", className)}
+    className={cn("-mx-xs my-xs h-px shrink-0 bg-border-subtle", className)}
+    {...props}
+  />
+);
+
+/** Trailing keyboard shortcut text, e.g. ⌘O. */
+export const DropdownMenuShortcut = ({
+  className,
+  ...props
+}: ComponentProps<"span">) => (
+  <span
+    className={cn(
+      "ml-auto font-mono text-2xs leading-xs font-book text-text-tertiary",
+      className
+    )}
     {...props}
   />
 );
@@ -81,14 +137,24 @@ export const DropdownMenuSeparator = ({
 export const DropdownMenuSubTrigger = ({
   children,
   className,
+  size,
   ...props
-}: ComponentProps<typeof MenuPrimitive.SubTrigger>) => (
+}: ComponentProps<typeof MenuPrimitive.SubTrigger> &
+  Pick<ItemVariants, "size">) => (
   <MenuPrimitive.SubTrigger
-    className={cn(itemBase, "data-[state=open]:bg-surface-active", className)}
+    className={cn(
+      menuItemVariants({ size }),
+      "data-[state=open]:bg-surface-active data-[state=open]:text-text",
+      className
+    )}
     {...props}
   >
     {children}
-    <ChevronRightIcon className="ml-auto" />
+    <ChevronRightIcon
+      className={cn("ml-auto", size && size !== "md" && "mt-hairline")}
+      size="sm"
+      tone="tertiary"
+    />
   </MenuPrimitive.SubTrigger>
 );
 
@@ -115,12 +181,14 @@ export const MenuItemText = ({
   meta?: ReactNode;
 }) => (
   <span className="flex min-w-0 flex-1 flex-col gap-2xs">
-    <span className="flex items-center gap-md type-label text-text">
+    <span className="flex items-center gap-md text-sm leading-sm font-medium text-text">
       <span className="truncate">{label}</span>
       {meta}
     </span>
     {description ? (
-      <span className="type-caption text-text-tertiary">{description}</span>
+      <span className="text-xs leading-sm text-text-tertiary">
+        {description}
+      </span>
     ) : null}
   </span>
 );

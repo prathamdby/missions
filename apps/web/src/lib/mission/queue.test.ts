@@ -1,7 +1,13 @@
-import type { QueueItem } from "@missions/protocol/missions";
+import type { QueueItem, TranscriptItem } from "@missions/protocol/missions";
 import { describe, expect, it } from "vitest";
 
-import { QUEUE_LINGER_MS, visibleQueue } from "./queue";
+import {
+  deliveredRequestIds,
+  goalRequestId,
+  QUEUE_LINGER_MS,
+  showGoalBubble,
+  visibleQueue,
+} from "./queue";
 
 const NOW = Date.parse("2026-01-01T00:01:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -53,5 +59,36 @@ describe(visibleQueue, () => {
       "e",
       "h",
     ]);
+  });
+});
+
+const userItem = (requestId: string | null): TranscriptItem => ({
+  agentId: "a",
+  createdAt: iso(NOW),
+  id: `t-${requestId ?? "none"}`,
+  isError: false,
+  kind: "user",
+  missionId: "m",
+  requestId,
+  seq: 1,
+  text: "hello",
+  toolName: null,
+  toolUseId: null,
+});
+
+describe("transcript dedupe", () => {
+  it("hides queue items whose message is already in the transcript", () => {
+    const delivered = deliveredRequestIds([userItem("a"), userItem(null)]);
+    const items = [entry("a", "sent"), entry("b", "queued")];
+    expect(
+      visibleQueue(items, NOW, delivered).map((item) => item.id)
+    ).toStrictEqual(["b"]);
+  });
+
+  it("shows the goal bubble only until the goal message arrives", () => {
+    const goal = goalRequestId("m");
+    expect(showGoalBubble("m", new Set(), false)).toBeTruthy();
+    expect(showGoalBubble("m", new Set([goal]), false)).toBeFalsy();
+    expect(showGoalBubble("m", new Set(), true)).toBeFalsy();
   });
 });

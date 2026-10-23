@@ -15,6 +15,7 @@ import { useState } from "react";
 import type { ModelChoice } from "@/components/new-mission/model-picker";
 import type { WorkspaceChoice } from "@/components/new-mission/workspace-picker";
 import { useAddProject } from "@/components/projects/add-project-context";
+import { useShell } from "@/components/shell/shell-context";
 import {
   useBranches,
   useCheckout,
@@ -81,10 +82,16 @@ const resolveDirty = (
 const toWorkspaceRequest = (
   workspace: WorkspaceChoice,
   branch: string | null,
+  newBranch: string | null,
   dirty: boolean
 ): WorkspaceRequest | null => {
   if (workspace.mode === "new_worktree") {
-    return branch ? { baseBranch: branch, mode: "new_worktree" } : null;
+    if (!branch) {
+      return null;
+    }
+    return newBranch
+      ? { baseBranch: branch, branchName: newBranch, mode: "new_worktree" }
+      : { baseBranch: branch, mode: "new_worktree" };
   }
   if (workspace.mode === "current_checkout") {
     return { acknowledgeDirty: dirty, mode: "current_checkout" };
@@ -137,13 +144,13 @@ const resolveDefaults = (
       : null),
 });
 
-export const useNewMissionForm = () => {
-  const projects = useProjects();
-  const missions = useMissions();
-  const settings = useSettings();
+/** The user's project choice; a newly added project or a search pick replaces it. */
+const useChosenProject = () => {
   const { lastAdded } = useAddProject();
-
-  const [chosenProject, setChosenProject] = useState<string | null>(null);
+  const { preferredProject } = useShell();
+  const [chosenProject, setChosenProject] = useState<string | null>(
+    preferredProject?.id ?? null
+  );
   const [seenAdded, setSeenAdded] = useState(lastAdded);
   if (lastAdded !== seenAdded) {
     setSeenAdded(lastAdded);
@@ -151,6 +158,30 @@ export const useNewMissionForm = () => {
       setChosenProject(lastAdded.id);
     }
   }
+  const [seenPreferred, setSeenPreferred] = useState(preferredProject);
+  if (preferredProject !== seenPreferred) {
+    setSeenPreferred(preferredProject);
+    if (preferredProject) {
+      setChosenProject(preferredProject.id);
+    }
+  }
+  return [chosenProject, setChosenProject] as const;
+};
+
+const changedFiles = (
+  workspace: WorkspaceChoice,
+  dirty: boolean,
+  checkout: CheckoutStatus | undefined
+) =>
+  dirty && workspace.mode === "current_checkout"
+    ? (checkout?.dirtyFiles ?? [])
+    : [];
+
+export const useNewMissionForm = () => {
+  const projects = useProjects();
+  const missions = useMissions();
+  const settings = useSettings();
+  const [chosenProject, setChosenProject] = useChosenProject();
 
   const project = resolveProject(
     projects.data ?? [],
@@ -167,6 +198,8 @@ export const useNewMissionForm = () => {
   const [branchChoice, setBranchChoice] = useState<PerProject<string> | null>(
     null
   );
+  const [newBranchChoice, setNewBranchChoice] =
+    useState<PerProject<string> | null>(null);
   const [workspaceChoice, setWorkspaceChoice] =
     useState<PerProject<WorkspaceChoice> | null>(null);
   const [acknowledged, setAcknowledged] = useState<string | null>(null);
@@ -195,7 +228,13 @@ export const useNewMissionForm = () => {
     modelChoice
   );
 
-  const workspaceRequest = toWorkspaceRequest(workspace, branch, dirty);
+  const newBranch = pick(newBranchChoice, projectId);
+  const workspaceRequest = toWorkspaceRequest(
+    workspace,
+    branch,
+    newBranch,
+    dirty
+  );
 
   const draft = buildDraft({
     autonomy,
@@ -210,7 +249,9 @@ export const useNewMissionForm = () => {
     autonomy,
     branch,
     checkout,
+    defaultBranch: resolveDefaultBranch(project, branches.data),
     dirtyCount: dirtyState?.count ?? null,
+    dirtyFiles: changedFiles(workspace, dirty, checkout.data),
     draft,
     goal,
     handleAcknowledgeDirty: () => setAcknowledged(dirtyKey),
@@ -218,6 +259,8 @@ export const useNewMissionForm = () => {
     handleBranchChange: (value: string) =>
       projectId && setBranchChoice({ projectId, value }),
     handleModelsChange: setModelChoice,
+    handleNewBranch: (value: string | null) =>
+      setNewBranchChoice(projectId && value ? { projectId, value } : null),
     handleProjectChange: setChosenProject,
     handleWorkspaceChange: (value: WorkspaceChoice) =>
       projectId && setWorkspaceChoice({ projectId, value }),
@@ -225,6 +268,7 @@ export const useNewMissionForm = () => {
     missions: missions.data ?? [],
     models,
     needsAcknowledge,
+    newBranch,
     otherWorktrees,
     project,
     projects,

@@ -1,18 +1,29 @@
 "use client";
 
 import type { MissionSummary } from "@missions/protocol/missions";
-import type { Project } from "@missions/protocol/projects";
-import { FolderIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { useShell } from "@/components/shell/shell-context";
+import type { SidebarLayout } from "@/components/shell/shell-context";
+import { UserMenu } from "@/components/shell/user-menu";
+import {
+  ClockIcon,
+  PlusIcon,
+  PullRequestIcon,
+  SearchIcon,
+} from "@/components/ui/icons";
 import { ListLabel, ListRow } from "@/components/ui/list-row";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { useMissions, useProjects } from "@/lib/api/queries";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { LogoMark } from "@/components/ui/wordmark";
+import { useMissions } from "@/lib/api/queries";
 import { isMissionActive, MISSION_STATUS, shortAge } from "@/lib/format";
-import { useConnection } from "@/lib/live/hooks";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -26,178 +37,196 @@ const MissionRowStatus = ({
   now: number;
 }) => {
   if (isMissionActive(mission.status)) {
-    return <Spinner label={MISSION_STATUS[mission.status].label} size="sm" />;
+    return <Spinner label={MISSION_STATUS[mission.status].label} />;
   }
   if (mission.status === "awaiting_approval") {
-    return <span className="type-micro text-warning">Needs you</span>;
-  }
-  if (mission.status === "failed" || mission.status === "stop_failed") {
     return (
-      <span className="type-micro text-danger">
-        {MISSION_STATUS[mission.status].label}
+      <span className="shrink-0 text-2xs leading-xs font-medium text-warning">
+        Needs you
       </span>
     );
   }
-  if (mission.status === "paused" || mission.status === "interrupted") {
+  if (mission.status === "failed" || mission.status === "stop_failed") {
     return (
-      <span className="type-micro text-text-tertiary">
+      <span className="shrink-0 text-2xs leading-xs font-medium text-danger">
         {MISSION_STATUS[mission.status].label}
       </span>
     );
   }
   return (
-    <span className="font-mono text-2xs text-text-tertiary">
+    <span className="shrink-0 font-mono text-2xs leading-xs text-text-tertiary">
+      <span className="sr-only">{MISSION_STATUS[mission.status].label}, </span>
       {shortAge(mission.updatedAt, now)}
     </span>
   );
 };
 
-interface ProjectGroup {
-  missions: MissionSummary[];
-  project: Project;
-}
+const sortMissions = (missions: readonly MissionSummary[]) =>
+  missions
+    .filter((mission) => mission.status !== "archived")
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
-const groupByProject = (projects: Project[], missions: MissionSummary[]) => {
-  const groups: ProjectGroup[] = projects.map((project) => ({
-    missions: missions
-      .filter((mission) => mission.projectId === project.id)
-      .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-    project,
-  }));
-  const latest = (group: ProjectGroup) => group.missions[0]?.updatedAt ?? "";
-  return groups.toSorted((a, b) => latest(b).localeCompare(latest(a)));
-};
-
-const MissionList = () => {
+const MissionList = ({ layout }: { layout: SidebarLayout }) => {
   const pathname = usePathname();
-  const projects = useProjects();
   const missions = useMissions();
   const now = useNow(AGE_REFRESH_MS);
+  const touch = layout === "touch";
 
-  if (projects.data === undefined) {
-    return projects.isError ? (
-      <p className="px-md py-md type-caption text-text-tertiary">
-        Projects appear here once the daemon is reachable.
-      </p>
-    ) : (
-      <div className="flex flex-col gap-md px-md py-md">
-        <Skeleton className="w-24" />
-        <Skeleton />
+  if (missions.data === undefined) {
+    if (missions.isError) {
+      return (
+        <p className="px-md py-xs text-xs leading-sm text-text-tertiary">
+          Missions appear here once the daemon is reachable.
+        </p>
+      );
+    }
+    return (
+      <div aria-hidden="true" className="flex flex-col gap-md px-md py-xs">
         <Skeleton className="w-3/4" />
+        <Skeleton className="w-1/2" />
+        <Skeleton className="w-2/3" />
       </div>
     );
   }
 
-  const groups = groupByProject(projects.data, missions.data ?? []);
-  if (groups.length === 0) {
+  const list = sortMissions(missions.data);
+  if (list.length === 0) {
     return (
-      <p className="px-md py-md type-caption text-text-tertiary">
-        No projects yet. Add one to start a mission.
+      <p className="px-md py-xs text-xs leading-sm text-text-tertiary">
+        No missions yet
       </p>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2xs pb-lg">
-      {groups.map(({ missions: list, project }) => (
-        <section aria-label={project.name} key={project.id}>
-          <ListLabel>
-            <span className="flex items-center gap-sm">
-              <FolderIcon aria-hidden="true" className="size-3.5 shrink-0" />
-              <span className="truncate">{project.name}</span>
-            </span>
-          </ListLabel>
-          {list.length === 0 ? (
-            <p className="px-md py-xs type-caption text-text-disabled">
-              No missions yet
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-2xs">
-              {list.map((mission) => {
-                const href = `/missions/${mission.id}`;
-                return (
-                  <li key={mission.id}>
-                    <ListRow asChild size="md">
-                      <Link
-                        aria-current={pathname === href ? "page" : undefined}
-                        href={href}
-                      >
-                        <span className="min-w-0 flex-1 truncate">
-                          {mission.title}
-                        </span>
-                        <MissionRowStatus mission={mission} now={now} />
-                      </Link>
-                    </ListRow>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-      ))}
-    </div>
+    <ul className={cn("flex flex-col", touch ? "gap-2xs" : "gap-hairline")}>
+      {list.map((mission) => {
+        const href = `/missions/${mission.id}`;
+        return (
+          <li key={mission.id}>
+            <ListRow asChild size={touch ? "touch" : "sidebar"}>
+              <Link
+                aria-current={pathname === href ? "page" : undefined}
+                href={href}
+              >
+                <span className="line-clamp-1 min-w-0 flex-1">
+                  {mission.title}
+                </span>
+                <MissionRowStatus mission={mission} now={now} />
+              </Link>
+            </ListRow>
+          </li>
+        );
+      })}
+    </ul>
   );
 };
 
-const DAEMON_LABEL = {
-  connecting: "Connecting to daemon",
-  offline: "Daemon offline",
-  online: "Daemon connected",
-} as const;
+const AUTOMATIONS_UNAVAILABLE = "Automations aren't available in this app";
 
-const DAEMON_DOT = {
-  connecting: "bg-text-tertiary",
-  offline: "bg-danger",
-  online: "bg-success",
-} as const;
-
-const DaemonStatus = () => {
-  const { phase } = useConnection();
-  return (
-    <output className="flex h-8 items-center gap-md px-md type-caption text-text-tertiary">
-      <span
-        aria-hidden="true"
-        className={cn("size-1.5 rounded-full", DAEMON_DOT[phase])}
-      />
-      {DAEMON_LABEL[phase]}
-    </output>
-  );
-};
-
-export const Sidebar = () => {
+/** LFJ (desktop) and JD1 (drawer): navigation, the flat mission list, and the account. */
+export const Sidebar = ({ layout = "desktop" }: { layout?: SidebarLayout }) => {
   const pathname = usePathname();
+  const { setSearchOpen } = useShell();
+  const touch = layout === "touch";
+  const navSize = touch ? "touch-nav" : "sidebar-nav";
+
   return (
     <nav
       aria-label="Missions"
-      className="flex h-full min-h-0 w-full flex-col gap-xs px-md pt-lg pb-md"
+      className={cn(
+        "flex h-full min-h-0 w-full flex-col",
+        touch ? "gap-xl" : "px-lg pt-card pb-lg"
+      )}
     >
-      <div className="flex h-8 items-center gap-md px-md">
-        <span aria-hidden="true" className="size-3.5 rounded-xs bg-accent" />
-        <span className="type-label font-semibold text-text">Missions</span>
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-md",
+          touch ? "h-11 px-control" : "h-7 px-md"
+        )}
+      >
+        <LogoMark />
+        <span className="flex-1 text-base leading-md font-semibold tracking-tight text-text">
+          Missions
+        </span>
+        <button
+          aria-keyshortcuts="Meta+K Control+K"
+          aria-label="Search"
+          className={cn(
+            "flex shrink-0 cursor-pointer items-center justify-center rounded-sm text-text-secondary transition-colors duration-fast outline-none hover:bg-surface-overlay hover:text-text focus-visible:shadow-focus",
+            touch ? "-mr-control size-9" : "-mr-xs size-6"
+          )}
+          onClick={() => setSearchOpen(true)}
+          type="button"
+        >
+          <SearchIcon />
+        </button>
       </div>
-      <ListRow asChild size="nav">
-        <Link aria-current={pathname === "/" ? "page" : undefined} href="/">
-          <PlusIcon aria-hidden="true" />
-          New mission
-        </Link>
-      </ListRow>
-      <ScrollArea className="-mx-md mt-sm min-h-0 flex-1">
-        <div className="px-md">
-          <MissionList />
-        </div>
-      </ScrollArea>
-      <div className="flex flex-col gap-2xs border-t border-border-subtle pt-sm">
-        <ListRow asChild size="md">
+
+      <div
+        className={cn(
+          "flex shrink-0 flex-col",
+          touch ? "gap-2xs" : "mt-xl gap-hairline"
+        )}
+      >
+        <ListRow asChild size={navSize}>
           <Link
-            aria-current={pathname === "/settings" ? "page" : undefined}
-            href="/settings"
+            aria-current={pathname === "/" ? "page" : undefined}
+            aria-keyshortcuts="Meta+N Control+N"
+            href="/"
           >
-            <SettingsIcon aria-hidden="true" />
-            Settings
+            <PlusIcon />
+            <span className="flex-1">New mission</span>
+            {touch ? null : (
+              <span
+                aria-hidden="true"
+                className="font-mono text-2xs leading-xs font-book text-text-tertiary"
+              >
+                ⌘N
+              </span>
+            )}
           </Link>
         </ListRow>
-        <DaemonStatus />
+        <ListRow asChild size={navSize}>
+          <Link
+            aria-current={pathname === "/pull-requests" ? "page" : undefined}
+            href="/pull-requests"
+          >
+            <PullRequestIcon />
+            <span className="flex-1">Pull requests</span>
+          </Link>
+        </ListRow>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <ListRow aria-disabled="true" size={navSize}>
+              <ClockIcon />
+              <span className="flex-1">Automations</span>
+              <span className="sr-only">. {AUTOMATIONS_UNAVAILABLE}</span>
+            </ListRow>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {AUTOMATIONS_UNAVAILABLE}
+          </TooltipContent>
+        </Tooltip>
       </div>
+
+      <section
+        aria-labelledby={`missions-heading-${layout}`}
+        className={cn(
+          "-mx-xs flex min-h-0 flex-1 flex-col overflow-y-auto px-xs",
+          touch ? "gap-2xs" : "mt-2xl gap-hairline"
+        )}
+      >
+        <ListLabel
+          id={`missions-heading-${layout}`}
+          size={touch ? "touch" : "sidebar"}
+        >
+          Missions
+        </ListLabel>
+        <MissionList layout={layout} />
+      </section>
+
+      <UserMenu layout={layout} />
     </nav>
   );
 };

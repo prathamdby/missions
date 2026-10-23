@@ -5,6 +5,18 @@ import core from "ultracite/oxlint/core";
 import shadcn from "ultracite/oxlint/shadcn";
 import vitest from "ultracite/oxlint/vitest";
 
+/**
+ * Dot Matrix loaders, installed verbatim from the @dotmatrix shadcn registry
+ * (see design/README.md). Kept as shipped so `shadcn add` can update them;
+ * `components/ui/spinner.tsx` is the only consumer.
+ */
+export const DOTMATRIX_VENDORED = [
+  "**/components/dotmatrix-loader.css",
+  "**/components/ui/dotm-square-*.tsx",
+  "**/lib/dotmatrix-core.tsx",
+  "**/lib/dotmatrix-hooks.ts",
+];
+
 // Absolute: oxlint rejects relative plugin specifiers in configs reached through `extends`.
 export const designPlugin = {
   name: "missions-design",
@@ -30,6 +42,7 @@ export default defineConfig({
   ignorePatterns: [
     ...(core.ignorePatterns ?? []),
     "tests/design/fixture-app/**",
+    ...DOTMATRIX_VENDORED,
   ],
   jsPlugins: [...shadcn.jsPlugins, designPlugin],
   settings: designSettings,

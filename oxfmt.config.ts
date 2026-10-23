@@ -1,6 +1,8 @@
 import { defineConfig } from "oxfmt";
 import ultracite from "ultracite/oxfmt";
 
+import { DOTMATRIX_VENDORED } from "./oxlint.config.ts";
+
 const sortTailwindcss =
   typeof ultracite.sortTailwindcss === "object"
     ? ultracite.sortTailwindcss
@@ -12,6 +14,7 @@ export default defineConfig({
   ignorePatterns: [
     ...(ultracite.ignorePatterns ?? []),
     "apps/web/src/styles/tokens.css",
+    ...DOTMATRIX_VENDORED,
   ],
   // Without the real theme, Paper utilities sort as unknown custom classes.
   sortTailwindcss: {

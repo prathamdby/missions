@@ -18,6 +18,15 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* Paper shows no scrollbars anywhere; areas still scroll by wheel, touch and keyboard. */
+  * {
+    scrollbar-width: none;
+  }
+
+  *::-webkit-scrollbar {
+    display: none;
+  }
+
   :focus-visible {
     outline: none;
     box-shadow: var(--shadow-focus);
@@ -35,21 +44,7 @@
   }
 }
 
-/*
- * Looping indicators. Paper defines no loop duration, so loops are multiples
- * of --transition-duration-slow; reduced motion stops them via the base layer.
- */
-@keyframes loader-cell {
-  0%,
-  100% {
-    background-color: var(--color-surface-active);
-  }
-
-  50% {
-    background-color: var(--color-accent);
-  }
-}
-
+/* Paper defines no loop duration, so loops are multiples of --transition-duration-slow; reduced motion stops them via the base layer. */
 @keyframes skeleton-pulse {
   0%,
   100% {
@@ -59,11 +54,6 @@
   50% {
     background-color: var(--color-surface-active);
   }
-}
-
-@utility animate-loader-cell {
-  animation: loader-cell calc(var(--transition-duration-slow) * 4)
-    var(--ease-in-out) infinite;
 }
 
 @utility animate-skeleton {

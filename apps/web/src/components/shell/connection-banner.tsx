@@ -1,18 +1,28 @@
 "use client";
 
-import { RotateCwIcon, UnplugIcon } from "lucide-react";
-
 import { Button } from "@/components/ui/button";
-import { InlineCode } from "@/components/ui/code-block";
-import { CopyButton } from "@/components/ui/copy-button";
+import { CopyChip } from "@/components/ui/copy-button";
+import { PlugIcon, RepeatIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
-import { formatAgo, secondsUntil } from "@/lib/format";
+import { secondsUntil } from "@/lib/format";
 import { useConnection } from "@/lib/live/hooks";
 import { useNow } from "@/lib/use-now";
 
 const START_COMMAND = "pnpm dev:daemon";
+const SECOND = 1000;
+const MINUTE = 60 * SECOND;
 
-/** X16: shown at the top of the page while any live stream is retrying. */
+const plural = (count: number, unit: string) =>
+  `${count} ${unit}${count === 1 ? "" : "s"} ago`;
+
+const longAgo = (ms: number) => {
+  if (ms < MINUTE) {
+    return plural(Math.max(1, Math.floor(ms / SECOND)), "second");
+  }
+  return plural(Math.floor(ms / MINUTE), "minute");
+};
+
+/** X16: floats over the chat column, under the 52px header, while live streams retry. */
 export const ConnectionBanner = () => {
   const connection = useConnection();
   const now = useNow();
@@ -22,44 +32,45 @@ export const ConnectionBanner = () => {
   const seconds = secondsUntil(connection.retryAt, now);
   const since =
     connection.offlineSince === null
-      ? ""
-      : `, ${formatAgo(now - connection.offlineSince)}`;
+      ? "."
+      : `, ${longAgo(now - connection.offlineSince)}.`;
   return (
-    <div className="flex shrink-0 justify-center px-lg pt-md">
+    <div className="pointer-events-none absolute inset-x-0 top-18 z-sticky flex justify-center px-lg">
       <div
-        className="w-full max-w-chat overflow-hidden rounded-md bg-surface-raised shadow-lg"
+        className="pointer-events-auto flex w-full max-w-chat flex-col overflow-hidden rounded-md bg-surface-overlay shadow-lg"
         role="alert"
       >
-        <div className="flex flex-wrap items-start gap-lg bg-danger-muted p-lg">
-          <UnplugIcon
-            aria-hidden="true"
-            className="mt-2xs size-4 shrink-0 text-danger"
-          />
+        <div className="flex items-start gap-lg bg-danger-muted p-card">
+          <span className="pt-2xs">
+            <PlugIcon tone="danger" />
+          </span>
           <div className="flex min-w-0 flex-1 flex-col gap-xs">
-            <p className="type-label text-text">
+            <p className="text-sm leading-sm font-medium tracking-tight text-text">
               Lost connection to the Missions daemon
             </p>
-            <p className="type-caption text-text-secondary">
-              If the daemon is still running, agents keep working and nothing is
-              lost. This page shows the last state it received{since}.
+            <p className="text-xs leading-md tracking-tight text-text-secondary">
+              Agents keep running on the daemon, so nothing is lost. This page
+              shows the last state it received{since}
             </p>
           </div>
           <Button onClick={() => connection.retryNow()} variant="secondary">
-            <RotateCwIcon aria-hidden="true" />
+            <RepeatIcon />
             Retry now
           </Button>
         </div>
-        <div className="flex flex-wrap items-center gap-md px-lg py-sm type-caption text-text-secondary">
-          <Spinner label="Reconnecting" pattern="wave" size="sm" />
-          <span>
+        <div className="flex flex-wrap items-center gap-control px-card py-control">
+          <Spinner label="Reconnecting" pattern="wave" />
+          <span
+            aria-live="polite"
+            className="min-w-0 flex-1 text-xs leading-sm tracking-tight text-text-secondary"
+          >
             {seconds > 0 ? `Reconnecting in ${seconds}s` : "Reconnecting"} ·
             attempt {connection.attempt}
           </span>
-          <span className="ml-auto text-text-tertiary">Not running?</span>
-          <span className="flex items-center gap-xs">
-            <InlineCode>{START_COMMAND}</InlineCode>
-            <CopyButton label="Copy start command" value={START_COMMAND} />
+          <span className="text-xs leading-sm tracking-tight text-text-tertiary">
+            Not running?
           </span>
+          <CopyChip value={START_COMMAND} />
         </div>
       </div>
     </div>

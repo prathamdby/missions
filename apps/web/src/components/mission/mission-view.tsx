@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { ChatColumn } from "@/components/mission/chat-column";
 import { MissionProvider } from "@/components/mission/mission-context";
-import type { MissionContextValue } from "@/components/mission/mission-context";
+import type {
+  MissionContextValue,
+  PanelTab,
+} from "@/components/mission/mission-context";
 import { MissionHeader } from "@/components/mission/mission-header";
 import { RightPanel } from "@/components/mission/right-panel";
 import { ConnectionBanner } from "@/components/shell/connection-banner";
@@ -64,9 +67,19 @@ const MissionPlaceholder = ({ error }: { error: unknown }) => {
 export const MissionView = ({ missionId }: { missionId: string }) => {
   const mission = useMissionLive(missionId);
   const wide = useMediaQuery(WIDE_QUERY);
-  const [docked, setDocked] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [tab, setTab] = useState<PanelTab>("overview");
   const { applyLocal, live, prependTranscript, refresh } = mission;
+
+  const showPanel = useCallback(
+    (next: PanelTab) => {
+      setTab(next);
+      if (!wide) {
+        setSheetOpen(true);
+      }
+    },
+    [wide]
+  );
 
   const labels = useMemo(
     () => (live ? agentLabels(Object.values(live.agents)) : {}),
@@ -82,9 +95,10 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
             missionId,
             prependTranscript,
             refresh,
+            showPanel,
           }
         : null,
-    [applyLocal, labels, live, missionId, prependTranscript, refresh]
+    [applyLocal, labels, live, missionId, prependTranscript, refresh, showPanel]
   );
 
   if (!value) {
@@ -100,26 +114,31 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
       <div className="flex min-w-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col">
           <MissionHeader
-            onTogglePanel={() =>
-              wide ? setDocked(!docked) : setSheetOpen(true)
-            }
+            onTogglePanel={() => setSheetOpen(true)}
+            panelToggle={!wide}
           />
           <ConnectionBanner />
           <ChatColumn />
         </div>
-        {wide && docked ? (
+        {wide ? (
           <aside
             aria-label="Mission details"
             className="flex w-panel shrink-0 flex-col border-l border-border-subtle"
           >
-            <RightPanel />
+            <RightPanel onTabChange={setTab} tab={tab} />
           </aside>
         ) : null}
         {wide ? null : (
           <Sheet onOpenChange={setSheetOpen} open={sheetOpen}>
-            <SheetContent aria-describedby={undefined} side="right">
+            <SheetContent
+              aria-describedby={undefined}
+              className="h-5/6"
+              side="bottom"
+            >
               <SheetTitle className="sr-only">Mission details</SheetTitle>
-              <RightPanel />
+              <div className="-mx-md flex min-h-0 flex-1 flex-col">
+                <RightPanel onTabChange={setTab} tab={tab} />
+              </div>
             </SheetContent>
           </Sheet>
         )}

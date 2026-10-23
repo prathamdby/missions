@@ -119,6 +119,64 @@ describe(buildTimeline, () => {
     expect(latest.map((entry) => entry.id)).toStrictEqual(["plan:p2"]);
   });
 
+  it("hides role tool calls and their results, and splits groups by category", () => {
+    const timeline = buildTimeline({
+      ...empty,
+      transcript: [
+        item(1, "tool_call", { toolName: "Read", toolUseId: "a" }),
+        item(2, "tool_call", { toolName: "Grep", toolUseId: "b" }),
+        item(3, "tool_call", {
+          toolName: "missions.update_todos",
+          toolUseId: "c",
+        }),
+        item(4, "tool_result", { toolUseId: "c" }),
+        item(5, "tool_call", { toolName: "Execute", toolUseId: "d" }),
+      ],
+    });
+    expect(
+      timeline.map((entry) =>
+        entry.kind === "tools"
+          ? entry.calls.map((call) => call.call?.toolName)
+          : entry.kind
+      )
+    ).toStrictEqual([["Read", "Grep"], ["Execute"]]);
+  });
+
+  it("adds a plan approved line at the decision time and slots assignments", () => {
+    const approved: PlanRevision = {
+      ...plan(1, 2),
+      decidedAt: at(4),
+      status: "approved",
+    };
+    const timeline = buildTimeline({
+      ...empty,
+      assignments: [
+        {
+          createdAt: at(6),
+          epoch: 0,
+          handoff: null,
+          id: "as1",
+          instructions: "",
+          missionId: "m1",
+          needsWrite: true,
+          status: "running",
+          title: "Add Clock interface",
+          updatedAt: at(6),
+          workerAgentId: "w1",
+        },
+      ],
+      plans: [approved],
+      transcript: [item(1, "user"), item(5, "assistant")],
+    });
+    expect(timeline.map((entry) => entry.id)).toStrictEqual([
+      "t1",
+      "plan:p1",
+      "approved:p1",
+      "t5",
+      "assignment:as1",
+    ]);
+  });
+
   it("appends streaming previews in delta order with joined text", () => {
     const timeline = buildTimeline({
       ...empty,

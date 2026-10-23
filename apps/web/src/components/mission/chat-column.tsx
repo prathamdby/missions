@@ -1,26 +1,36 @@
 "use client";
 
+import type { TranscriptItem } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { MissionComposer } from "@/components/mission/composer";
-import { MissionBanners } from "@/components/mission/mission-banners";
+import { FinishFlow } from "@/components/mission/finish-flow";
+import {
+  MissionBanners,
+  PublishNotices,
+} from "@/components/mission/mission-banners";
 import { useMission } from "@/components/mission/mission-context";
+import { DotLoader } from "@/components/mission/panel-kit";
 import { reportMutationError } from "@/components/mission/report-error";
-import { Transcript } from "@/components/mission/transcript";
+import {
+  Transcript,
+  UserMessage,
+  WorkspaceLine,
+} from "@/components/mission/transcript";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import { api } from "@/lib/api/endpoints";
-import { isMissionActive } from "@/lib/format";
+import { formatDuration, isMissionActive } from "@/lib/format";
+import { deliveredRequestIds, showGoalBubble } from "@/lib/mission/queue";
 import { buildTimeline } from "@/lib/mission/timeline";
+import { useNow } from "@/lib/use-now";
 
 const PAGE_SIZE = 100;
 /** Within this distance of the bottom, new output keeps the view pinned. */
 const STICK_THRESHOLD_PX = 96;
 
 const EarlierMessages = ({ onLoaded }: { onLoaded: () => void }) => {
-  const { live, missionId, refresh } = useMission();
-  const { prependTranscript } = useMission();
+  const { live, missionId, prependTranscript, refresh } = useMission();
   const oldest = Math.min(
     ...Object.values(live.transcript).map((item) => item.seq)
   );
@@ -47,69 +57,114 @@ const EarlierMessages = ({ onLoaded }: { onLoaded: () => void }) => {
   );
 };
 
-const WorkingLine = () => {
-  const { agentLabels, live } = useMission();
-  const working = Object.values(live.agents).filter(
+/** When the current turn began: the latest message to the agents, else mission start. */
+const turnStart = (transcript: readonly TranscriptItem[], fallback: string) => {
+  let start = fallback;
+  for (const item of transcript) {
+    if (
+      (item.kind === "user" || item.kind === "system") &&
+      item.createdAt > start
+    ) {
+      start = item.createdAt;
+    }
+  }
+  return start;
+};
+
+/** Paper QAU working line: accent loader, phase, and how long this turn has run. */
+const WorkingLine = ({
+  transcript,
+}: {
+  transcript: readonly TranscriptItem[];
+}) => {
+  const { live } = useMission();
+  const now = useNow();
+  const working = Object.values(live.agents).some(
     (agent) => agent.status === "working"
   );
-  if (working.length === 0 || !isMissionActive(live.mission.status)) {
+  if (!(working && isMissionActive(live.mission.status))) {
     return null;
   }
-  const names = working
-    .map((agent) => agentLabels[agent.id] ?? agent.title)
-    .join(", ");
+  const label =
+    live.mission.status === "exploring" ? "Exploring the codebase" : "Working";
+  const started = Date.parse(turnStart(transcript, live.mission.createdAt));
   return (
-    <p className="flex items-center gap-md type-caption text-text-tertiary">
-      <Spinner label="Agents working" size="sm" />
-      Working · {names}
-    </p>
+    <div className="flex h-2xl shrink-0 items-center gap-control">
+      <DotLoader label="Agents working" tone="accent" />
+      <span className="text-sm leading-sm font-medium tracking-tight text-text-secondary">
+        {label}
+      </span>
+      <span className="font-mono text-2xs leading-xs font-book text-text-tertiary">
+        {formatDuration(Math.max(0, now - started))}
+      </span>
+    </div>
   );
 };
 
-/** Transcript, banners, and composer. Stays pinned to the bottom while you are there. */
+/** Paper FQQ chat column: transcript, inline state cards, and the composer. */
 export const ChatColumn = () => {
-  const { live } = useMission();
+  const { live, missionId } = useMission();
   const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const preserveFrom = useRef<number | null>(null);
 
+  const transcript = useMemo(
+    () => Object.values(live.transcript),
+    [live.transcript]
+  );
   const entries = useMemo(
     () =>
       buildTimeline({
+        assignments: Object.values(live.assignments),
         permissions: Object.values(live.permissions),
         plans: Object.values(live.plans),
         previews: Object.values(live.previews),
         questions: Object.values(live.questions),
-        transcript: Object.values(live.transcript),
+        transcript,
       }),
     [
+      live.assignments,
       live.permissions,
       live.plans,
       live.previews,
       live.questions,
-      live.transcript,
+      transcript,
     ]
   );
+  const goalBubble = showGoalBubble(
+    missionId,
+    deliveredRequestIds(transcript),
+    live.transcriptHasMore
+  );
 
-  useLayoutEffect(() => {
+  // Every height change (new output, cards that load later, older pages
+  // prepended) arrives here before paint: keep the bottom pinned, or keep the
+  // reader's place when earlier messages load above.
+  useEffect(() => {
     const element = scroller.current;
-    if (!element) {
+    const inner = content.current;
+    if (!(element && inner)) {
       return;
     }
-    if (preserveFrom.current !== null) {
-      element.scrollTop = element.scrollHeight - preserveFrom.current;
-      preserveFrom.current = null;
-    } else if (pinned.current && entries.length > 0) {
-      element.scrollTop = element.scrollHeight;
-    }
-  }, [entries]);
+    const observer = new ResizeObserver(() => {
+      if (preserveFrom.current !== null) {
+        element.scrollTop = element.scrollHeight - preserveFrom.current;
+        preserveFrom.current = null;
+      } else if (pinned.current) {
+        element.scrollTop = element.scrollHeight;
+      }
+    });
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
 
   const running = isMissionActive(live.mission.status);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="min-h-0 flex-1 overflow-y-auto px-3xl max-md:px-lg"
         onScroll={(event) => {
           const element = event.currentTarget;
           pinned.current =
@@ -118,7 +173,12 @@ export const ChatColumn = () => {
         }}
         ref={scroller}
       >
-        <div className="mx-auto flex w-full max-w-chat flex-col gap-lg px-lg py-xl md:px-xl">
+        <div
+          aria-live="polite"
+          aria-relevant="additions"
+          ref={content}
+          className="mx-auto flex min-h-full w-full max-w-chat min-w-0 flex-col justify-end gap-section pt-section pb-2xl max-md:pt-xl"
+        >
           {live.transcriptHasMore ? (
             <EarlierMessages
               onLoaded={() => {
@@ -129,15 +189,16 @@ export const ChatColumn = () => {
               }}
             />
           ) : null}
-          <div className="ml-auto max-w-prose rounded-lg bg-surface-raised px-lg py-md type-body break-words whitespace-pre-wrap text-text">
-            {live.mission.goal}
-          </div>
+          {goalBubble ? <UserMessage text={live.mission.goal} /> : null}
+          {goalBubble ? <WorkspaceLine /> : null}
           <Transcript entries={entries} running={running} />
-          <WorkingLine />
+          <WorkingLine transcript={transcript} />
+          <MissionBanners />
+          <FinishFlow />
+          <PublishNotices />
         </div>
       </div>
-      <div className="mx-auto flex w-full max-w-chat flex-col gap-md px-lg pb-lg md:px-xl">
-        <MissionBanners />
+      <div className="flex justify-center px-3xl pb-gutter max-md:px-md max-md:pb-md">
         <MissionComposer />
       </div>
     </div>

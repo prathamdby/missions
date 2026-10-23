@@ -2,15 +2,15 @@
 
 import type { QueueItem } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+
 import {
   CheckIcon,
   ChevronRightIcon,
   ClockIcon,
-  TriangleAlertIcon,
-  XIcon,
-} from "lucide-react";
-import { useState } from "react";
-
+  CloseIcon,
+  WarningIcon,
+} from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { reportMutationError } from "@/components/mission/report-error";
 import { Button, IconButton } from "@/components/ui/button";
@@ -18,7 +18,12 @@ import { Textarea } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { api } from "@/lib/api/endpoints";
 import { useOperationIds } from "@/lib/api/use-operation";
-import { isEditable, visibleQueue } from "@/lib/mission/queue";
+import {
+  deliveredRequestIds,
+  goalRequestId,
+  isEditable,
+  visibleQueue,
+} from "@/lib/mission/queue";
 import { toast } from "@/lib/toast-store";
 import { useNow } from "@/lib/use-now";
 
@@ -41,41 +46,25 @@ const StateMark = ({ item }: { item: QueueItem }) => {
     }
     case "sent": {
       return (
-        <CheckIcon
-          aria-label="Sent"
-          className="size-3.5 shrink-0 text-success"
-        />
+        <span className="flex text-success">
+          <CheckIcon className="size-3.5" />
+          <span className="sr-only">Sent</span>
+        </span>
       );
     }
     case "failed":
     case "unknown": {
-      return (
-        <TriangleAlertIcon
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-warning"
-        />
-      );
+      return <WarningIcon className="size-3.5 text-warning" />;
     }
     case "queued": {
       return item.mode === "steer" ? (
-        <ChevronRightIcon
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-text-tertiary"
-        />
+        <ChevronRightIcon className="size-3.5 text-text-tertiary" />
       ) : (
-        <ClockIcon
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-text-tertiary"
-        />
+        <ClockIcon className="size-3.5 text-text-tertiary" />
       );
     }
     default: {
-      return (
-        <XIcon
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-text-tertiary"
-        />
-      );
+      return <CloseIcon className="size-3.5 text-text-tertiary" />;
     }
   }
 };
@@ -201,6 +190,11 @@ const QueueRow = ({ item }: { item: QueueItem }) => {
       {editable ? (
         <div className="flex shrink-0 items-center gap-2xs">
           <Button
+            data-testid={
+              item.mode === "steer"
+                ? "queue-switch-to-queue"
+                : "queue-switch-to-steer"
+            }
             disabled={mode.isPending}
             onClick={() => mode.mutate()}
             size="sm"
@@ -220,7 +214,7 @@ const QueueRow = ({ item }: { item: QueueItem }) => {
           </Button>
           <IconButton
             disabled={remove.isPending}
-            icon={<XIcon />}
+            icon={<CloseIcon />}
             label="Remove from queue"
             onClick={() => remove.mutate()}
             size="sm"
@@ -231,11 +225,24 @@ const QueueRow = ({ item }: { item: QueueItem }) => {
   );
 };
 
+/** Queue items the tray shows: pending ones and recently settled ones. */
+export const useVisibleQueue = () => {
+  const { live, missionId } = useMission();
+  const now = useNow();
+  const hidden = useMemo(
+    () =>
+      new Set([
+        ...deliveredRequestIds(Object.values(live.transcript)),
+        goalRequestId(missionId),
+      ]),
+    [live.transcript, missionId]
+  );
+  return visibleQueue(Object.values(live.queue), now, hidden);
+};
+
 /** Messages waiting for delivery, above the composer. */
 export const QueueTray = () => {
-  const { live } = useMission();
-  const now = useNow();
-  const items = visibleQueue(Object.values(live.queue), now);
+  const items = useVisibleQueue();
   if (items.length === 0) {
     return null;
   }

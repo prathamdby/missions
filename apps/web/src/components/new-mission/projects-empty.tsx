@@ -1,35 +1,47 @@
 "use client";
 
-import {
-  CloudDownloadIcon,
-  FolderOpenIcon,
-  LinkIcon,
-  ShieldIcon,
-} from "lucide-react";
 import type { ReactNode } from "react";
 
 import { useAddProject } from "@/components/projects/add-project-context";
+import {
+  FolderAddIcon,
+  GithubIcon,
+  LinkIcon,
+  ShieldIcon,
+} from "@/components/ui/icons";
+import { Kbd } from "@/components/ui/kbd";
 
 const SourceCard = ({
   description,
   icon,
   onSelect,
+  shortcut,
   title,
 }: {
   description: string;
   icon: ReactNode;
   onSelect: () => void;
+  shortcut?: string;
   title: string;
 }) => (
   <button
-    className="flex min-w-0 flex-1 cursor-pointer flex-col gap-sm rounded-md bg-surface-raised p-lg text-left shadow-sm transition-colors duration-fast hover:bg-surface-overlay focus-visible:shadow-focus"
+    className="flex min-w-0 flex-1 cursor-pointer flex-col gap-control rounded-md bg-surface-raised p-card text-left shadow-sm transition-colors duration-fast outline-none hover:bg-surface-overlay focus-visible:shadow-focus"
     onClick={onSelect}
     type="button"
   >
-    <span className="text-text-secondary [&_svg]:size-4">{icon}</span>
-    <span className="flex flex-col">
-      <span className="type-label text-text">{title}</span>
-      <span className="type-caption text-text-tertiary">{description}</span>
+    <span className="flex h-5 shrink-0 items-center justify-between text-text">
+      {icon}
+      {shortcut ? (
+        <Kbd className="max-md:hidden" size="sm">
+          {shortcut}
+        </Kbd>
+      ) : null}
+    </span>
+    <span className="flex flex-col gap-2xs tracking-tight">
+      <span className="text-sm leading-sm font-medium text-text">{title}</span>
+      <span className="text-xs leading-sm text-text-tertiary">
+        {description}
+      </span>
     </span>
   </button>
 );
@@ -38,29 +50,30 @@ const SourceCard = ({
 export const ProjectsEmpty = () => {
   const { openAddProject } = useAddProject();
   return (
-    <div className="flex w-full flex-col gap-lg">
+    <div className="flex w-full max-w-chat flex-col gap-lg">
       <div className="flex flex-col gap-md md:flex-row">
         <SourceCard
           description="Any Git repository on this machine"
-          icon={<FolderOpenIcon aria-hidden="true" />}
+          icon={<FolderAddIcon />}
           onSelect={() => openAddProject("browse")}
+          shortcut="⌘O"
           title="Open local folder"
         />
         <SourceCard
-          description="Pick a repo, cloned into ~/.missions/repos"
-          icon={<CloudDownloadIcon aria-hidden="true" />}
+          description="Pick one of your repos to clone"
+          icon={<GithubIcon />}
           onSelect={() => openAddProject("github")}
           title="Clone from GitHub"
         />
         <SourceCard
           description="Any SSH or HTTPS remote"
-          icon={<LinkIcon aria-hidden="true" />}
+          icon={<LinkIcon />}
           onSelect={() => openAddProject("url")}
           title="Clone from URL"
         />
       </div>
-      <p className="flex items-center justify-center gap-sm type-caption text-text-tertiary">
-        <ShieldIcon aria-hidden="true" className="size-3.5" />
+      <p className="flex items-center justify-center gap-sm text-xs leading-sm tracking-tight text-text-tertiary">
+        <ShieldIcon size="sm" />
         Droids work in a separate worktree and never push without asking.
       </p>
     </div>

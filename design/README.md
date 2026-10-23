@@ -36,6 +36,7 @@ shadcn semantic slots (`background`, `primary`, `muted`, …) alias Paper colors
 
 - `**/components/ui/**`: the Ultracite shadcn preset turns off `no-arbitrary-values`, `no-restyle`, and `require-static-classes` inside primitives, which own their appearance. `no-raw-colors`, `no-inline-styles`, `no-unknown-classes`, and both project rules stay on.
 - Design tooling under `design/` builds variable names on purpose, so the project rules do not apply there.
+- Dot Matrix loaders come verbatim from the `@dotmatrix` shadcn registry (`apps/web/components.json`): `components/dotmatrix-loader.css`, `components/ui/dotm-square-*.tsx`, `lib/dotmatrix-core.tsx`, and `lib/dotmatrix-hooks.ts`. Oxlint, Oxfmt, and the CSS contract skip them (`DOTMATRIX_VENDORED` in `oxlint.config.ts`) so `npx shadcn@latest add @dotmatrix/<name>` can update them in place. Only `components/ui/spinner.tsx` imports them; it picks the loader, size, and color from tokens.
 
 Do not disable a rule to make code pass. Add a token, a component variant, or a documented exception here.
 

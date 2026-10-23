@@ -40,7 +40,10 @@ export const errorMessage = (error: unknown) => {
   return "Something went wrong.";
 };
 
-/** Stale `expectedRevision`, `epoch`, or plan revision: refresh and retry. */
+/**
+ * Stale `expectedRevision`, `epoch`, or plan revision: refresh and retry.
+ * `conflict` is excluded: the daemon uses it for refusals whose message the
+ * user needs to read (rejected push, nothing to commit, missing gh).
+ */
 export const isStaleError = (error: unknown) =>
-  isApiError(error) &&
-  (error.code === "stale_revision" || error.code === "conflict");
+  isApiError(error) && error.code === "stale_revision";

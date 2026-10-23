@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from "react";
 
 import { IconButton } from "@/components/ui/button";
+import { AlertIcon, CloseIcon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 const calloutVariants = cva(
@@ -30,6 +31,14 @@ const calloutVariants = cva(
   }
 );
 
+/** PZ7: a flat tinted panel, used above the composer. */
+const filledTone = {
+  danger: "bg-danger-muted",
+  info: "bg-info-muted",
+  success: "bg-success-muted",
+  warning: "bg-warning-muted",
+} as const;
+
 const ICONS = {
   danger: CircleAlertIcon,
   info: InfoIcon,
@@ -39,6 +48,11 @@ const ICONS = {
 
 type CalloutProps = VariantProps<typeof calloutVariants> & {
   actions?: ReactNode;
+  /**
+   * `card` sits on the page with a tinted ring; `filled` is a flat tinted
+   * panel (PZ7); `strip` is a one-line tinted bar inside a dialog (OBV).
+   */
+  appearance?: "card" | "filled" | "strip";
   children?: ReactNode;
   icon?: ReactNode;
   onDismiss?: () => void;
@@ -46,9 +60,38 @@ type CalloutProps = VariantProps<typeof calloutVariants> & {
   role?: "alert" | "status";
 };
 
+const CalloutStrip = ({
+  actions,
+  icon,
+  role,
+  title,
+  tone,
+}: {
+  actions?: ReactNode;
+  icon?: ReactNode;
+  role: "alert" | "status";
+  title: ReactNode;
+  tone: keyof typeof filledTone;
+}) => (
+  <div
+    className={cn(
+      "flex w-full min-w-0 items-center gap-control rounded-sm px-lg py-control text-left",
+      filledTone[tone]
+    )}
+    role={role}
+  >
+    {icon ?? <AlertIcon tone={tone === "info" ? "secondary" : tone} />}
+    <p className="min-w-0 flex-1 text-sm leading-sm font-medium tracking-tight text-text">
+      {title}
+    </p>
+    {actions}
+  </div>
+);
+
 /** Inline banner for warnings, failures, and confirmations. */
 export const Callout = ({
   actions,
+  appearance = "card",
   children,
   icon,
   onDismiss,
@@ -57,6 +100,59 @@ export const Callout = ({
   tone,
 }: CalloutProps) => {
   const Icon = ICONS[tone ?? "info"];
+  if (appearance === "strip") {
+    return (
+      <CalloutStrip
+        actions={actions}
+        icon={icon}
+        role={role}
+        title={title}
+        tone={tone ?? "info"}
+      />
+    );
+  }
+  if (appearance === "filled") {
+    return (
+      <div
+        className={cn(
+          "flex w-full min-w-0 items-start gap-lg rounded-md py-lg pr-lg pl-card text-left",
+          filledTone[tone ?? "info"]
+        )}
+        role={role}
+      >
+        <span className="pt-2xs">
+          {icon ?? (
+            <AlertIcon tone={tone === "info" || !tone ? "secondary" : tone} />
+          )}
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-xs">
+          <p className="text-sm leading-sm font-medium tracking-tight text-text">
+            {title}
+          </p>
+          {children ? (
+            <div className="text-xs leading-md tracking-tight text-text-secondary">
+              {children}
+            </div>
+          ) : null}
+          {actions ? (
+            <div className="flex flex-wrap items-center gap-md pt-sm">
+              {actions}
+            </div>
+          ) : null}
+        </div>
+        {onDismiss ? (
+          <button
+            aria-label="Dismiss"
+            className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-xs text-text-tertiary hover:text-text focus-visible:shadow-focus"
+            onClick={onDismiss}
+            type="button"
+          >
+            <CloseIcon size="sm" />
+          </button>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div className={calloutVariants({ tone })} role={role}>
       {icon ?? <Icon aria-hidden="true" className="mt-2xs size-4 shrink-0" />}
