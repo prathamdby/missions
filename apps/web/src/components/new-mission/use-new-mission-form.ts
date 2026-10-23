@@ -1,6 +1,6 @@
 "use client";
 
-import type { Autonomy } from "@missions/protocol/common";
+import type { Autonomy, ExecutionMode } from "@missions/protocol/common";
 import { useState } from "react";
 
 import { useAddProject } from "@/components/projects/add-project-context";
@@ -103,6 +103,7 @@ export const useNewMissionForm = () => {
     useState<PerProject<WorkspaceChoice> | null>(null);
   const [acknowledged, setAcknowledged] = useState<string | null>(null);
   const [autonomyChoice, setAutonomyChoice] = useState<Autonomy | null>(null);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("work");
   const [goal, setGoal] = useState("");
 
   const branch =
@@ -123,6 +124,7 @@ export const useNewMissionForm = () => {
     branch,
     branches: evidence(branches),
     checkout: evidence(checkout),
+    executionMode,
     goal,
     newBranch,
     project,
@@ -146,11 +148,13 @@ export const useNewMissionForm = () => {
     checkout,
     defaultBranch: resolveDefaultBranch(project, branches.data),
     ...review,
+    executionMode,
     goal,
     handleAcknowledgeDirty: () => setAcknowledged(review.dirtyKey),
     handleAutonomyChange: setAutonomyChoice,
     handleBranchChange: (value: string) =>
       projectId && setBranchChoice({ projectId, value }),
+    handleExecutionModeChange: setExecutionMode,
     handleNewBranch: (value: string | null) =>
       setNewBranchChoice(projectId && value ? { projectId, value } : null),
     handleProjectChange: (value: string) => {

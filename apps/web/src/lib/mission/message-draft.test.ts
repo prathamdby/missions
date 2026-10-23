@@ -52,4 +52,20 @@ describe(MessageDraft, () => {
     expect(controller.take("steer")?.occurrence).not.toBe(two.occurrence);
     expect(controller.take("steer")).toStrictEqual(one);
   });
+
+  it("carries a mode change and treats a different mode as a new occurrence", () => {
+    const controller = draft();
+    controller.change("plan this");
+    const plan = controller.take("steer", "plan");
+    if (!plan) {
+      throw new Error("Missing test delivery");
+    }
+    expect(plan.input).toStrictEqual({
+      executionMode: "plan",
+      mode: "steer",
+      text: "plan this",
+    });
+    controller.restore(plan);
+    expect(controller.take("steer")?.occurrence).not.toBe(plan.occurrence);
+  });
 });

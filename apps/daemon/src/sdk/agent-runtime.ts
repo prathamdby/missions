@@ -62,9 +62,20 @@ export interface AskUserAnswer {
   answers: { index: number; question: string; answer: string }[];
 }
 
+/** Structured native sender of an agent-to-agent message. */
+export type RuntimeSender =
+  | { kind: "orchestrator"; sessionId: string }
+  | { kind: "agent"; sessionId: string; title: string };
+
+export interface SubmitOptions {
+  /** Server-bound sender identity; absent for user and daemon messages. */
+  sender?: RuntimeSender;
+}
+
 export interface RuntimeMessage {
   id: string;
   role: "user" | "assistant" | "system";
+  sender: RuntimeSender | null;
   text: string;
   thinking: string;
   toolUses: { id: string; name: string; input: Record<string, unknown> }[];
@@ -114,6 +125,16 @@ export interface AgentRuntimeOptions {
   /** Test seam: a fake transport exercises the adapter, not CLI scheduling. */
   createTransport?: () => DroidClientTransport | Promise<DroidClientTransport>;
   extraEnv?: Record<string, string>;
+  /**
+   * Per-session MCP readiness gating for agent turns. Omitted keeps the
+   * user's settings.json default.
+   */
+  blockOnMcpLoad?: boolean;
+  /** Content-free startup stage timings. */
+  onTiming?: (
+    stage: string,
+    detail: Record<string, string | number | boolean | null>
+  ) => void;
 }
 
 export interface RuntimeStartResult {
@@ -164,6 +185,19 @@ const blockText = (content: unknown): string => {
     .join("\n");
 };
 
+const senderOf = (raw: unknown): RuntimeSender | null => {
+  if (!isRecord(raw) || typeof raw.sessionId !== "string") {
+    return null;
+  }
+  if (raw.kind === "orchestrator") {
+    return { kind: "orchestrator", sessionId: raw.sessionId };
+  }
+  if (raw.kind === "agent" && typeof raw.title === "string") {
+    return { kind: "agent", sessionId: raw.sessionId, title: raw.title };
+  }
+  return null;
+};
+
 export const normalizeMessage = (
   raw: unknown,
   requestId: string | null
@@ -179,6 +213,7 @@ export const normalizeMessage = (
     requestId:
       requestId ?? (typeof raw.requestId === "string" ? raw.requestId : null),
     role,
+    sender: senderOf(raw.sender),
     text: "",
     thinking: "",
     toolResults: [],
@@ -321,6 +356,7 @@ export class AgentRuntime {
   #model: AgentModelSettings | null = null;
   #settingsVersion = 0;
   readonly #models = new Map<string, ModelOption>();
+  #availableModels: unknown[] = [];
 
   constructor(options: AgentRuntimeOptions) {
     this.options = options;
@@ -339,6 +375,11 @@ export class AgentRuntime {
 
   get connected() {
     return this.#client?.isConnected ?? false;
+  }
+
+  /** Raw model metadata the session reported; feeds the shared catalog. */
+  get availableModels(): readonly unknown[] {
+    return this.#availableModels;
   }
 
   #observeTransport(transport: DroidClientTransport): DroidClientTransport {
@@ -585,6 +626,8 @@ export class AgentRuntime {
     stage: string,
     transport?: DroidClientTransport
   ): Promise<T> {
+    const startedAt = Date.now();
+    const timingStage = `startup.${stage.replaceAll(" ", "_")}`;
     const operation = effect().finally(async () => {
       // Connect can finish after its first close, creating a managed process
       // that the previous disposal never owned. Re-adopt it for another pass.
@@ -600,8 +643,21 @@ export class AgentRuntime {
     });
     const message = `Droid ${stage} timed out after 120 seconds. Check Droid sign-in and configured MCP servers (a slow or disconnected server can block initialization), then Resume to retry. No new mission turn was sent by this startup attempt.`;
     try {
-      return await withDeadline(operation, SESSION_START_TIMEOUT_MS, message);
+      const value = await withDeadline(
+        operation,
+        SESSION_START_TIMEOUT_MS,
+        message
+      );
+      this.options.onTiming?.(timingStage, {
+        durationMs: Date.now() - startedAt,
+        ok: true,
+      });
+      return value;
     } catch (error) {
+      this.options.onTiming?.(timingStage, {
+        durationMs: Date.now() - startedAt,
+        ok: false,
+      });
       this.#startupExpired = true;
       if (error instanceof Error && error.name === "TimeoutError") {
         throw new Error(message, { cause: error });
@@ -643,6 +699,7 @@ export class AgentRuntime {
     if (!Array.isArray(raw)) {
       return;
     }
+    this.#availableModels = raw;
     for (const entry of raw) {
       const model = toModelOption(entry);
       if (model) {
@@ -688,6 +745,7 @@ export class AgentRuntime {
       systemPrompt,
       disabledToolIds,
       enabledToolIds,
+      blockOnMcpLoad,
     } = this.options;
     const response = await client.initializeSession({
       // SDK sessions always ask: the broker applies the user's autonomy, so
@@ -710,6 +768,7 @@ export class AgentRuntime {
         : {}),
       ...(disabledToolIds?.length ? { disabledToolIds } : {}),
       ...(enabledToolIds?.length ? { enabledToolIds } : {}),
+      ...(blockOnMcpLoad === undefined ? {} : { blockOnMcpLoad }),
     });
     this.#assertStarting();
     const result: unknown = response.result;
@@ -812,13 +871,26 @@ export class AgentRuntime {
     return this.#model;
   }
 
-  /** Submits to the native queue; `id` is the stable SDK request ID. */
-  async submit(id: string, text: string, mode: DeliveryMode) {
+  /**
+   * Submits to the native queue; `id` is the stable SDK request ID. Agent
+   * messages carry the SDK's structured sender, never a text prefix
+   * the recipient would have to trust.
+   */
+  async submit(
+    id: string,
+    text: string,
+    mode: DeliveryMode,
+    options: SubmitOptions = {}
+  ) {
     const client = this.#requireClient();
     this.queue.submitted(id, text, mode);
     try {
       await client.addUserMessage(
-        { queuePlacement: PLACEMENT[mode] as never, text },
+        {
+          queuePlacement: PLACEMENT[mode] as never,
+          text,
+          ...(options.sender ? { sender: options.sender as never } : {}),
+        },
         id
       );
       this.queue.admitted(id);
@@ -830,6 +902,30 @@ export class AgentRuntime {
       );
       throw error;
     }
+  }
+
+  /**
+   * Model-only context (for example planning guidance): a system message the
+   * user never sees that does not start an agent loop by itself.
+   */
+  async addContext(id: string, text: string) {
+    await this.#requireClient().addUserMessage(
+      {
+        role: "system" as never,
+        skipAgentLoop: true,
+        text,
+        visibility: "llm_only" as never,
+      },
+      id
+    );
+  }
+
+  /** Native Spec mode is the read-only planning mode; Auto is normal work. */
+  async setInteractionMode(mode: "auto" | "spec") {
+    this.#assertStarting();
+    await this.#requireClient().updateSessionSettings({
+      interactionMode: mode as never,
+    });
   }
 
   async changeMode(id: string, mode: DeliveryMode) {

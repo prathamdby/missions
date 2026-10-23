@@ -6,6 +6,7 @@ import type {
   CreatePullRequest,
   PushRequest,
   DecidePermissionRequest,
+  RetryQueueItemRequest,
   DecidePlanRequest,
   EditQueueItemRequest,
   MissionControlRequest,
@@ -240,6 +241,15 @@ export const api = {
     }),
   resumeMission: (missionId: string, body: MissionControlRequest) =>
     apiRequest(routes.missionResume(missionId), MissionSchema, {
+      body,
+      method: "POST",
+    }),
+  retryQueueItem: (
+    missionId: string,
+    itemId: string,
+    body: RetryQueueItemRequest
+  ) =>
+    apiRequest(routes.queueItemRetry(missionId, itemId), QueueItemSchema, {
       body,
       method: "POST",
     }),

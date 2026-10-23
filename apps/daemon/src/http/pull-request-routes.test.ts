@@ -66,7 +66,7 @@ const setup = () => {
   return { get, store };
 };
 
-describe("GET /v1/pull-requests", () => {
+describe("GET /v2/pull-requests", () => {
   afterEach(() => {
     for (const handle of opened.splice(0)) {
       handle.close();

@@ -81,7 +81,7 @@ const mockDraft = async (page: Page) => {
   await page.route("**/api/daemon/**", async (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname.replace(
-      "/api/daemon/v1",
+      "/api/daemon/v2",
       ""
     );
     if (pathname === "/missions" && request.method() === "POST") {

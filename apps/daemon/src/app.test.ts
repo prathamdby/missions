@@ -11,7 +11,7 @@ const app = createApp({
   version: "1.2.3",
 });
 
-describe("GET /v1/health", () => {
+describe("GET /v2/health", () => {
   it("returns a response that satisfies the protocol schema", async () => {
     const res = await app.request(HEALTH_PATH);
     expect(res.status).toBe(200);
@@ -19,7 +19,7 @@ describe("GET /v1/health", () => {
 
     const body = HealthResponseSchema.parse(await res.json());
     expect(body).toStrictEqual({
-      protocolVersion: 1,
+      protocolVersion: 2,
       service: "missions-daemon",
       startedAt: "2026-10-22T12:00:00.000Z",
       status: "ok",
@@ -42,7 +42,7 @@ describe("GET /v1/health", () => {
 
 describe("error shape", () => {
   it("returns a schema-valid 404 for unknown routes", async () => {
-    const res = await app.request("/v1/nope");
+    const res = await app.request("/v2/nope");
     expect(res.status).toBe(404);
     expect(ApiErrorSchema.parse(await res.json()).error.code).toBe("not_found");
   });

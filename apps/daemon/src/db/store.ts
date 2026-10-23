@@ -17,6 +17,13 @@ import { and, desc, eq, inArray, like, lt, max } from "drizzle-orm";
 
 import type { DatabaseHandle, Db } from "./database";
 import {
+  normalizeAgent,
+  normalizeMission,
+  normalizePlan,
+  normalizeQueueItem,
+  normalizeTranscriptItem,
+} from "./normalize";
+import {
   agents,
   artifacts,
   assignments,
@@ -36,11 +43,7 @@ import {
 
 type MissionDocTable = typeof plans;
 
-/** Rows written before `endedAt` existed lack it; the schema default is null. */
-const toMission = (data: unknown): Mission => {
-  const mission = data as Mission;
-  return { ...mission, endedAt: mission.endedAt ?? null };
-};
+const toMission = normalizeMission;
 
 interface MissionDoc {
   id: string;
@@ -51,14 +54,15 @@ const missionRepo = <T extends MissionDoc>(
   db: Db,
   table: MissionDocTable,
   statusOf: (doc: T) => string,
-  updatedOf: (doc: T) => string
+  updatedOf: (doc: T) => string,
+  normalize: (data: unknown) => T = (data) => data as T
 ) => ({
   delete: (id: string) => {
     db.delete(table).where(eq(table.id, id)).run();
   },
   get: (id: string): T | null => {
     const row = db.select().from(table).where(eq(table.id, id)).get();
-    return row ? (row.data as T) : null;
+    return row ? normalize(row.data) : null;
   },
   list: (missionId: string, statuses?: readonly string[]): T[] => {
     const where = statuses
@@ -72,7 +76,7 @@ const missionRepo = <T extends MissionDoc>(
       .from(table)
       .where(where)
       .all()
-      .map((row) => row.data as T);
+      .map((row) => normalize(row.data));
   },
   listByStatus: (statuses: readonly string[]): T[] =>
     db
@@ -80,7 +84,7 @@ const missionRepo = <T extends MissionDoc>(
       .from(table)
       .where(inArray(table.status, [...statuses]))
       .all()
-      .map((row) => row.data as T),
+      .map((row) => normalize(row.data)),
   put: (doc: T) => {
     const values = {
       data: doc,
@@ -117,7 +121,8 @@ export class Store {
       db,
       plans,
       (p) => p.status,
-      (p) => p.decidedAt ?? p.createdAt
+      (p) => p.decidedAt ?? p.createdAt,
+      normalizePlan
     );
     this.todos = missionRepo<Todo>(
       db,
@@ -147,7 +152,8 @@ export class Store {
       db,
       queueItems,
       (q) => q.state,
-      (q) => q.updatedAt
+      (q) => q.updatedAt,
+      normalizeQueueItem
     );
     this.artifacts = missionRepo<Artifact>(
       db,
@@ -291,6 +297,8 @@ export class Store {
       data: agent,
       id: agent.id,
       missionId: agent.missionId,
+      promptVersion: agent.promptVersion,
+      sessionGeneration: agent.sessionGeneration,
       status: agent.status,
     };
     this.db
@@ -303,7 +311,7 @@ export class Store {
 
   getAgent(id: string): Agent | null {
     const row = this.db.select().from(agents).where(eq(agents.id, id)).get();
-    return row ? (row.data as Agent) : null;
+    return row ? normalizeAgent(row.data) : null;
   }
 
   listAgents(missionId: string): Agent[] {
@@ -312,7 +320,7 @@ export class Store {
       .from(agents)
       .where(eq(agents.missionId, missionId))
       .all()
-      .map((row) => row.data as Agent)
+      .map((row) => normalizeAgent(row.data))
       .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
@@ -404,7 +412,7 @@ export class Store {
       .from(transcript)
       .where(eq(transcript.id, id))
       .get();
-    return row ? (row.data as TranscriptItem) : null;
+    return row ? normalizeTranscriptItem(row.data) : null;
   }
 
   /** Newest-first page, returned in ascending order. */
@@ -423,7 +431,7 @@ export class Store {
     const hasMore = rows.length > limit;
     const items = rows
       .slice(0, limit)
-      .map((row) => row.data as TranscriptItem)
+      .map((row) => normalizeTranscriptItem(row.data))
       .toReversed();
     return { hasMore, items };
   }

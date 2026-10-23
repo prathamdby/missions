@@ -19,7 +19,7 @@ import {
   missionSnapshot,
 } from "./fixtures";
 
-const API = "/api/daemon/v1";
+const API = "/api/daemon/v2";
 const CATALOG: ModelOption[] = [
   {
     defaultReasoningEffort: "high",

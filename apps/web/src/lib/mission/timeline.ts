@@ -17,7 +17,13 @@ export interface ToolCall {
   result: TranscriptItem | null;
 }
 
-type MessageKind = "assistant" | "error" | "system" | "thinking" | "user";
+type MessageKind =
+  | "agent_message"
+  | "assistant"
+  | "error"
+  | "system"
+  | "thinking"
+  | "user";
 
 export type TimelineEntry =
   | { agentId: string; id: string; item: TranscriptItem; kind: MessageKind }
@@ -80,11 +86,12 @@ const isTool = (item: TranscriptItem) =>
 
 /**
  * Mission role tools surface as their own cards (plan, todos, assignments,
- * finish), so their raw calls stay out of the tool groups. Droid may prefix
- * MCP tool names with the server name.
+ * agent messages, finish), so their raw calls stay out of the tool groups.
+ * Native ExitSpecMode is the plan card. Droid may prefix MCP tool names with
+ * the server name. propose_plan only appears in legacy transcripts.
  */
 const ROLE_TOOL =
-  /(?:^|[._])(?:propose_plan|dispatch_worker|message_worker|update_todos|attach_artifact|complete_mission|submit_handoff)$/u;
+  /(?:^|[._])(?:send_message|message_worker|dispatch_worker|submit_handoff|enter_plan|read_history|update_todos|attach_artifact|complete_mission|propose_plan|ExitSpecMode)$/u;
 
 export const isRoleTool = (name: string | null) =>
   name !== null && ROLE_TOOL.test(name);
@@ -113,26 +120,36 @@ export const toolCategory = (name: string | null) => {
   return name === "Execute" ? "run" : "other";
 };
 
-/** Role tool calls, and the results of calls already hidden; records new hidden IDs. */
-const isHiddenTool = (item: TranscriptItem, hidden: Set<string>) => {
+/**
+ * Role tool calls, and the results of calls already hidden; records hidden
+ * calls by tool use ID. A failed role call produced no card or agent message,
+ * so it comes back as an ordinary tool call with its error.
+ */
+const hiddenTool = (
+  item: TranscriptItem,
+  hidden: Map<string, TranscriptItem>
+): "hide" | "show" | TranscriptItem => {
   if (item.kind === "tool_call" && isRoleTool(item.toolName)) {
     if (item.toolUseId) {
-      hidden.add(item.toolUseId);
+      hidden.set(item.toolUseId, item);
     }
-    return true;
+    return "hide";
   }
-  return (
-    item.kind === "tool_result" &&
-    item.toolUseId !== null &&
-    hidden.has(item.toolUseId)
-  );
+  if (item.kind !== "tool_result" || item.toolUseId === null) {
+    return "show";
+  }
+  const call = hidden.get(item.toolUseId);
+  if (!call) {
+    return "show";
+  }
+  return item.isError ? call : "hide";
 };
 
 /** Groups consecutive tool calls per agent and pairs results with their call. */
 const transcriptEntries = (items: readonly TranscriptItem[]) => {
   const out: { at: string; entry: TimelineEntry }[] = [];
   const calls = new Map<string, ToolCall>();
-  const hidden = new Set<string>();
+  const hidden = new Map<string, TranscriptItem>();
   let group: Extract<TimelineEntry, { kind: "tools" }> | null = null;
   let category = "other";
 
@@ -140,7 +157,21 @@ const transcriptEntries = (items: readonly TranscriptItem[]) => {
     if (isAgentPrompt(item)) {
       continue;
     }
-    if (isHiddenTool(item, hidden)) {
+    const role = hiddenTool(item, hidden);
+    if (role === "hide") {
+      continue;
+    }
+    if (role !== "show") {
+      group = null;
+      out.push({
+        at: role.createdAt,
+        entry: {
+          agentId: item.agentId,
+          calls: [{ call: role, id: role.id, result: item }],
+          id: `tools:${role.id}`,
+          kind: "tools",
+        },
+      });
       continue;
     }
     if (!isTool(item)) {
@@ -234,7 +265,16 @@ const cardEntries = (input: TimelineInput) => {
       },
     })),
     ...input.plans
-      .filter((plan) => !(plan.status === "proposed" && input.planInFlight))
+      // A legacy proposal waits for the agent to finish its turn; a native
+      // proposal is bound while the agent is still mid-turn.
+      .filter(
+        (plan) =>
+          !(
+            plan.status === "proposed" &&
+            input.planInFlight &&
+            !plan.actionable
+          )
+      )
       .map((plan) => ({
         at: planPosition(input, plan),
         entry: {
@@ -320,6 +360,7 @@ export const buildTimeline = (input: TimelineInput): TimelineEntry[] => {
 
 export type TranscriptRow =
   | { entry: TimelineEntry; id: string; kind: "entry" }
+  | { id: string; items: TranscriptItem[]; kind: "messages" }
   | { groups: ToolCall[][]; id: string; kind: "tools"; tail: boolean }
   | {
       calls: ToolCall[];
@@ -336,8 +377,19 @@ const WORKER_HIDDEN = new Set<TimelineEntry["kind"]>([
   "tools",
 ]);
 
+const pairKey = (item: TranscriptItem) =>
+  [item.sender?.agentId ?? item.agentId, item.recipient?.agentId ?? ""]
+    .toSorted()
+    .join("|");
+
+/** Messages between the same two agents, in either direction. */
+const samePair = (first: TranscriptItem | undefined, next: TranscriptItem) =>
+  first !== undefined && pairKey(first) === pairKey(next);
+
 /**
- * Folds consecutive tool groups from one agent into a single run. Lone
+ * Folds consecutive tool groups from one agent into a single run, and
+ * consecutive agent messages between one pair into an exchange. Any other
+ * row in between, such as a user message, starts a new exchange. Lone
  * commands and edits break out as their own cards.
  */
 export const transcriptRows = (
@@ -355,6 +407,14 @@ export const transcriptRows = (
       continue;
     }
     const last = rows.at(-1);
+    if (entry.kind === "agent_message") {
+      if (last?.kind === "messages" && samePair(last.items[0], entry.item)) {
+        last.items.push(entry.item);
+      } else {
+        rows.push({ id: entry.id, items: [entry.item], kind: "messages" });
+      }
+      continue;
+    }
     if (entry.kind !== "tools") {
       rows.push({ entry, id: entry.id, kind: "entry" });
       continue;

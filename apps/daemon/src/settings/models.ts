@@ -143,6 +143,20 @@ export class ModelCatalog {
     return await this.#pending;
   }
 
+  /**
+   * Seeds the cache from models a real session reported at initialization,
+   * so later resolves need no throwaway discovery process.
+   */
+  remember(raw: readonly unknown[]) {
+    if (this.#closed || raw.length === 0) {
+      return;
+    }
+    const models = raw.map(toModelOption).filter((model) => model !== null);
+    if (models.length > 0) {
+      this.#cache = { at: Date.now(), list: { models, source: "droid" } };
+    }
+  }
+
   async close(): Promise<void> {
     this.#closed = true;
     this.#cancel.abort();

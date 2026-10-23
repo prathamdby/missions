@@ -27,9 +27,11 @@ const snapshot = (id: string): MissionSnapshot => ({
     createdAt: "2026-01-01T00:00:00Z",
     endedAt: null,
     epoch: 0,
+    executionMode: "work",
     id,
     lastError: null,
     orchestrator: { modelId: "planner", reasoningEffort: "high" },
+    pendingExecutionMode: null,
     publish: {
       cleanup: "none",
       cleanupReason: null,

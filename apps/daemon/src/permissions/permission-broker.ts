@@ -10,7 +10,7 @@ import type {
 } from "@missions/protocol/missions";
 
 import type { PermissionToolUse } from "../sdk/agent-runtime";
-import { commandCategory } from "./command-policy";
+import { commandCategory, isHighImpactGit } from "./command-policy";
 import { StaleDecisionError } from "./stale-decision-error";
 
 export { StaleDecisionError } from "./stale-decision-error";
@@ -43,10 +43,13 @@ export interface AgentContext {
   workspacePath: string;
   autonomy: Autonomy;
   epoch: number;
-  planApproved: boolean;
+  /** Plan mode: every agent in the mission is read-only until approval. */
+  planMode: boolean;
   fenced: boolean;
   /** Assignment capability. Omitted means writable for older callers. */
   canWrite?: boolean;
+  /** Titles of other agents that may still write the shared checkout. */
+  otherWriters?: string[];
 }
 
 export interface BrokerStore {
@@ -147,10 +150,14 @@ export const classifyToolUse = (
     // legacy whitespace-collapsed grants cannot authorize a different command.
     const normalized = `exec:v2:${command}`;
     const category = commandCategory(command);
+    const impact =
+      category === "vcs" && isHighImpactGit(command)
+        ? "high"
+        : impactOf(details.impactLevel);
     return {
       action: "Execute",
       category,
-      impact: impactOf(details.impactLevel),
+      impact,
       normalized,
       summary: { ...base, summary: command },
     };
@@ -232,7 +239,11 @@ const AUTO_IMPACT: Record<Autonomy, ReadonlySet<Impact>> = {
   off: new Set(),
 };
 
-/** Whether the user's autonomy level approves this use without asking. */
+/**
+ * Whether the user's autonomy level approves this use without asking. Local
+ * Git mutations follow their impact like other commands; publishing (push,
+ * PRs, unrecognized git/gh forms) proceeds only at High.
+ */
 export const autoApproves = (autonomy: Autonomy, use: ClassifiedUse) => {
   switch (use.category) {
     case "read":
@@ -243,8 +254,12 @@ export const autoApproves = (autonomy: Autonomy, use: ClassifiedUse) => {
       return autonomy !== "off" && use.impact !== "high";
     }
     case "execute":
+    case "vcs":
     case "mcp": {
       return AUTO_IMPACT[autonomy].has(use.impact);
+    }
+    case "publish": {
+      return autonomy === "high";
     }
     default: {
       return false;
@@ -266,6 +281,11 @@ const requiresWriteCapability = (use: ClassifiedUse) =>
   use.category !== "role_tool" &&
   use.category !== "blocked";
 
+/** Shared-checkout administration: publishing, branch changes, destructive Git. */
+const isRepositoryAdmin = (use: ClassifiedUse) =>
+  use.category === "publish" ||
+  (use.category === "vcs" && use.impact === "high");
+
 const mandatoryDenial = (
   context: AgentContext,
   uses: ClassifiedUse[]
@@ -279,8 +299,18 @@ const mandatoryDenial = (
   if (context.canWrite === false && uses.some(requiresWriteCapability)) {
     return "This assignment is read-only";
   }
-  if (!context.planApproved && uses.some(isWritable)) {
-    return "Changes are blocked until the plan is approved";
+  if (context.planMode && uses.some(isWritable)) {
+    return "Plan mode is read-only until the user approves the plan";
+  }
+  const vcs = uses.some(
+    (use) => use.category === "vcs" || use.category === "publish"
+  );
+  if (context.role === "worker" && vcs) {
+    return "Repository administration belongs to the main agent; list what to commit in your handoff";
+  }
+  const writers = context.otherWriters ?? [];
+  if (writers.length > 0 && uses.some(isRepositoryAdmin)) {
+    return `Wait until ${writers.join(", ")} finish writing before branch changes, destructive Git or publishing`;
   }
   return null;
 };
@@ -294,8 +324,9 @@ interface Pending {
 
 /**
  * One policy point for SDK permission requests. Mandatory gates (Pause fence,
- * plan approval, publishing) run before grants and autonomy so neither
- * "Always allow" nor High autonomy can bypass them.
+ * read-only assignments, Plan mode, repository coordination) run before
+ * grants and autonomy so neither "Always allow" nor High autonomy can bypass
+ * them. Publishing never gets an "Always allow" grant.
  */
 export class PermissionBroker {
   readonly #options: PermissionBrokerOptions;
@@ -345,9 +376,8 @@ export class PermissionBroker {
     const needsPublishApproval = uses.some((use) => use.category === "publish");
     const covered = uses.every(
       (use) =>
-        use.category !== "publish" &&
-        (autoApproves(context.autonomy, use) ||
-          this.#grantMatches(context, use))
+        autoApproves(context.autonomy, use) ||
+        (use.category !== "publish" && this.#grantMatches(context, use))
     );
     let via: "policy" | "grant" | "user" = uses.every((use) =>
       autoApproves(context.autonomy, use)

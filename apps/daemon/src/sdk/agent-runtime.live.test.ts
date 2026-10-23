@@ -217,6 +217,139 @@ describe.runIf(process.env.MISSIONS_LIVE === "1")("live Droid runner", () => {
     await runtime.close();
   }, 240_000);
 
+  it("batches four sender-attributed reports and a user steer at one tool boundary; Queue waits for the loop", async () => {
+    const dir = await workspace();
+    const supervisor = supervisorFor(dir);
+    const rec = recorder();
+    const peer = makeRuntime(dir, supervisor, recorder(), {
+      agentId: "batch-peer",
+    });
+    const runtime = makeRuntime(dir, supervisor, rec, {
+      agentId: "batch-main",
+      role: "orchestrator",
+    });
+    const [{ sessionId: peerSession }] = await Promise.all([
+      peer.start(),
+      runtime.start(),
+    ]);
+    await runtime.submit(
+      "batch-base",
+      "Use the Execute tool to run exactly: sleep 8; echo tool-done . After it finishes, reply with one short sentence listing every message you received while it ran.",
+      "steer"
+    );
+    await rec.until(executing);
+    const reports = ["A", "B", "C", "D"];
+    await Promise.all(
+      reports.map((name) =>
+        runtime.submit(
+          `report-${name}`,
+          `Report ${name}: checked module ${name}, no problems.`,
+          "steer",
+          {
+            sender: {
+              kind: "agent",
+              sessionId: peerSession,
+              title: `Worker ${name}`,
+            },
+          }
+        )
+      )
+    );
+    await runtime.submit("user-steer", "User: also mention BLUE.", "steer");
+    await runtime.submit(
+      "deferred",
+      "Reply with only the word LATER.",
+      "queue"
+    );
+    await rec.until(userMessage("deferred"));
+    await rec.until(turnDone);
+    const { events } = rec;
+    const toolResult = indexOf(events, (e) => e.type === "tool_result");
+    const steerIds = [...reports.map((name) => `report-${name}`), "user-steer"];
+    const delivered = steerIds.map((id) => indexOf(events, userMessage(id)));
+    const firstReply = events.findIndex(
+      (e, index) =>
+        index > toolResult &&
+        e.type === "message" &&
+        e.message.role === "assistant" &&
+        e.message.text !== ""
+    );
+    const deferred = indexOf(events, userMessage("deferred"));
+    const senders = steerIds.map((id) => {
+      const found = events.find(userMessage(id));
+      return found?.type === "message"
+        ? (found.message.sender?.kind ?? null)
+        : "missing";
+    });
+    expect({
+      allAfterTool: delivered.every((index) => index > toolResult),
+      batchedBeforeReply: delivered.every(
+        (index) => index > -1 && index < firstReply
+      ),
+      deferredAfterReply: deferred > firstReply,
+      senders,
+      states: [...steerIds, "deferred"].map(
+        (id) => runtime.queue.get(id)?.state
+      ),
+    }).toStrictEqual({
+      allAfterTool: true,
+      batchedBeforeReply: true,
+      deferredAfterReply: true,
+      senders: ["agent", "agent", "agent", "agent", null],
+      states: ["sent", "sent", "sent", "sent", "sent", "sent"],
+    });
+    await Promise.all([runtime.close(), peer.close()]);
+  }, 300_000);
+
+  it("blocks on MCP load, adds hidden context without a turn, and asks ExitSpecMode in Spec mode", async () => {
+    const dir = await workspace();
+    const rec = recorder();
+    const exits: string[] = [];
+    const runtime = makeRuntime(dir, supervisorFor(dir), rec, {
+      agentId: "spec-main",
+      blockOnMcpLoad: true,
+      mcpServers: [
+        createRoleToolServer(
+          "orchestrator",
+          "spec-main",
+          {} as unknown as RoleToolHandlers
+        ),
+      ],
+      onPermission: (ask) => {
+        for (const use of ask.toolUses) {
+          if (use.toolName === "ExitSpecMode") {
+            exits.push(String(use.details.plan ?? ""));
+          }
+        }
+        return Promise.resolve(true);
+      },
+      role: "orchestrator",
+    });
+    await runtime.start();
+    await runtime.addContext("ctx-1", "The project codename is PELICAN.");
+    await sleep(3000);
+    const turnsAfterContext = rec.events.filter(turnDone).length;
+    await runtime.setInteractionMode("spec");
+    await runtime.submit(
+      "spec-1",
+      "Plan creating codename.txt that contains the project codename. Keep the plan to one line, present it for approval, then once approved create the file and reply DONE.",
+      "steer"
+    );
+    const file = path.join(dir, "codename.txt");
+    const written = await pollUntil(
+      async () => (existsSync(file) ? await readFile(file, "utf-8") : ""),
+      (text) => text.includes("PELICAN"),
+      Date.now() + 240_000,
+      1000
+    );
+    expect({
+      exitRequested: exits.length > 0,
+      file: written.includes("PELICAN"),
+      turnsAfterContext,
+    }).toStrictEqual({ exitRequested: true, file: true, turnsAfterContext: 0 });
+    await runtime.close();
+  }, 300_000);
+
   it("changes placement and deletes queued messages natively", async () => {
     const dir = await workspace();
     const rec = recorder();
@@ -357,13 +490,13 @@ describe.runIf(process.env.MISSIONS_LIVE === "1")("live Droid runner", () => {
           return Promise.resolve("Todos saved");
         },
       } as unknown as RoleToolHandlers;
-      let planApproved = false;
+      let planMode = true;
       const context = (): AgentContext => ({
         autonomy: "high",
         epoch: 0,
         fenced: false,
         missionId: "m",
-        planApproved,
+        planMode,
         projectId: "p",
         role: "worker",
         workspacePath: dir,
@@ -400,7 +533,7 @@ describe.runIf(process.env.MISSIONS_LIVE === "1")("live Droid runner", () => {
         todos: todos.length,
       }).toStrictEqual({ noteWritten: false, todos: 1 });
 
-      planApproved = true;
+      planMode = false;
       await runtime.submit(
         "write",
         "The plan is approved now. Use the Create tool to create note.txt containing hi, then reply DONE.",

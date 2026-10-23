@@ -1,9 +1,9 @@
 "use client";
 
-import type { DeliveryMode } from "@missions/protocol/common";
+import type { DeliveryMode, ExecutionMode } from "@missions/protocol/common";
 import type { MissionStatus } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
-import { useId, useMemo, useSyncExternalStore } from "react";
+import { useId, useMemo, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 
 import { ArrowUpIcon, AtIcon, PaperclipIcon } from "@/components/mission/icons";
@@ -12,14 +12,21 @@ import { QueueTray, useVisibleQueue } from "@/components/mission/queue-tray";
 import { reportMutationError } from "@/components/mission/report-error";
 import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { AutonomyChip } from "@/components/missions/autonomy-chip";
+import { ExecutionModeChip } from "@/components/missions/execution-mode-chip";
 import { Textarea } from "@/components/ui/input";
 import { Kbd, KbdSizeContext } from "@/components/ui/kbd";
 import { Hint } from "@/components/ui/tooltip";
 import { nextAutonomy } from "@/lib/autonomy";
 import { canResume, isMissionActive } from "@/lib/format";
 import { missionCapabilities } from "@/lib/mission/capabilities";
+import {
+  effectiveMode,
+  modeStatus,
+  requestedMode,
+} from "@/lib/mission/execution-mode";
 import { MessageDraft } from "@/lib/mission/message-draft";
 import type { MessageDelivery } from "@/lib/mission/message-draft";
+import { markReceipt, markSubmit } from "@/lib/perf-marks";
 
 const UNSUPPORTED = "Attachments and mentions are not supported yet.";
 
@@ -82,6 +89,10 @@ export const MissionComposer = () => {
   const capabilities = missionCapabilities(mission.status);
   const disabled = !capabilities.message;
   const queued = useVisibleQueue().length > 0;
+  // Null follows the mission's mode; a pick applies to the next message only.
+  const [modeChoice, setModeChoice] = useState<ExecutionMode | null>(null);
+  const selectedMode = modeChoice ?? effectiveMode(mission);
+  const status = modeStatus(mission);
 
   // Not single-flight: a second message typed while the first is in flight
   // is a separate intent and must not be dropped.
@@ -90,8 +101,12 @@ export const MissionComposer = () => {
       commands.run("message", delivery.input, delivery.occurrence),
     onError: (error, delivery) => {
       draft.restore(delivery);
+      if (delivery.input.executionMode) {
+        setModeChoice(delivery.input.executionMode);
+      }
       return reportMutationError(error, refresh, "Message not sent");
     },
+    onSuccess: (item, delivery) => markReceipt(item.id, delivery.occurrence),
   });
 
   const autonomy = useMissionCommand("update", "Could not change autonomy");
@@ -102,8 +117,10 @@ export const MissionComposer = () => {
     if (disabled) {
       return;
     }
-    const delivery = draft.take(mode);
+    const delivery = draft.take(mode, requestedMode(mission, selectedMode));
     if (delivery) {
+      markSubmit(delivery.occurrence);
+      setModeChoice(null);
       send.mutate(delivery);
     }
   };
@@ -155,6 +172,13 @@ export const MissionComposer = () => {
             onChange={changeAutonomy}
             value={mission.autonomy}
           />
+          <ExecutionModeChip
+            disabled={disabled}
+            onChange={(next) =>
+              setModeChoice(next === effectiveMode(mission) ? null : next)
+            }
+            value={selectedMode}
+          />
           <span className="flex-1" />
           <Hint label={working ? "Steer now · ⌥↵ to queue" : "Send · ↵"}>
             <button
@@ -171,6 +195,14 @@ export const MissionComposer = () => {
           </Hint>
         </div>
       </div>
+      {status ? (
+        <p
+          className="px-card text-xs leading-sm font-book tracking-tight text-info md:hidden"
+          data-testid="mode-status"
+        >
+          {status}
+        </p>
+      ) : null}
       {queued && working ? <QueueHints /> : null}
     </div>
   );

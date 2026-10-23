@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   deliveredRequestIds,
+  deliveryOf,
   goalRequestId,
+  isEditable,
+  isRetryable,
   QUEUE_LINGER_MS,
   showGoalBubble,
   visibleQueue,
@@ -21,12 +24,18 @@ const entry = (
   agentId: "a",
   createdAt: iso(NOW - 60_000 + (id.codePointAt(0) ?? 0)),
   error: null,
+  executionMode: null,
   id,
   missionId: "m",
   mode: "queue",
+  origin: "user",
+  purpose: "message",
   replacedById,
   replacesId: null,
+  retryOf: null,
   revision: 1,
+  sender: null,
+  sequence: 0,
   state,
   text: id,
   updatedAt: iso(NOW - updatedAgoMs),
@@ -69,7 +78,10 @@ const userItem = (requestId: string | null): TranscriptItem => ({
   isError: false,
   kind: "user",
   missionId: "m",
+  purpose: null,
+  recipient: null,
   requestId,
+  sender: null,
   seq: 1,
   text: "hello",
   toolName: null,
@@ -90,5 +102,49 @@ describe("transcript dedupe", () => {
     expect(showGoalBubble("m", new Set(), false)).toBeTruthy();
     expect(showGoalBubble("m", new Set([goal]), false)).toBeFalsy();
     expect(showGoalBubble("m", new Set(), true)).toBeFalsy();
+  });
+});
+
+describe("queue delivery", () => {
+  it("hides retried originals, daemon items, and agent items that delivered", () => {
+    const items = [
+      entry("a", "failed"),
+      { ...entry("b", "queued"), retryOf: "a" },
+      { ...entry("c", "queued"), origin: "daemon" as const },
+      { ...entry("d", "queued"), origin: "agent" as const },
+      { ...entry("e", "unknown"), origin: "agent" as const },
+    ];
+    expect(visibleQueue(items, NOW).map((item) => item.id)).toStrictEqual([
+      "b",
+      "e",
+    ]);
+  });
+
+  it("keeps accepted user items editable but not agent items", () => {
+    expect(isEditable(entry("a", "accepted"))).toBeTruthy();
+    expect(isEditable(entry("a", "submitting"))).toBeFalsy();
+    expect(
+      isEditable({ ...entry("a", "queued"), origin: "agent" })
+    ).toBeFalsy();
+    expect(isRetryable(entry("a", "unknown"))).toBeTruthy();
+    expect(isRetryable(entry("a", "queued"))).toBeFalsy();
+  });
+
+  it("follows retries to the newest attempt", () => {
+    const queue = {
+      a: entry("a", "failed"),
+      b: { ...entry("b", "unknown"), retryOf: "a" },
+      c: { ...entry("c", "sent"), retryOf: "b" },
+      d: entry("d", "removed"),
+    };
+    expect(deliveryOf(queue, "a")).toBe("sent");
+    expect(deliveryOf({ a: queue.a, b: queue.b }, "a")).toBe("unknown");
+    expect(deliveryOf(queue, "d")).toBe("failed");
+    expect(deliveryOf({ x: entry("x", "accepted") }, "x")).toBe("pending");
+  });
+
+  it("has no delivery state for an unloaded queue item", () => {
+    expect(deliveryOf({}, "missing")).toBeNull();
+    expect(deliveryOf({}, null)).toBeNull();
   });
 });
