@@ -37,6 +37,11 @@ const shutdown = () => {
   server.close(() => {
     void daemon.close().then(() => process.exit(0));
   });
+  // Event streams never go idle, so close() alone would wait on them forever
+  // and browsers would never learn the daemon is gone.
+  if ("closeAllConnections" in server) {
+    server.closeAllConnections();
+  }
 };
 
 process.on("SIGINT", shutdown);
