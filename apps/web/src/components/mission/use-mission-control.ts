@@ -1,45 +1,26 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
+
 import { useMission } from "@/components/mission/mission-context";
-import { reportMutationError } from "@/components/mission/report-error";
-import { api } from "@/lib/api/endpoints";
-import {
-  useOperationIds,
-  useSingleFlightMutation,
-} from "@/lib/api/use-operation";
+import { useMissionCommand } from "@/components/mission/use-mission-command";
 
-/** Pause and Resume, bound to the mission revision the user saw. */
+/** Every header/banner subscribes to the same synchronous mission admission. */
 export const useMissionControl = () => {
-  const { applyLocal, live, missionId, refresh } = useMission();
-  const ops = useOperationIds();
-  const { revision } = live.mission;
-
-  const control = useSingleFlightMutation({
-    mutationFn: (action: "pause" | "resume") => {
-      const body = {
-        expectedRevision: revision,
-        operationId: ops.idFor(`${action}:${revision}`),
-      };
-      return action === "pause"
-        ? api.pauseMission(missionId, body)
-        : api.resumeMission(missionId, body);
-    },
-    onError: (error, action) =>
-      reportMutationError(
-        error,
-        refresh,
-        action === "pause" ? "Could not pause" : "Could not resume"
-      ),
-    onSuccess: (value) => {
-      ops.settle();
-      applyLocal({ kind: "mission", value });
-    },
-  });
-
+  const { commands, live } = useMission();
+  const pending = useSyncExternalStore(
+    commands.subscribe,
+    commands.pendingControl,
+    commands.pendingControl
+  );
+  const pause = useMissionCommand("pause", "Could not pause");
+  const resume = useMissionCommand("resume", "Could not resume");
+  const body = () => ({ expectedRevision: live.mission.revision });
   return {
-    pause: () => control.mutate("pause"),
-    pausing: control.isPending && control.variables === "pause",
-    resume: () => control.mutate("resume"),
-    resuming: control.isPending && control.variables === "resume",
+    pause: () => pause.mutate(body()),
+    pausing: pending === "pause",
+    pending: pending !== null,
+    resume: () => resume.mutate(body()),
+    resuming: pending === "resume",
   };
 };

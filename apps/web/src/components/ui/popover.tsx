@@ -62,7 +62,7 @@ export const PopoverSeparator = ({
 export const PopoverNote = ({ className, ...props }: ComponentProps<"p">) => (
   <p
     className={cn(
-      "px-md pt-sm pb-xs text-xs leading-sm font-book tracking-tight text-text-tertiary",
+      "shrink-0 px-md pt-sm pb-xs text-xs leading-sm font-book tracking-tight text-text-tertiary",
       className
     )}
     {...props}

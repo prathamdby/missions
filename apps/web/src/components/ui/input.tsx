@@ -10,6 +10,8 @@ const fieldFocus =
   "focus-visible:shadow-[0_0_0_1px_var(--color-focus),0_0_0_4px_var(--color-accent-muted)]";
 const groupFocus =
   "focus-within:shadow-[0_0_0_1px_var(--color-focus),0_0_0_4px_var(--color-accent-muted)] has-[input[aria-invalid=true]]:shadow-[0_0_0_1px_var(--color-danger),0_0_0_4px_var(--color-danger-muted)] has-[input:disabled]:bg-surface has-[input:disabled]:shadow-[inset_0_0_0_1px_var(--color-border)]";
+const publishChrome =
+  "w-full rounded-sm bg-surface px-lg py-control text-sm leading-chat font-book tracking-tight text-text outline-none ring-1 ring-border placeholder:text-text-tertiary focus-visible:ring-border-strong";
 
 type InputProps = Omit<ComponentProps<"input">, "size"> & {
   leading?: ReactNode;
@@ -19,6 +21,7 @@ type InputProps = Omit<ComponentProps<"input">, "size"> & {
   size?: "md" | "touch";
   /** `sunken` sits darker than its container, as fields inside Paper dialogs do. */
   surface?: "raised" | "sunken";
+  variant?: "field" | "publish";
 };
 
 export const Input = ({
@@ -29,21 +32,26 @@ export const Input = ({
   surface = "raised",
   trailing,
   type = "text",
+  variant = "field",
   ...props
 }: InputProps) => {
   const text = mono ? "font-mono text-xs" : "";
   const fill = surface === "sunken" ? "bg-surface" : "";
-  const box = size === "touch" ? "h-10 px-lg" : "h-8 px-[10px]";
+  const box = size === "touch" ? "h-10 px-lg" : "h-8 px-control";
   if (leading === undefined && trailing === undefined) {
     return (
       <input
         className={cn(
-          fieldChrome,
-          fieldState,
-          fieldFocus,
-          box,
-          fill,
-          "w-full min-w-0 outline-none placeholder:text-text-tertiary",
+          variant === "publish"
+            ? publishChrome
+            : cn(
+                fieldChrome,
+                fieldState,
+                fieldFocus,
+                box,
+                fill,
+                "w-full min-w-0 outline-none placeholder:text-text-tertiary"
+              ),
           text,
           className
         )}
@@ -56,10 +64,9 @@ export const Input = ({
   return (
     <div
       className={cn(
-        fieldChrome,
-        groupFocus,
-        box,
-        fill,
+        variant === "publish"
+          ? cn(publishChrome, "focus-within:ring-border-strong")
+          : cn(fieldChrome, groupFocus, box, fill),
         "flex w-full min-w-0 items-center gap-md text-text-tertiary [&_svg]:size-4 [&_svg]:shrink-0",
         className
       )}
@@ -80,25 +87,35 @@ export const Input = ({
 };
 
 type TextareaProps = ComponentProps<"textarea"> & {
-  variant?: "bare" | "field";
+  mono?: boolean;
+  /** Publish fields retain native rows and vertical resizing, not content sizing. */
+  size?: "md" | "sm";
+  variant?: "bare" | "field" | "publish";
 };
 
 export const Textarea = ({
   className,
+  mono = false,
+  size = "md",
   variant = "field",
   ...props
 }: TextareaProps) => (
   <textarea
     className={cn(
-      "field-sizing-content w-full min-w-0 resize-none text-sm placeholder:text-text-tertiary disabled:text-text-disabled",
-      variant === "field"
-        ? cn(
-            fieldChrome,
-            fieldState,
-            fieldFocus,
-            "min-h-24 px-[10px] py-md leading-lg outline-none"
-          )
-        : "min-h-6 bg-transparent leading-chat font-book tracking-tight text-text outline-none focus-visible:shadow-none",
+      variant === "publish"
+        ? cn(publishChrome, "resize-y", size === "sm" ? "min-h-20" : "min-h-24")
+        : cn(
+            "field-sizing-content w-full min-w-0 resize-none text-sm placeholder:text-text-tertiary disabled:text-text-disabled",
+            variant === "field"
+              ? cn(
+                  fieldChrome,
+                  fieldState,
+                  fieldFocus,
+                  "min-h-24 px-control py-md leading-lg outline-none"
+                )
+              : "min-h-6 bg-transparent leading-chat font-book tracking-tight text-text outline-none focus-visible:shadow-none"
+          ),
+      mono && "font-mono text-xs leading-md",
       className
     )}
     data-slot="textarea"

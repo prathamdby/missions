@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
-import { lstat, open, readdir, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type {
   Changes,
+  ComparisonMode,
   DiffHunk,
   DiffLine,
   FileContent,
@@ -13,15 +13,23 @@ import type {
 } from "@missions/protocol/files";
 import type { WorkspaceBinding } from "@missions/protocol/workspaces";
 
-import { canonical, head, isInside, status } from "../git/repo";
-import { badRequest, forbidden } from "../lib/app-error";
+import {
+  canonical,
+  currentBranch,
+  head as headRevision,
+  isInside,
+  status,
+} from "../git/repo";
+import { badRequest, conflict, forbidden } from "../lib/app-error";
 import { git } from "../lib/exec";
+import { captureReview, checkedGit, mapReviewItems } from "./review-snapshot";
+import type { ReviewSnapshot } from "./review-snapshot";
 
 export const TEXT_LIMIT = 512 * 1024;
 const SNIFF_BYTES = 8192;
-const UNTRACKED_LIMIT = 256 * 1024;
 const FILE_LINE_BUDGET = 1500;
 const TOTAL_LINE_BUDGET = 15_000;
+const TOTAL_BYTE_BUDGET = 2 * 1024 * 1024;
 const DIR_LIMIT = 2000;
 
 const MEDIA_TYPES: Record<string, string> = {
@@ -84,6 +92,9 @@ export const resolveWorkspacePath = async (
   if (real && !isInside(realRoot, real)) {
     throw forbidden("Path resolves outside the mission folder");
   }
+  if (real && path.relative(realRoot, real).split(path.sep).includes(".git")) {
+    throw forbidden("Git internals are not browsable");
+  }
   return { abs, real, rel };
 };
 
@@ -102,7 +113,7 @@ const readHead = async (file: string, limit: number) => {
 };
 
 export const readWorkspaceFile = async (
-  binding: WorkspaceBinding,
+  binding: Pick<WorkspaceBinding, "path">,
   raw: string
 ): Promise<FileContent> => {
   const target = await resolveWorkspacePath(binding.path, raw);
@@ -228,10 +239,12 @@ const parseHunkLines = (lines: readonly string[]): ParsedPatch => {
         };
         oldNumber += 1;
         parsed.deletions += 1;
-      } else {
+      } else if (marker === " ") {
         entry = { kind: "context", newNumber, oldNumber, text: line.slice(1) };
         oldNumber += 1;
         newNumber += 1;
+      } else {
+        continue;
       }
       current.lines.push(entry);
     }
@@ -254,71 +267,122 @@ export const splitPatch = (patch: string): string[][] => {
 
 export const parsePatch = (lines: readonly string[]) => parseHunkLines(lines);
 
-const untrackedDiff = async (
-  root: string,
-  rel: string
-): Promise<{ hex: string; parsed: ParsedPatch }> => {
-  // Hash per file, not into the shared digest: these run concurrently and a
-  // shared digest would make the review hash depend on I/O timing.
-  const digest = createHash("sha256");
-  const file = path.join(root, rel);
-  const info = await lstat(file);
-  digest.update(`${rel}\0${info.size}\0${info.mtimeMs}\0`);
-  if (!info.isFile()) {
-    return {
-      hex: digest.digest("hex"),
-      parsed: { additions: 0, binary: true, deletions: 0, hunks: [] },
-    };
-  }
-  const buffer = await readHead(file, Math.min(info.size, UNTRACKED_LIMIT));
-  digest.update(buffer);
-  const empty = { additions: 0, binary: false, deletions: 0, hunks: [] };
-  if (isBinary(buffer)) {
-    return {
-      hex: digest.digest("hex"),
-      parsed: { ...empty, binary: true },
-    };
-  }
-  const text = buffer.toString("utf-8");
-  const lines = text.endsWith("\n")
-    ? text.slice(0, -1).split("\n")
-    : text.split("\n");
-  if (text === "") {
-    return { hex: digest.digest("hex"), parsed: empty };
-  }
-  return {
-    hex: digest.digest("hex"),
-    parsed: parseHunkLines([
-      `@@ -0,0 +1,${lines.length} @@`,
-      ...lines.map((line) => `+${line}`),
-    ]),
-  };
-};
-
-const budget = (parsed: ParsedPatch, remaining: number) => {
+const budget = (
+  parsed: ParsedPatch,
+  remaining: number,
+  remainingBytes: number
+) => {
   const limit = Math.min(FILE_LINE_BUDGET, remaining);
+  const byteLimit = Math.min(TEXT_LIMIT, remainingBytes);
   let used = 0;
+  let bytes = 0;
+  let byteCut = false;
   const hunks: DiffHunk[] = [];
   for (const hunk of parsed.hunks) {
-    if (used >= limit) {
-      break;
+    const lines: DiffLine[] = [];
+    for (const line of hunk.lines) {
+      if (used >= limit || bytes >= byteLimit) {
+        break;
+      }
+      const buffer = Buffer.from(line.text);
+      const available = byteLimit - bytes;
+      const text = buffer.subarray(0, available).toString("utf-8");
+      byteCut ||= buffer.length > available;
+      lines.push({ ...line, text });
+      bytes += Math.min(buffer.length, available);
+      used += 1;
     }
-    const lines = hunk.lines.slice(0, limit - used);
-    used += lines.length;
-    hunks.push({ header: hunk.header, lines });
+    if (lines.length > 0) {
+      hunks.push({ header: hunk.header, lines });
+    }
   }
   const total = parsed.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);
-  return { hunks, truncated: used < total, used };
+  return { bytes, hunks, truncated: byteCut || used < total, used };
 };
 
-const untrackedPaths = async (root: string) => {
-  const result = await git(root, [
-    "ls-files",
-    "--others",
-    "--exclude-standard",
+const patchCounts = (raw: string): ParsedPatch => {
+  const parsed: ParsedPatch = {
+    additions: 0,
+    binary: false,
+    deletions: 0,
+    hunks: [],
+  };
+  const records = raw.split("\0");
+  let position = 0;
+  while (position < records.length) {
+    const record = records[position] ?? "";
+    if (!record) {
+      break;
+    }
+    const [additions, deletions, ...name] = record.split("\t");
+    parsed.binary ||= additions === "-" || deletions === "-";
+    parsed.additions += Number(additions === "-" ? 0 : additions);
+    parsed.deletions += Number(deletions === "-" ? 0 : deletions);
+    // A rename's empty pathname is followed by two NUL-delimited names.
+    position += name.join("\t") === "" ? 3 : 1;
+  }
+  return parsed;
+};
+
+/** Never collect an unbounded patch merely to cut it down for the browser. */
+const previewDiff = async (
+  root: string,
+  from: string,
+  to: string,
+  paths: string[]
+) => {
+  const options = [
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "-M",
+  ];
+  const counts = await checkedGit(root, [
+    ...options,
+    "--numstat",
     "-z",
+    from,
+    to,
+    "--",
+    ...paths,
   ]);
-  return result.ok ? result.stdout.split("\0").filter(Boolean) : [];
+  if (!counts) {
+    return { empty: true, parsed: patchCounts(""), truncated: false };
+  }
+  const sizes = await Promise.all(
+    [from, to].map((tree) =>
+      checkedGit(root, [
+        "ls-tree",
+        "-r",
+        "-z",
+        "--format=%(objectsize)",
+        tree,
+        "--",
+        ...paths,
+      ])
+    )
+  );
+  const oversized = sizes.some((raw) =>
+    raw.split("\0").some((size) => Number(size) > TEXT_LIMIT)
+  );
+  if (oversized) {
+    const parsed = patchCounts(counts);
+    return { empty: false, parsed, truncated: !parsed.binary };
+  }
+  const patch = await checkedGit(root, [
+    ...options,
+    "--unified=3",
+    from,
+    to,
+    "--",
+    ...paths,
+  ]);
+  return {
+    empty: false,
+    parsed: parseHunkLines(splitPatch(patch).flat()),
+    truncated: false,
+  };
 };
 
 /**
@@ -326,95 +390,100 @@ const untrackedPaths = async (root: string) => {
  * untracked files. The hash binds a commit approval to exactly this review.
  */
 export const workspaceChanges = async (
-  binding: WorkspaceBinding
+  binding: WorkspaceBinding,
+  captured?: ReviewSnapshot
 ): Promise<Changes> => {
+  const snapshot = captured ?? (await captureReview(binding));
   const root = binding.path;
-  const base = binding.startRevision;
-  const digest = createHash("sha256");
-  const currentHead = await head(root);
-  digest.update(`${base ?? ""}\0${currentHead ?? ""}\0`);
-  let tracked: NameStatus[] = [];
-  let patches: string[][] = [];
-  if (base) {
-    const args = [
-      "-c",
-      "core.quotePath=false",
-      "diff",
-      "--no-color",
-      "--no-ext-diff",
-      "-M",
-      base,
-    ];
-    const [names, patch] = await Promise.all([
-      git(root, [...args, "--name-status", "-z", "--"]),
-      git(root, [...args, "--unified=3", "--"]),
-    ]);
-    tracked = names.ok ? parseNameStatus(names.stdout) : [];
-    patches = patch.ok ? splitPatch(patch.stdout) : [];
-    digest.update(names.stdout);
-    digest.update(patch.stdout);
-  }
-  const [untracked, dirtyEntries] = await Promise.all([
-    untrackedPaths(root),
-    status(root),
+  const empty = await checkedGit(
+    root,
+    ["hash-object", "-w", "-t", "tree", "--stdin"],
+    { input: "" }
+  );
+  const base = binding.startRevision ?? empty;
+  const current = snapshot.head ?? empty;
+  const names = async (from: string, to: string) =>
+    parseNameStatus(
+      await checkedGit(root, [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "-M",
+        "--name-status",
+        "-z",
+        from,
+        to,
+        "--",
+      ])
+    );
+  const [net, history, pending] = await Promise.all([
+    names(base, snapshot.tree),
+    names(base, current),
+    names(current, snapshot.tree),
   ]);
+  const inventory = new Map<string, NameStatus>();
+  for (const entry of [...net, ...pending, ...history]) {
+    if (!inventory.has(entry.path)) {
+      inventory.set(entry.path, entry);
+    }
+  }
+  for (const entry of snapshot.status) {
+    const previous = inventory.get(entry.path);
+    let entryStatus = previous?.status ?? "modified";
+    if (entry.code === "??") {
+      entryStatus = "untracked";
+    } else if (entry.oldPath) {
+      entryStatus = "renamed";
+    }
+    inventory.set(entry.path, {
+      oldPath: entry.oldPath ?? previous?.oldPath ?? null,
+      path: entry.path,
+      status: entryStatus,
+    });
+  }
   const dirty = new Set(
-    (dirtyEntries ?? []).flatMap((entry) =>
+    snapshot.status.flatMap((entry) =>
       entry.oldPath ? [entry.path, entry.oldPath] : [entry.path]
     )
   );
   const baseline = new Set(binding.baselineDirtyFiles);
   let remaining = TOTAL_LINE_BUDGET;
+  let remainingBytes = TOTAL_BYTE_BUDGET;
   const files: FileDiff[] = [];
-  for (const [index, entry] of tracked.entries()) {
-    const parsed = parseHunkLines(
-      patches.length === tracked.length ? (patches[index] ?? []) : []
-    );
-    const cut = budget(parsed, remaining);
+  const previews = await mapReviewItems(
+    [...inventory.values()].toSorted((a, b) => a.path.localeCompare(b.path)),
+    async (entry) => {
+      const paths = entry.oldPath ? [entry.oldPath, entry.path] : [entry.path];
+      let preview = await previewDiff(root, base, snapshot.tree, paths);
+      if (preview.empty && dirty.has(entry.path)) {
+        preview = await previewDiff(root, current, snapshot.tree, paths);
+      }
+      return { entry, paths, preview };
+    }
+  );
+  for (const { entry, preview, paths } of previews) {
+    const { parsed } = preview;
+    const cut = budget(parsed, remaining, remainingBytes);
     remaining -= cut.used;
+    remainingBytes -= cut.bytes;
     files.push({
       additions: parsed.additions,
       binary: parsed.binary,
-      committed: !dirty.has(entry.path),
+      committed: !paths.some((rel) => dirty.has(rel)),
       deletions: parsed.deletions,
       hunks: cut.hunks,
       oldPath: entry.oldPath,
       path: entry.path,
-      preExisting: baseline.has(entry.path),
+      preExisting: paths.some((rel) => baseline.has(rel)),
       status: entry.status,
-      truncated: cut.truncated,
+      truncated: cut.truncated || preview.truncated,
     });
   }
-  // Promise.all preserves input order, so the digest updates stay ordered.
-  const untrackedDiffs = await Promise.all(
-    untracked.map(async (rel) => ({
-      ...(await untrackedDiff(root, rel)),
-      rel,
-    }))
-  );
-  for (const { hex, parsed, rel } of untrackedDiffs) {
-    digest.update(hex);
-    const cut = budget(parsed, remaining);
-    remaining -= cut.used;
-    files.push({
-      additions: parsed.additions,
-      binary: parsed.binary,
-      committed: false,
-      deletions: 0,
-      hunks: cut.hunks,
-      oldPath: null,
-      path: rel,
-      preExisting: baseline.has(rel),
-      status: "untracked",
-      truncated: cut.truncated,
-    });
-  }
-  files.sort((a, b) => a.path.localeCompare(b.path));
   return {
-    baseRevision: base,
+    baseRevision: binding.startRevision,
     files,
-    hash: digest.digest("hex"),
-    head: currentHead,
+    hash: snapshot.hash,
+    head: snapshot.head,
     totals: {
       additions: files.reduce((sum, file) => sum + file.additions, 0),
       deletions: files.reduce((sum, file) => sum + file.deletions, 0),
@@ -424,6 +493,107 @@ export const workspaceChanges = async (
 };
 
 // -------------------------------------------------------------------- tree
+
+const committedSnapshot = async (
+  root: string,
+  mode: ComparisonMode
+): Promise<ReviewSnapshot> => {
+  const [branch, head] = await Promise.all([
+    currentBranch(root),
+    headRevision(root),
+  ]);
+  return {
+    branch,
+    entries: [],
+    hash: `view:${mode}:${head ?? "unborn"}`,
+    head,
+    index: "",
+    status: [],
+    tree: head ?? "",
+  };
+};
+
+/** Display comparisons never change the mission-start review used for publishing. */
+export const comparisonChanges = async (
+  binding: WorkspaceBinding,
+  mode: ComparisonMode
+): Promise<Changes> => {
+  const root = binding.path;
+  const snapshot =
+    mode === "uncommitted"
+      ? await captureReview(binding)
+      : await committedSnapshot(root, mode);
+  const empty = await checkedGit(
+    root,
+    ["hash-object", "-w", "-t", "tree", "--stdin"],
+    { input: "" }
+  );
+  const head = snapshot.head ?? empty;
+  let from = head;
+  let fromLabel = "HEAD";
+  let toLabel = "Working tree";
+  let mergeBase = false;
+  if (mode === "last_commit") {
+    if (!snapshot.head) {
+      throw conflict("This repository has no commits to compare");
+    }
+    const parent = await git(root, ["rev-parse", "--verify", "HEAD^"]);
+    from = parent.ok ? parent.stdout.trim() : empty;
+    fromLabel = parent.ok ? "HEAD^" : "Empty tree";
+    toLabel = "HEAD";
+  }
+  if (mode === "branch") {
+    const remoteHead = await git(root, [
+      "symbolic-ref",
+      "--quiet",
+      "refs/remotes/origin/HEAD",
+    ]);
+    const candidates = remoteHead.ok
+      ? [remoteHead.stdout.trim()]
+      : [
+          "refs/remotes/origin/main",
+          "refs/remotes/origin/master",
+          "refs/heads/main",
+          "refs/heads/master",
+        ];
+    const resolved = await Promise.all(
+      candidates.map(async (ref) => {
+        const result = await git(root, [
+          "rev-parse",
+          "--verify",
+          "--end-of-options",
+          `${ref}^{commit}`,
+        ]);
+        return result.ok ? ref : null;
+      })
+    );
+    const defaultRef = resolved.find((ref) => ref !== null);
+    if (!defaultRef || !snapshot.head) {
+      throw conflict(
+        "The default branch is unavailable locally. Fetch it before comparing."
+      );
+    }
+    const mergeBaseRevision = await checkedGit(root, [
+      "merge-base",
+      defaultRef,
+      snapshot.head,
+    ]);
+    from = mergeBaseRevision.trim();
+    fromLabel = defaultRef.replace(/^refs\/(?:remotes|heads)\//u, "");
+    toLabel = snapshot.branch ?? "HEAD";
+    mergeBase = true;
+  }
+  const reviewed =
+    mode === "uncommitted" ? snapshot : { ...snapshot, status: [], tree: head };
+  const changes = await workspaceChanges(
+    { ...binding, baselineDirtyFiles: [], startRevision: from },
+    reviewed
+  );
+  return {
+    ...changes,
+    comparison: { from: fromLabel, mergeBase, mode, to: toLabel },
+  };
+};
 
 const changeMap = async (binding: WorkspaceBinding) => {
   const map = new Map<string, ChangeKind>();
@@ -439,12 +609,19 @@ const changeMap = async (binding: WorkspaceBinding) => {
       "-z",
       "--",
     ]);
-    for (const entry of names.ok ? parseNameStatus(names.stdout) : []) {
+    if (!names.ok) {
+      throw badRequest("Could not read the mission change inventory");
+    }
+    for (const entry of parseNameStatus(names.stdout)) {
       map.set(entry.path, entry.status);
     }
   }
-  for (const rel of await untrackedPaths(binding.path)) {
-    map.set(rel, "untracked");
+  const dirty = await status(binding.path);
+  if (!dirty) {
+    throw badRequest("Could not read the workspace status");
+  }
+  for (const entry of dirty) {
+    map.set(entry.path, entry.code === "??" ? "untracked" : "modified");
   }
   return map;
 };
@@ -457,10 +634,23 @@ export const listWorkspaceDir = async (
   if (!target.real) {
     throw badRequest("Folder not found");
   }
-  const [entries, changes] = await Promise.all([
+  const [allEntries, changes] = await Promise.all([
     readdir(target.real, { withFileTypes: true }),
     changeMap(binding),
   ]);
+  const safeEntries = await mapReviewItems(allEntries, async (entry) => {
+    if (!entry.isSymbolicLink()) {
+      return entry;
+    }
+    const rel = target.rel ? `${target.rel}/${entry.name}` : entry.name;
+    try {
+      await resolveWorkspacePath(binding.path, rel);
+      return entry;
+    } catch {
+      return null;
+    }
+  });
+  const entries = safeEntries.filter((entry) => entry !== null);
   const changedDirs = new Set<string>();
   for (const changed of changes.keys()) {
     const parts = changed.split("/");

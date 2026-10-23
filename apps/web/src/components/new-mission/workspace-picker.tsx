@@ -29,10 +29,7 @@ import {
 } from "@/components/ui/icons";
 import { tildePath } from "@/lib/format";
 
-export type WorkspaceChoice =
-  | { mode: "current_checkout" }
-  | { mode: "existing_worktree"; path: string }
-  | { mode: "new_worktree" };
+import type { WorkspaceChoice } from "./mission-draft";
 
 const LABEL = {
   current_checkout: "Current checkout",

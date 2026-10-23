@@ -78,12 +78,20 @@ export const openDatabase = (file: string): DatabaseHandle => {
     mkdirSync(path.dirname(file), { mode: 0o700, recursive: true });
   }
   const sqlite = new Database(file);
-  if (file !== ":memory:") {
-    chmodSync(file, 0o600);
-  }
   try {
+    if (file !== ":memory:") {
+      chmodSync(file, 0o600);
+    }
     const db = prepare(sqlite, file);
-    return { close: () => sqlite.close(), db, sqlite };
+    return {
+      close: () => {
+        if (sqlite.open) {
+          sqlite.close();
+        }
+      },
+      db,
+      sqlite,
+    };
   } catch (error) {
     sqlite.close();
     throw error;

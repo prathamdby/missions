@@ -162,7 +162,16 @@ describe("daemon", () => {
       const again = CloneJobSchema.parse(
         await bodyOf(clone(source, "clone-dup-1"))
       );
-      expect(again.error?.code).toBe("destination_exists");
+      const duplicate = await pollUntil(
+        async () =>
+          CloneJobSchema.parse(
+            await bodyOf(call(daemon, routes.cloneJob(again.id)))
+          ),
+        (current) => current.status !== "cloning",
+        Date.now() + 20_000,
+        50
+      );
+      expect(duplicate.error?.code).toBe("destination_exists");
       const missing = CloneJobSchema.parse(
         await bodyOf(clone(path.join(parent, "nope"), "clone-bad-1"))
       );

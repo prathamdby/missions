@@ -1,17 +1,13 @@
 "use client";
 
-import type {
-  PermissionDecision,
-  PermissionRequest,
-} from "@missions/protocol/missions";
+import type { PermissionRequest } from "@missions/protocol/missions";
 
 import { ChatCard } from "@/components/mission/chat-cards";
 import { CheckIcon, CloseIcon, ShieldIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
-import { reportMutationError } from "@/components/mission/report-error";
+import { usePermissionDecision } from "@/components/mission/use-permission-decision";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api/endpoints";
-import { useSingleFlightMutation } from "@/lib/api/use-operation";
+import { permissionDecisions } from "@/lib/mission/permissions";
 
 const titleOf = (request: PermissionRequest) => {
   if (request.kind === "publish") {
@@ -85,23 +81,14 @@ const ToolUse = ({ use }: { use: PermissionRequest["toolUses"][number] }) => (
 
 /** Paper SPM: pending tool or publish gate with Allow once / Always allow / Deny. */
 export const PermissionCard = ({ request }: { request: PermissionRequest }) => {
-  const { agentLabels, applyLocal, missionId, refresh } = useMission();
-  const decide = useSingleFlightMutation({
-    mutationFn: (decision: PermissionDecision) =>
-      api.decidePermission(missionId, request.id, {
-        decision,
-        epoch: request.epoch,
-      }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not send your decision"),
-    onSuccess: (value) => applyLocal({ kind: "permission", value }),
-  });
+  const { agentLabels } = useMission();
+  const decide = usePermissionDecision(request);
 
   if (request.status !== "pending") {
     return <ResolvedPermission request={request} />;
   }
 
-  const offerAlways = request.allowAlways && request.kind !== "publish";
+  const offerAlways = permissionDecisions(request).includes("always_allow");
   const requester = request.agentId ? agentLabels[request.agentId] : null;
   const pending = decide.isPending ? decide.variables : null;
   const detail = [request.reason, requester ? `Requested by ${requester}.` : ""]

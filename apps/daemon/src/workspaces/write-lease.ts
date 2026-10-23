@@ -11,6 +11,7 @@ interface Waiter {
   holder: string;
   resolve: (value: undefined) => void;
   reject: (error: Error) => void;
+  cleanup: () => void;
 }
 
 interface Lane {
@@ -53,6 +54,9 @@ export class WriteLeaseRegistry {
     holder: string,
     signal?: AbortSignal
   ): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(new LeaseAbortedError());
+    }
     const lane = this.#lane(workspace);
     if (lane.holder === null || lane.holder === holder) {
       const changed = lane.holder !== holder;
@@ -62,23 +66,26 @@ export class WriteLeaseRegistry {
       }
       return Promise.resolve();
     }
-    if (signal?.aborted) {
-      return Promise.reject(new LeaseAbortedError());
-    }
     const { promise, resolve, reject } = Promise.withResolvers<undefined>();
-    const waiter: Waiter = { holder, reject, resolve };
-    lane.waiters.push(waiter);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        const index = lane.waiters.indexOf(waiter);
-        if (index !== -1) {
-          lane.waiters.splice(index, 1);
-          reject(new LeaseAbortedError());
-        }
+    const waiter: Waiter = {
+      cleanup: () => {
+        /* No listener until queued below. */
       },
-      { once: true }
-    );
+      holder,
+      reject,
+      resolve,
+    };
+    const abort = () => {
+      const index = lane.waiters.indexOf(waiter);
+      if (index !== -1) {
+        lane.waiters.splice(index, 1);
+        waiter.cleanup();
+        reject(new LeaseAbortedError());
+      }
+    };
+    waiter.cleanup = () => signal?.removeEventListener("abort", abort);
+    lane.waiters.push(waiter);
+    signal?.addEventListener("abort", abort, { once: true });
     return promise;
   }
 
@@ -88,19 +95,33 @@ export class WriteLeaseRegistry {
       return false;
     }
     const next = lane.waiters.shift();
+    next?.cleanup();
     lane.holder = next?.holder ?? null;
+    if (!next) {
+      this.#lanes.delete(workspace);
+    }
     this.#onChange?.(workspace, lane.holder);
     next?.resolve(undefined);
     return true;
   }
 
-  /** Drops a holder everywhere and cancels its waits (agent closed or paused). */
-  forget(holder: string) {
-    for (const [workspace, lane] of this.#lanes) {
-      for (const waiter of lane.waiters.filter((w) => w.holder === holder)) {
+  /** Cancels queued acquisitions without releasing a still-running writer. */
+  cancelWaits(holder: string) {
+    for (const lane of this.#lanes.values()) {
+      for (const waiter of lane.waiters.filter(
+        (candidate) => candidate.holder === holder
+      )) {
         lane.waiters.splice(lane.waiters.indexOf(waiter), 1);
+        waiter.cleanup();
         waiter.reject(new LeaseAbortedError());
       }
+    }
+  }
+
+  /** Drops a confirmed-stopped holder everywhere and cancels its waits. */
+  forget(holder: string) {
+    this.cancelWaits(holder);
+    for (const [workspace, lane] of this.#lanes) {
       if (lane.holder === holder) {
         this.release(workspace, holder);
       }

@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 
 import {
   ChangesSchema,
+  ComparisonModeSchema,
   FileContentSchema,
   FileTreeSchema,
 } from "@missions/protocol/files";
@@ -11,12 +12,14 @@ import { routes } from "@missions/protocol/routes";
 import type { Context, Hono } from "hono";
 
 import type { ArtifactStore } from "../files/artifact-store";
+import type { SharedFiles } from "../files/shared-files";
 import {
   listWorkspaceDir,
+  comparisonChanges,
   readWorkspaceFile,
   workspaceChanges,
 } from "../files/workspace-files";
-import { notFound } from "../lib/app-error";
+import { badRequest, notFound } from "../lib/app-error";
 import type { MissionService } from "../missions/mission-service";
 import { param, reply } from "./json";
 
@@ -32,7 +35,8 @@ const contentDisposition = (name: string, inline: boolean) => {
 export const registerFileRoutes = (
   app: Hono,
   missions: MissionService,
-  artifacts: ArtifactStore
+  artifacts: ArtifactStore,
+  sharedFiles: SharedFiles
 ) => {
   const binding = (c: Context) => {
     const mission = missions.get(param(c, "missionId"));
@@ -42,21 +46,43 @@ export const registerFileRoutes = (
     return mission.workspace;
   };
 
-  app.get(routes.changes(M), async (c) =>
-    reply(c, ChangesSchema, await workspaceChanges(binding(c)))
-  );
+  app.get(routes.changes(M), async (c) => {
+    const mode = c.req.query("mode");
+    if (mode === undefined) {
+      return reply(c, ChangesSchema, await workspaceChanges(binding(c)));
+    }
+    const parsed = ComparisonModeSchema.safeParse(mode);
+    if (!parsed.success) {
+      throw badRequest("Unknown comparison mode");
+    }
+    return reply(
+      c,
+      ChangesSchema,
+      await comparisonChanges(binding(c), parsed.data)
+    );
+  });
   app.get(routes.files(M), async (c) =>
     reply(
       c,
       FileTreeSchema,
-      await listWorkspaceDir(binding(c), c.req.query("dir") ?? "")
+      c.req.query("scope") === "shared"
+        ? await sharedFiles.list(
+            missions.get(param(c, "missionId")).id,
+            c.req.query("dir") ?? ""
+          )
+        : await listWorkspaceDir(binding(c), c.req.query("dir") ?? "")
     )
   );
   app.get(routes.file(M), async (c) =>
     reply(
       c,
       FileContentSchema,
-      await readWorkspaceFile(binding(c), c.req.query("path") ?? "")
+      c.req.query("scope") === "shared"
+        ? await sharedFiles.read(
+            missions.get(param(c, "missionId")).id,
+            c.req.query("path") ?? ""
+          )
+        : await readWorkspaceFile(binding(c), c.req.query("path") ?? "")
     )
   );
   app.get(routes.artifact(M, ":artifactId"), async (c) => {

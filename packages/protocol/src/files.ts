@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+export const ComparisonModeSchema = z.enum([
+  "uncommitted",
+  "branch",
+  "last_commit",
+]);
+export type ComparisonMode = z.infer<typeof ComparisonModeSchema>;
+
 export const FileNodeSchema = z.object({
   /** Git status code relative to the mission start revision, if changed. */
   change: z
@@ -66,6 +73,14 @@ export type DiffLine = z.infer<typeof DiffLineSchema>;
 
 export const ChangesSchema = z.object({
   baseRevision: z.string().nullable(),
+  comparison: z
+    .object({
+      from: z.string(),
+      mergeBase: z.boolean(),
+      mode: ComparisonModeSchema,
+      to: z.string(),
+    })
+    .optional(),
   files: z.array(FileDiffSchema),
   /** Digest of the reviewed change set; commit approvals must echo it. */
   hash: z.string(),

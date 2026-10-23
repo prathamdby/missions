@@ -121,10 +121,12 @@
   --spacing-xl: 16px;
   --spacing-field: 18px; /* Off-grid step used in Paper dialogs: the gap between form fields and the dialog header's top padding. */
   --spacing-gutter: 20px; /* Off-grid step used in Paper mission screens: pane gutters and header side padding. */
+  --spacing-drawer-bottom: 21px; /* Off-grid step used in Paper JD1: navigation drawer bottom padding, below the safe-area inset. */
   --spacing-2xl: 24px;
   --spacing-section: 28px; /* Off-grid step used in Paper mission screens: gap between right panel sections. */
   --spacing-3xl: 32px;
   --spacing-group: 36px; /* Off-grid step used in Paper Z6J: the gap between settings groups. */
+  --spacing-dialog-hero: 40px; /* Off-grid step used in Paper dialogs: horizontal padding for centered empty and error states. */
   --spacing-4xl: 48px;
 
   --radius-xs: 3px; /* Inline code, tiny chips. */
@@ -136,6 +138,7 @@
   --radius-full: 9999px; /* Pills, avatars, status dots. */
 
   --shadow-button: inset 0 1px 0 #FFFFFF1F, 0 0 0 1px var(--color-border), 0 1px 2px var(--color-shadow); /* Secondary and icon buttons. */
+  --shadow-button-active: inset 0 1px 0 #FFFFFF1F, 0 0 0 1px var(--color-border-strong), 0 1px 2px var(--color-shadow); /* Paper J4J opened Select: replaces the button ring with border-strong while preserving its top highlight and drop shadow. */
   --shadow-sm: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border), 0 1px 2px var(--color-shadow), 0 2px 6px #0000003D; /* Cards, lists, panes. */
   --shadow-md: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border-strong), 0 2px 4px var(--color-shadow), 0 8px 20px #00000052; /* Composer, raised controls. */
   --shadow-composer-focus: inset 0 1px 0 var(--color-highlight), 0 0 0 1px var(--color-border-strong), 0 0 0 4px var(--color-accent-muted), 0 8px 20px #00000052; /* Composer while its field has focus (Paper PZ7): md with the drop layer swapped for an accent ring. */

@@ -27,8 +27,10 @@ shadcn semantic slots (`background`, `primary`, `muted`, …) alias Paper colors
 
 `pnpm check` runs Ultracite (Oxlint + Oxfmt) with all six `@shadcn/lint` rules at error, plus two project rules from `design/lint/plugin.ts` that apply to `apps/web`:
 
-- `missions-design/no-off-scale-spacing` rejects numeric spacing (`p-2`, `p-3.25`), arbitrary margins and gaps, and quarter-step sizing.
+- `missions-design/no-off-scale-spacing` rejects numeric spacing (`p-2`, `p-3.25`), arbitrary padding, margins and gaps (including inside authored primitives), and quarter-step sizing.
 - `missions-design/no-unauthorized-variables` rejects `var(--x)` and `(--x)` references that are not manifest tokens.
+
+Safe-area padding may use the exact form `pb-[max(env(safe-area-inset-bottom),var(--spacing-lg))]`: the utility must match the inset edge (`pt`/top, `pr`/right, `pb`/bottom, `pl`/left), and the floor must reference an existing named spacing token. This preserves device insets without permitting raw padding floors, arbitrary expressions, margins, or gaps.
 
 `pnpm design:check` also checks authored CSS (`design/contract/css.ts`): no `@theme` blocks, new custom properties, unknown or fallback `var()` references, raw colors, or raw values for spacing, type, radius, shadow, z-index, opacity, or motion.
 

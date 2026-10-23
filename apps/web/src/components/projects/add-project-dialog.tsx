@@ -1,153 +1,63 @@
 "use client";
 
-import type { CloneSource, Project } from "@missions/protocol/projects";
-import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { errorMessage } from "@/lib/api/api-error";
-import { api } from "@/lib/api/endpoints";
 import { useGithubAuth } from "@/lib/api/queries";
-import { queryKeys } from "@/lib/api/query-keys";
-import {
-  useOperationIds,
-  useSingleFlightMutation,
-} from "@/lib/api/use-operation";
-import { upsertById } from "@/lib/live/global-cache";
 
+import type { AddProjectSession } from "./add-project-session";
 import { CloneProgress } from "./clone-progress";
-import { DEFAULT_CLONE_PARENT, repoNameOf } from "./clone-target";
 import { FolderBrowser } from "./folder-browser";
 import { GithubPicker } from "./github-picker";
 import { UrlClone } from "./url-clone";
 
-export type AddProjectStep =
-  | { kind: "browse" }
-  | { kind: "cloning"; jobId: string; source: CloneSource }
-  | { kind: "github" }
-  | { kind: "pick_parent"; from: "github" | "url"; repoName: string }
-  | { kind: "url" };
-
-export type AddedVia = "clone" | "local";
-
 interface AddProjectDialogProps {
-  onAdded: (project: Project, via: AddedVia) => void;
-  onOpenChange: (open: boolean) => void;
-  open: boolean;
-  setStep: (step: AddProjectStep) => void;
-  step: AddProjectStep;
+  session: AddProjectSession;
+  state: ReturnType<AddProjectSession["getSnapshot"]>;
 }
 
-type DialogSize = "lg" | "md" | "prose" | "wide";
-
-const useDialogSize = (step: AddProjectStep, open: boolean): DialogSize => {
-  const auth = useGithubAuth(open && step.kind === "github");
-  switch (step.kind) {
-    case "browse":
-    case "pick_parent": {
-      return "lg";
-    }
-    case "github": {
-      return auth.data?.state === "signed_in" ? "wide" : "prose";
-    }
-    case "url": {
-      return "md";
-    }
-    default: {
-      return "prose";
-    }
+export const AddProjectDialog = ({ session, state }: AddProjectDialogProps) => {
+  const { cloneParent, error, github, notGitPath, open, pending, step, url } =
+    state;
+  const auth = useGithubAuth(
+    open && (step.kind === "github" || step.kind === "cloning")
+  );
+  let size: "lg" | "md" | "prose" | "wide" = "prose";
+  if (step.kind === "browse" || step.kind === "pick_parent") {
+    size = "lg";
+  } else if (step.kind === "github") {
+    size = auth.data?.state === "signed_in" ? "wide" : "prose";
+  } else if (step.kind === "url") {
+    size = "md";
   }
-};
-
-/** Add-project flows: browse (MHN, MW0), GitHub (NAA, NNV), URL (ONT), clone (NZJ, OBV). */
-export const AddProjectDialog = ({
-  onAdded,
-  onOpenChange,
-  open,
-  setStep,
-  step,
-}: AddProjectDialogProps) => {
-  const client = useQueryClient();
-  const addOps = useOperationIds();
-  const cloneOps = useOperationIds();
-  const [notGitPath, setNotGitPath] = useState<string | null>(null);
-  const [cloneParent, setCloneParent] = useState(DEFAULT_CLONE_PARENT);
-  const [url, setUrl] = useState("");
-  const size = useDialogSize(step, open);
-
-  const add = useSingleFlightMutation({
-    mutationFn: ({
-      initializeGit,
-      path,
-    }: {
-      initializeGit: boolean;
-      path: string;
-    }) =>
-      api.addProject({
-        initializeGit,
-        operationId: addOps.idFor(`${path}:${initializeGit}`),
-        path,
-      }),
-    onSuccess: (response) => {
-      addOps.settle();
-      if (response.status === "not_git") {
-        setNotGitPath(response.path);
-        return;
-      }
-      setNotGitPath(null);
-      client.setQueryData<Project[]>(queryKeys.projects, (list) =>
-        upsertById(list, response.project)
-      );
-      onAdded(response.project, "local");
-    },
-  });
-
-  const clone = useSingleFlightMutation({
-    mutationFn: (source: CloneSource) =>
-      api.clone({
-        destinationParent: cloneParent,
-        operationId: cloneOps.idFor(`${cloneParent}:${JSON.stringify(source)}`),
-        source,
-      }),
-    onSuccess: (job) => {
-      cloneOps.settle();
-      client.setQueryData(queryKeys.cloneJob(job.id), job);
-      setStep({ jobId: job.id, kind: "cloning", source: job.source });
-    },
-  });
-
-  const changeStep = (next: AddProjectStep) => {
-    add.reset();
-    clone.reset();
-    setStep(next);
-  };
-
-  const addError = add.error ? errorMessage(add.error) : null;
-  const cloneError = clone.error ? errorMessage(clone.error) : null;
+  const message = error ? errorMessage(error) : null;
 
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
+    <Dialog
+      onOpenChange={(next) => {
+        if (!next) {
+          session.close();
+        }
+      }}
+      open={open}
+    >
       <DialogContent size={size}>
         {step.kind === "browse" ? (
           <FolderBrowser
-            error={addError}
+            error={message}
             mode="add"
             notGitPath={notGitPath}
             onConfirm={(path, initializeGit) =>
-              add.mutate({ initializeGit, path })
+              session.add(path, initializeGit)
             }
-            pending={add.isPending}
+            pending={pending}
           />
         ) : null}
         {step.kind === "pick_parent" ? (
           <FolderBrowser
             error={null}
             mode="choose"
-            onCancel={() => changeStep({ kind: step.from })}
-            onConfirm={(path) => {
-              setCloneParent(path);
-              changeStep({ kind: step.from });
-            }}
+            onCancel={() => session.back()}
+            onConfirm={(path) => session.chooseParent(path)}
             pending={false}
             repoName={step.repoName}
             startPath={cloneParent}
@@ -155,52 +65,38 @@ export const AddProjectDialog = ({
         ) : null}
         {step.kind === "github" ? (
           <GithubPicker
-            error={cloneError}
-            onChangeParent={() =>
-              changeStep({
-                from: "github",
-                kind: "pick_parent",
-                repoName: "the repository",
-              })
-            }
-            onClone={(repo) => clone.mutate({ kind: "github", repo })}
-            onUseUrl={() => changeStep({ kind: "url" })}
+            auth={auth}
+            draft={github}
+            error={message}
+            onChangeDraft={(draft) => session.setGithub(draft)}
+            onChangeParent={() => session.pickParent()}
+            onClone={(repo) => session.clone({ kind: "github", repo })}
+            onUseUrl={() => session.chooseUrl()}
             parent={cloneParent}
-            pending={clone.isPending}
+            pending={pending}
           />
         ) : null}
         {step.kind === "url" ? (
           <UrlClone
-            error={cloneError}
-            onChangeParent={() =>
-              changeStep({
-                from: "url",
-                kind: "pick_parent",
-                repoName: url.trim()
-                  ? repoNameOf({ kind: "url", url: url.trim() })
-                  : "the repository",
-              })
-            }
-            onClone={(remote) => clone.mutate({ kind: "url", url: remote })}
-            onUrlChange={setUrl}
+            error={message}
+            onChangeParent={() => session.pickParent()}
+            onClone={(remote) => session.clone({ kind: "url", url: remote })}
+            onUrlChange={(remote) => session.setUrl(remote)}
             parent={cloneParent}
-            pending={clone.isPending}
+            pending={pending}
             url={url}
           />
         ) : null}
         {step.kind === "cloning" ? (
           <CloneProgress
             jobId={step.jobId}
-            onAdded={(project) => onAdded(project, "clone")}
-            onBack={() =>
-              changeStep({
-                kind: step.source.kind === "github" ? "github" : "url",
-              })
-            }
-            onRetry={() => clone.mutate(step.source)}
-            retryError={cloneError}
-            retrying={clone.isPending}
+            key={step.jobId}
+            onBack={() => session.back()}
+            onRetry={() => session.clone()}
+            retryError={message}
+            retrying={pending}
             source={step.source}
+            user={auth.data?.user ?? null}
           />
         ) : null}
       </DialogContent>

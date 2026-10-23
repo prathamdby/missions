@@ -1,12 +1,7 @@
 "use client";
 
-import type {
-  CloneJob,
-  CloneSource,
-  Project,
-} from "@missions/protocol/projects";
-import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import type { CloneJob, CloneSource } from "@missions/protocol/projects";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -26,8 +21,7 @@ import { Step, StepList } from "@/components/ui/step-list";
 import type { StepState } from "@/components/ui/step-list";
 import { Hint } from "@/components/ui/tooltip";
 import { errorMessage } from "@/lib/api/api-error";
-import { useCloneJob, useGithubAuth, useProjects } from "@/lib/api/queries";
-import { queryKeys } from "@/lib/api/query-keys";
+import { useCloneJob } from "@/lib/api/queries";
 import { tildePath } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 
@@ -386,7 +380,9 @@ const Failed = ({
   retryError,
   retrying,
   source,
+  user,
 }: {
+  user: string | null;
   destination: string;
   error: CloneJob["error"];
   onBack: () => void;
@@ -395,7 +391,6 @@ const Failed = ({
   retrying: boolean;
   source: CloneSource;
 }) => {
-  const auth = useGithubAuth(source.kind === "github");
   const code = error?.code ?? "failed";
   const command = cloneCommand(source, destination);
   const output = (error?.message ?? "").split("\n").filter(Boolean);
@@ -405,12 +400,7 @@ const Failed = ({
         <Callout
           appearance="strip"
           role="alert"
-          title={failureSummary(
-            code,
-            source,
-            auth.data?.user ?? null,
-            destination
-          )}
+          title={failureSummary(code, source, user, destination)}
           tone="danger"
         />
         <TerminalLog>
@@ -484,46 +474,26 @@ const CloneHeader = ({
 
 interface CloneProgressProps {
   jobId: string;
-  onAdded: (project: Project) => void;
   onBack: () => void;
   onRetry: () => void;
   retryError: string | null;
   retrying: boolean;
   source: CloneSource;
+  user: string | null;
 }
 
 /** NZJ while cloning, OBV on failure; hands off to OZS on success. */
 export const CloneProgress = ({
   jobId,
-  onAdded,
   onBack,
   onRetry,
   retryError,
   retrying,
   source,
+  user,
 }: CloneProgressProps) => {
-  const client = useQueryClient();
   const home = useHomeDir();
   const job = useCloneJob(jobId);
-  const projects = useProjects();
-  const projectId =
-    job.data?.status === "succeeded" ? job.data.projectId : null;
-  const project = projects.data?.find((entry) => entry.id === projectId);
-
-  // onAdded closes the dialog and toasts, so it must fire once per clone even if the parent re-renders.
-  const reported = useRef<string | null>(null);
-  useEffect(() => {
-    if (projectId === null || reported.current === projectId) {
-      return;
-    }
-    if (project) {
-      reported.current = projectId;
-      onAdded(project);
-    } else {
-      client.invalidateQueries({ queryKey: queryKeys.projects });
-    }
-  }, [client, onAdded, project, projectId]);
-
   const destination = job.data ? tildePath(job.data.destination, home) : "";
   const failed = job.data?.status === "failed";
   const lost = job.isError && !job.data;
@@ -560,6 +530,7 @@ export const CloneProgress = ({
           retryError={retryError}
           retrying={retrying}
           source={source}
+          user={user}
         />
       ) : null}
       {failed || lost ? null : (

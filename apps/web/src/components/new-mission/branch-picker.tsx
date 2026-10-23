@@ -144,7 +144,7 @@ export const BranchPicker = ({
     (branch) =>
       !needle || branch.name.toLowerCase().includes(needle.toLowerCase())
   );
-  const exact = (branches.data ?? []).some((branch) => branch.name === needle);
+  const exact = (branches.data ?? []).find((branch) => branch.name === needle);
   const base = value ?? defaultBranch ?? "main";
 
   const pick = (name: string) => {
@@ -195,8 +195,8 @@ export const BranchPicker = ({
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                const [first] = filtered;
-                if (first && (exact || !needle || first.name === needle)) {
+                const first = exact ?? filtered[0];
+                if (first && (exact || !needle)) {
                   pick(first.name);
                 } else {
                   create();

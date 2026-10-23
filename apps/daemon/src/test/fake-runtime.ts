@@ -1,4 +1,5 @@
 import type { DeliveryMode } from "@missions/protocol/common";
+import type { AgentModelSettings } from "@missions/protocol/missions";
 
 import type { RuntimeHandle } from "../missions/mission-service";
 import type { StopResult } from "../processes/process-supervisor";
@@ -15,6 +16,8 @@ export class FakeRuntime implements RuntimeHandle {
   readonly queue: NativeQueueTracker;
   readonly submitted: { id: string; text: string; mode: DeliveryMode }[] = [];
   sessionId: string | null = null;
+  model: AgentModelSettings;
+  readonly modelUpdates: AgentModelSettings[] = [];
   interrupts = 0;
   closed = false;
   /** PIDs that close() reports as still running. */
@@ -24,9 +27,22 @@ export class FakeRuntime implements RuntimeHandle {
 
   constructor(options: AgentRuntimeOptions) {
     this.options = options;
+    this.model = {
+      modelId: options.modelId,
+      reasoningEffort: options.reasoningEffort,
+    };
     this.queue = new NativeQueueTracker((entry) =>
       options.onEvent({ entry, type: "queue" })
     );
+  }
+
+  updateModel(choice: AgentModelSettings): Promise<AgentModelSettings> {
+    if (this.closed) {
+      return Promise.reject(new Error("Runtime is closed"));
+    }
+    this.model = choice;
+    this.modelUpdates.push(choice);
+    return Promise.resolve(choice);
   }
 
   start(resumeSessionId?: string): Promise<RuntimeStartResult> {

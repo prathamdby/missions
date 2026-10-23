@@ -111,6 +111,7 @@ export const itemsFromMessage = (
 
 interface PendingDelta {
   agentId: string;
+  generation: string;
   kind: "text" | "thinking";
   text: string;
 }
@@ -134,13 +135,14 @@ export class DeltaCoalescer {
     itemId: string,
     agentId: string,
     kind: "text" | "thinking",
-    text: string
+    text: string,
+    generation: string
   ) {
     const existing = this.#pending.get(itemId);
     if (existing) {
       existing.text += text;
     } else {
-      this.#pending.set(itemId, { agentId, kind, text });
+      this.#pending.set(itemId, { agentId, generation, kind, text });
     }
     this.#timer ??= setTimeout(() => this.flushAll(), this.#intervalMs);
   }
@@ -148,6 +150,14 @@ export class DeltaCoalescer {
   /** The authoritative item arrived: unsent preview text is no longer needed. */
   drop(itemId: string) {
     this.#pending.delete(itemId);
+  }
+
+  dropGeneration(generation: string) {
+    for (const [id, delta] of this.#pending) {
+      if (delta.generation === generation) {
+        this.#pending.delete(id);
+      }
+    }
   }
 
   flushAll() {

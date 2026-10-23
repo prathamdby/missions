@@ -1,23 +1,24 @@
 "use client";
 
-import type { TranscriptItem } from "@missions/protocol/missions";
 import { createContext, use } from "react";
 
 import type { MissionLiveState } from "@/lib/live/mission-state";
 import type { LocalEntity } from "@/lib/live/mission-store";
+import type { MissionCommands } from "@/lib/mission/commands";
 
 export type PanelTab = "changes" | "digest" | "files" | "overview";
 
 export interface MissionContextValue {
   agentLabels: Record<string, string>;
+  commands: MissionCommands;
   applyLocal: (entity: LocalEntity) => void;
   live: MissionLiveState;
+  loadOlder: (limit?: number) => Promise<boolean>;
   missionId: string;
-  prependTranscript: (
-    items: readonly TranscriptItem[],
-    hasMore: boolean
-  ) => void;
   refresh: () => Promise<boolean>;
+  sessionError: unknown;
+  selectedAgentId: string | null;
+  showAgent: (agentId: string) => void;
   /** Opens the details panel on a tab (docked or as a sheet). */
   showPanel: (tab: PanelTab) => void;
 }

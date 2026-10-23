@@ -1,14 +1,15 @@
 import { existsSync } from "node:fs";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { Project } from "@missions/protocol/projects";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { openDatabase } from "../db/database";
 import { OperationJournal } from "../db/journal";
 import { Store } from "../db/store";
 import { EventLog } from "../events/event-log";
+import * as execution from "../lib/exec";
 import { gitRepo, sh, tempDir } from "../test/fixtures";
 import {
   cleanupBinding,
@@ -54,6 +55,110 @@ describe(slugify, () => {
 });
 
 describe(WorkspaceService, () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("keeps a path whose canonical identity changed through a symlink", async () => {
+    const { project, service } = await setup();
+    const binding = await service.bind(
+      "symlink000",
+      project,
+      { baseBranch: "main", mode: "new_worktree" },
+      "symlink-op",
+      "x"
+    );
+    await rename(binding.path, `${binding.path}-moved`);
+    await symlink(`${binding.path}-moved`, binding.path);
+    await expect(
+      cleanupBinding(binding, { deleteBranch: true })
+    ).resolves.toMatchObject({ removed: false });
+    expect(existsSync(binding.path)).toBeTruthy();
+  });
+
+  it("never deletes a branch that advances between removal and ref deletion", async () => {
+    const { project, repo, service } = await setup();
+    const binding = await service.bind(
+      "cas00000",
+      project,
+      { baseBranch: "main", mode: "new_worktree" },
+      "cas-op",
+      "x"
+    );
+    const reviewedHead = sh(binding.path, ["rev-parse", "HEAD"]);
+    sh(repo, ["commit", "--allow-empty", "-qm", "external commit"]);
+    const newer = sh(repo, ["rev-parse", "HEAD"]);
+    const original = execution.git;
+    vi.spyOn(execution, "git").mockImplementation(
+      async (cwd, args, options) => {
+        if (args[0] === "update-ref" && args[1] === "-d") {
+          sh(repo, ["update-ref", `refs/heads/${binding.branch}`, newer]);
+        }
+        return await original(cwd, args, options);
+      }
+    );
+    await expect(
+      cleanupBinding(binding, { deleteBranch: true, mergedHead: reviewedHead })
+    ).resolves.toMatchObject({ branchDeleted: false, removed: true });
+    expect(sh(repo, ["rev-parse", `refs/heads/${binding.branch}`])).toBe(newer);
+  });
+
+  it("protects both endpoints of an existing rename and fails closed on status errors", async () => {
+    const { project, repo, service } = await setup();
+    sh(repo, ["mv", "README.md", "renamed.md"]);
+    const binding = await service.bind(
+      "rename-baseline",
+      project,
+      { acknowledgeDirty: true, mode: "current_checkout" },
+      "rename-op",
+      "x"
+    );
+    expect(binding.baselineDirtyFiles.toSorted()).toStrictEqual([
+      "README.md",
+      "renamed.md",
+    ]);
+    await writeFile(path.join(repo, ".git", "index"), "corrupt index");
+    await expect(
+      service.bind(
+        "bad-status",
+        project,
+        { acknowledgeDirty: true, mode: "current_checkout" },
+        "bad-status-op",
+        "x"
+      )
+    ).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("refuses cleanup after a branch switch or a changed canonical repository identity", async () => {
+    const { project, service } = await setup();
+    const binding = await service.bind(
+      "identity000",
+      project,
+      { baseBranch: "main", mode: "new_worktree" },
+      "identity-op",
+      "x"
+    );
+    sh(binding.path, ["switch", "-qc", "other"]);
+    await expect(
+      cleanupBinding(binding, {
+        deleteBranch: true,
+        mergedHead: sh(binding.path, ["rev-parse", "HEAD"]),
+      })
+    ).resolves.toMatchObject({ removed: false });
+    expect(existsSync(binding.path)).toBeTruthy();
+    sh(binding.path, ["switch", "-q", binding.branch ?? ""]);
+    await expect(
+      cleanupBinding(
+        { ...binding, repoRoot: "/different/repository" },
+        { deleteBranch: true }
+      )
+    ).resolves.toMatchObject({ removed: false });
+    await expect(
+      cleanupBinding(binding, {
+        deleteBranch: true,
+        expectedHead: "0".repeat(40),
+      })
+    ).resolves.toMatchObject({ removed: false });
+  });
+
   it("creates one owned worktree and branch for a new mission", async () => {
     const { project, root, service } = await setup();
     const binding = await service.bind(

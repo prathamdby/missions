@@ -1,19 +1,19 @@
 "use client";
 
 import type { PullRequestState } from "@missions/protocol/missions";
-import { useQueries } from "@tanstack/react-query";
 import Link from "next/link";
 
 import { PageHeader, PageTitle } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import type { BadgeTone } from "@/components/ui/badge";
+import { Callout } from "@/components/ui/callout";
 import { Dot } from "@/components/ui/dot";
 import { IconTile } from "@/components/ui/icon-tile";
 import { PullRequestIcon } from "@/components/ui/icons";
 import { ListCard, ListLabel, ListRow } from "@/components/ui/list-row";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api } from "@/lib/api/endpoints";
-import { useMissions, useProjects } from "@/lib/api/queries";
+import { errorMessage } from "@/lib/api/api-error";
+import { usePullRequestsQuery, useProjects } from "@/lib/api/queries";
 import { shortAge } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 
@@ -46,39 +46,20 @@ const CHECKS: Record<
 };
 
 const usePullRequests = () => {
-  const missions = useMissions();
+  const summaries = usePullRequestsQuery();
   const projects = useProjects();
-  const list = missions.data ?? [];
-  const snapshots = useQueries({
-    queries: list.map((mission) => ({
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        api.missionSnapshot(mission.id, signal),
-      queryKey: ["pull-requests", mission.id],
-      select: (snapshot: Awaited<ReturnType<typeof api.missionSnapshot>>) =>
-        snapshot.mission.publish.pr,
-      staleTime: MINUTE_MS,
-    })),
-  });
   const names = new Map(
     (projects.data ?? []).map((project) => [project.id, project.name])
   );
-  const rows: PullRequestRow[] = list.flatMap((mission, index) => {
-    const pr = snapshots[index]?.data;
-    return pr
-      ? [
-          {
-            missionId: mission.id,
-            pr,
-            projectName: names.get(mission.projectId) ?? "",
-            title: mission.title,
-          },
-        ]
-      : [];
-  });
-  const loading =
-    missions.isPending || snapshots.some((query) => query.isPending);
+  const rows: PullRequestRow[] = (summaries.data ?? []).map((summary) => ({
+    missionId: summary.missionId,
+    pr: summary.pr,
+    projectName: names.get(summary.projectId) ?? "",
+    title: summary.missionTitle,
+  }));
   return {
-    loading,
+    error: summaries.isError ? errorMessage(summaries.error) : null,
+    loading: summaries.isPending,
     rows: rows.toSorted((a, b) => b.pr.updatedAt.localeCompare(a.pr.updatedAt)),
   };
 };
@@ -150,7 +131,7 @@ const EmptyState = () => (
 /** Every pull request opened by a mission, newest activity first. */
 export const PullRequestsView = () => {
   const now = useNow(MINUTE_MS);
-  const { loading, rows } = usePullRequests();
+  const { error, loading, rows } = usePullRequests();
   const open = rows.filter((row) => row.pr.state === "open");
   const done = rows.filter((row) => row.pr.state !== "open");
 
@@ -168,7 +149,17 @@ export const PullRequestsView = () => {
               <Skeleton className="w-3/5" />
             </div>
           ) : null}
-          {!loading && rows.length === 0 ? <EmptyState /> : null}
+          {error ? (
+            <Callout
+              appearance="filled"
+              role="alert"
+              title="Could not load pull requests"
+              tone="danger"
+            >
+              {error}
+            </Callout>
+          ) : null}
+          {!error && !loading && rows.length === 0 ? <EmptyState /> : null}
           {open.length > 0 ? (
             <section className="flex flex-col">
               <ListLabel size="sidebar">Open · {open.length}</ListLabel>

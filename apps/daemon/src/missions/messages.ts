@@ -18,6 +18,7 @@ export const FENCED: ReadonlySet<MissionStatus> = new Set([
   "interrupted",
   "failed",
   "archived",
+  "completed",
 ]);
 export const ACTIVE: ReadonlySet<MissionStatus> = new Set([
   "setting_up",
@@ -58,10 +59,11 @@ export const resumePhase = (
   if (mission.summary !== null) {
     return "completed";
   }
-  if (plans.some((plan) => plan.status === "approved")) {
+  const [latest] = plans.toSorted((a, b) => b.revision - a.revision);
+  if (latest?.status === "approved") {
     return "running";
   }
-  if (plans.some((plan) => plan.status === "proposed")) {
+  if (latest?.status === "proposed") {
     return "awaiting_approval";
   }
   return "exploring";
@@ -108,7 +110,7 @@ export const handoffMessage = (
 export const resumedMessage = (interrupted: readonly Assignment[]) =>
   `[Missions] The mission was stopped and the user resumed it. ${
     interrupted.length > 0
-      ? `These assignments were interrupted and their Workers stopped: ${interrupted.map((a) => `${a.id} ("${a.title}")`).join(", ")}. Re-dispatch any that are still needed.`
+      ? `These assignments are being resumed using their original Worker sessions: ${interrupted.map((a) => `${a.id} ("${a.title}")`).join(", ")}. Do not re-dispatch them. If a saved session cannot load, its assignment fails and you will receive an error; ask the user before replacing it.`
       : "No assignments were interrupted."
   } Re-check the workspace before continuing.`;
 

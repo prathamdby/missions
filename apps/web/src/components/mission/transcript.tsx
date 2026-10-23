@@ -16,21 +16,15 @@ import { useMission } from "@/components/mission/mission-context";
 import { PermissionCard } from "@/components/mission/permission-card";
 import { PlanCard } from "@/components/mission/plan-card";
 import { QuestionCard } from "@/components/mission/question-card";
-import {
-  CommandCard,
-  EditCard,
-  isCommandCard,
-  isEditGroup,
-  isRanRow,
-  RanRow,
-} from "@/components/mission/tool-cards";
+import { CommandCard, EditCard, RanRow } from "@/components/mission/tool-cards";
 import { IndentRule, ToolRun } from "@/components/mission/tool-group";
 import { Callout } from "@/components/ui/callout";
 import { Markdown } from "@/components/ui/markdown";
 import { Spinner } from "@/components/ui/spinner";
-import { groupTodos } from "@/lib/mission/overview";
+import { todoProgress } from "@/lib/mission/overview";
 import { goalRequestId } from "@/lib/mission/queue";
-import type { TimelineEntry, ToolCall } from "@/lib/mission/timeline";
+import { transcriptRows } from "@/lib/mission/timeline";
+import type { TimelineEntry } from "@/lib/mission/timeline";
 
 /** Paper user bubble: right-aligned, 480px max, overlay surface. */
 export const UserMessage = ({ text }: { text: string }) => (
@@ -90,7 +84,7 @@ export const WorkspaceLine = () => {
 
 const PlanApproved = () => {
   const { live } = useMission();
-  const todos = groupTodos(live.todos, live.agents).main.length;
+  const todos = todoProgress(live.todos, live.agents).total;
   return (
     <EventLine icon={<CheckIcon />}>
       Plan approved
@@ -102,26 +96,6 @@ const PlanApproved = () => {
 const SystemLine = ({ text }: { text: string }) => (
   <EventLine icon={null}>{text}</EventLine>
 );
-
-type Row =
-  | { entry: TimelineEntry; id: string; kind: "entry" }
-  | { groups: ToolCall[][]; id: string; kind: "tools"; tail: boolean }
-  | {
-      calls: ToolCall[];
-      card: "command" | "edit" | "ran";
-      id: string;
-      kind: "card";
-    };
-
-const cardOf = (calls: readonly ToolCall[], running: boolean) => {
-  if (isCommandCard(calls, running)) {
-    return "command";
-  }
-  if (isRanRow(calls)) {
-    return "ran";
-  }
-  return isEditGroup(calls) ? "edit" : null;
-};
 
 const EntryBody = ({ entry }: { entry: TimelineEntry }) => {
   switch (entry.kind) {
@@ -175,49 +149,6 @@ const EntryBody = ({ entry }: { entry: TimelineEntry }) => {
   }
 };
 
-/** Worker narration and tool calls live in their assignment card, as in Paper S22. */
-const WORKER_HIDDEN = new Set<TimelineEntry["kind"]>([
-  "assistant",
-  "preview",
-  "thinking",
-  "tools",
-]);
-
-/**
- * Folds consecutive tool groups from one agent into a single run. Lone
- * commands and edits break out as their own cards.
- */
-const toRows = (entries: readonly TimelineEntry[], running: boolean) => {
-  const rows: Row[] = [];
-  for (const entry of entries) {
-    const last = rows.at(-1);
-    if (entry.kind !== "tools") {
-      rows.push({ entry, id: entry.id, kind: "entry" });
-      continue;
-    }
-    const card = cardOf(entry.calls, running);
-    if (card) {
-      rows.push({ calls: entry.calls, card, id: entry.id, kind: "card" });
-      continue;
-    }
-    if (last?.kind === "tools" && last.id.startsWith(`${entry.agentId}|`)) {
-      last.groups.push(entry.calls);
-      continue;
-    }
-    rows.push({
-      groups: [entry.calls],
-      id: `${entry.agentId}|${entry.id}`,
-      kind: "tools",
-      tail: false,
-    });
-  }
-  const lastRow = rows.at(-1);
-  if (lastRow?.kind === "tools") {
-    lastRow.tail = true;
-  }
-  return rows;
-};
-
 const isGoal = (item: TranscriptItem, missionId: string) =>
   item.kind === "user" && item.requestId === goalRequestId(missionId);
 
@@ -232,18 +163,10 @@ export const Transcript = ({
   entries: readonly TimelineEntry[];
   running: boolean;
 }) => {
-  const { live, missionId } = useMission();
-  const visible = entries.filter(
-    (entry) =>
-      !(
-        entry.agentId !== null &&
-        WORKER_HIDDEN.has(entry.kind) &&
-        live.agents[entry.agentId]?.role === "worker"
-      )
-  );
-  const rows = toRows(visible, running);
+  const { missionId } = useMission();
+  const rows = transcriptRows(entries, running);
   return (
-    <ol aria-label="Mission transcript" className="flex flex-col gap-section">
+    <ol aria-label="Mission transcript" className="flex flex-col gap-lg">
       {rows.map((row) => {
         if (row.kind === "card") {
           return (
@@ -275,7 +198,7 @@ export const Transcript = ({
         const { entry } = row;
         const goal = entry.kind === "user" && isGoal(entry.item, missionId);
         return (
-          <li className="flex min-w-0 flex-col gap-section" key={row.id}>
+          <li className="flex min-w-0 flex-col gap-lg" key={row.id}>
             <EntryBody entry={entry} />
             {goal ? <WorkspaceLine /> : null}
           </li>

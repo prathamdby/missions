@@ -104,7 +104,7 @@ export const CopyChip = ({ value }: { value: string }) => {
   return (
     <button
       aria-label={copied ? "Copied" : `Copy ${value}`}
-      className="flex shrink-0 cursor-pointer items-center gap-sm rounded-xs bg-bg px-md py-[3px] font-mono text-2xs leading-xs font-book text-text shadow-[inset_0_0_0_1px_var(--color-border)] transition-colors duration-fast outline-none hover:bg-surface focus-visible:shadow-focus"
+      className="flex shrink-0 cursor-pointer items-center gap-sm rounded-xs bg-bg px-md py-stack font-mono text-2xs leading-xs font-book text-text shadow-[inset_0_0_0_1px_var(--color-border)] transition-colors duration-fast outline-none hover:bg-surface focus-visible:shadow-focus"
       onClick={copy}
       type="button"
     >

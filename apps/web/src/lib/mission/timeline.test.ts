@@ -5,7 +5,9 @@ import type {
 } from "@missions/protocol/missions";
 import { describe, expect, it } from "vitest";
 
-import { buildTimeline } from "./timeline";
+import { buildTimeline, transcriptRows } from "./timeline";
+import type { TimelineEntry, ToolCall } from "./timeline";
+import { argumentOf, inputOf, toolCardKind, toolSummary } from "./tool-output";
 
 const at = (second: number) =>
   `2025-01-01T00:00:${String(second).padStart(2, "0")}.000Z`;
@@ -57,6 +59,149 @@ const permission = (second: number): PermissionRequest => ({
 });
 
 const empty = { permissions: [], plans: [], previews: [], questions: [] };
+
+const tool = (
+  name: string,
+  seq: number,
+  extra: Partial<TranscriptItem> = {}
+): ToolCall => ({
+  call: item(seq, "tool_call", { toolName: name, ...extra }),
+  id: `tool-${seq}`,
+  result: null,
+});
+const tools = (call: ToolCall, agentId = "orch"): TimelineEntry => ({
+  agentId,
+  calls: [call],
+  id: call.id,
+  kind: "tools",
+});
+
+describe("Transcript presentation", () => {
+  it("waits for narration to finish, then keeps the plan after all explanation messages", () => {
+    const input = {
+      ...empty,
+      planAgentId: "orch",
+      planInFlight: true,
+      plans: [plan(2, 2)],
+      transcript: [
+        item(1, "assistant"),
+        item(3, "assistant"),
+        item(4, "assistant"),
+      ],
+    };
+    expect(buildTimeline(input).map((entry) => entry.kind)).toStrictEqual([
+      "assistant",
+      "assistant",
+      "assistant",
+    ]);
+    expect(
+      buildTimeline({ ...input, planInFlight: false }).map(
+        (entry) => entry.kind
+      )
+    ).toStrictEqual(["assistant", "assistant", "assistant", "plan"]);
+    expect(
+      buildTimeline({ ...input, planInFlight: false }).flatMap((entry) =>
+        entry.kind === "assistant" ? [entry.item.text] : []
+      )
+    ).toStrictEqual(["text 1", "text 3", "text 4"]);
+  });
+
+  it("keeps decided plans in place when later turns arrive", () => {
+    const input = {
+      ...empty,
+      planAgentId: "orch",
+      plans: [{ ...plan(2, 2), decidedAt: at(5), status: "approved" as const }],
+      transcript: [
+        item(1, "assistant"),
+        item(3, "assistant"),
+        item(6, "assistant"),
+      ],
+    };
+    expect(buildTimeline(input).map((entry) => entry.kind)).toStrictEqual([
+      "assistant",
+      "assistant",
+      "plan",
+      "plan_approved",
+      "assistant",
+    ]);
+  });
+
+  it("parses tool arguments defensively and classifies command/edit presentations without React", () => {
+    const read = tool("Read", 1, {
+      toolInput: { file_path: "/repo/src/a.ts" },
+    });
+    const grep = tool("Grep", 2, {
+      toolInput: { path: "/repo/src", pattern: "needle" },
+    });
+    expect(argumentOf(read, "/repo")).toBe("src/a.ts");
+    expect(argumentOf(grep, "/repo")).toBe('"needle" in src');
+    expect(
+      inputOf(tool("Read", 3, { toolInput: ["not", "an", "object"] }))
+    ).toStrictEqual({});
+    expect(toolSummary([read, read, grep])).toBe("Read 2 files, ran 1 search");
+  });
+
+  it("classifies command and edit presentation without React", () => {
+    const execute = tool("Execute", 4, { toolInput: { command: "pnpm test" } });
+    expect(toolCardKind([execute], true)).toBe("command");
+    expect(toolCardKind([execute], false)).toBeNull();
+    const successful = { ...execute, result: item(5, "tool_result") };
+    expect(toolCardKind([successful], false)).toBe("ran");
+    expect(
+      toolCardKind(
+        [{ ...successful, result: item(5, "tool_result", { isError: true }) }],
+        false
+      )
+    ).toBe("command");
+    expect(
+      toolCardKind(
+        [tool("Edit", 6, { toolInput: { new_str: "new", old_str: "old" } })],
+        false
+      )
+    ).toBe("edit");
+  });
+
+  it("folds exploration by agent, breaks out command cards and preserves the live-tail loader", () => {
+    const entries = [
+      tools(tool("Read", 1)),
+      tools(tool("Grep", 2)),
+      tools(tool("Execute", 3)),
+      tools(tool("Read", 4)),
+    ];
+    const rows = transcriptRows(entries, true);
+    expect(rows.map((row) => row.kind)).toStrictEqual([
+      "tools",
+      "card",
+      "tools",
+    ]);
+    expect(rows[0]).toMatchObject({ tail: false });
+    expect(rows[2]).toMatchObject({ tail: true });
+    expect(rows[0]?.kind === "tools" ? rows[0].groups.length : 0).toBe(2);
+    expect(entries[0]?.kind === "tools" ? entries[0].calls.length : 0).toBe(1);
+  });
+
+  it("hides worker narration/tools but never worker permission and question gates", () => {
+    const request = { ...permission(1), agentId: "worker" };
+    const gate: TimelineEntry = {
+      agentId: "worker",
+      id: "gate",
+      kind: "permission",
+      request,
+    };
+    const narration: TimelineEntry = {
+      agentId: "worker",
+      id: "text",
+      item: item(3, "assistant"),
+      kind: "assistant",
+    };
+    const rows = transcriptRows(
+      [tools(tool("Read", 1), "worker"), narration, gate],
+      true,
+      { worker: { role: "worker" } }
+    );
+    expect(rows).toStrictEqual([{ entry: gate, id: "gate", kind: "entry" }]);
+  });
+});
 
 describe(buildTimeline, () => {
   it("groups consecutive tool calls and pairs results by toolUseId", () => {

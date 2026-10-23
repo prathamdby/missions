@@ -3,7 +3,7 @@
 import type { FileNode } from "@missions/protocol/files";
 import type { Artifact } from "@missions/protocol/missions";
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { ReactNode } from "react";
 
 import {
@@ -16,10 +16,11 @@ import {
 import { useMission } from "@/components/mission/mission-context";
 import { Meta } from "@/components/mission/panel-kit";
 import { CodeBlock } from "@/components/ui/code-block";
+import { Markdown } from "@/components/ui/markdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
-import { useFileContent, useFileTree } from "@/lib/api/queries";
+import { useSharedFile, useSharedFiles } from "@/lib/api/queries";
 import { shortAge } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
@@ -44,23 +45,8 @@ const Indent = ({ depth }: { depth: number }) =>
       ))
     : null;
 
-/** Who touched a path, from assignment handoffs. */
-const useAuthors = () => {
-  const { agentLabels, live } = useMission();
-  return useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const assignment of Object.values(live.assignments)) {
-      for (const file of assignment.handoff?.filesChanged ?? []) {
-        out[file] = assignment.workerAgentId
-          ? (agentLabels[assignment.workerAgentId] ?? "Worker")
-          : "Worker";
-      }
-    }
-    return out;
-  }, [agentLabels, live.assignments]);
-};
-
 interface LevelProps {
+  authors: Readonly<Record<string, string>>;
   depth: number;
   dir: string;
   filter: string;
@@ -68,6 +54,7 @@ interface LevelProps {
 }
 
 const FileRow = ({
+  authors,
   depth,
   node,
   onOpen,
@@ -75,8 +62,8 @@ const FileRow = ({
   depth: number;
   node: FileNode;
   onOpen: (path: string) => void;
+  authors: Readonly<Record<string, string>>;
 }) => {
-  const authors = useAuthors();
   const change = node.change ? CHANGE[node.change] : null;
   return (
     <li>
@@ -171,9 +158,9 @@ const directoriesFirst = (a: FileNode, b: FileNode) => {
   return a.type === "directory" ? -1 : 1;
 };
 
-const TreeLevel = ({ depth, dir, filter, onOpen }: LevelProps) => {
-  const { live, missionId } = useMission();
-  const tree = useFileTree(missionId, dir, live.workspaceSeq);
+const TreeLevel = ({ authors, depth, dir, filter, onOpen }: LevelProps) => {
+  const { missionId } = useMission();
+  const tree = useSharedFiles(missionId, dir);
   if (tree.isPending) {
     return <Skeleton className="mx-md my-xs w-1/2" />;
   }
@@ -199,6 +186,7 @@ const TreeLevel = ({ depth, dir, filter, onOpen }: LevelProps) => {
         node.type === "directory" ? (
           <DirectoryRow depth={depth} key={node.path} node={node}>
             <TreeLevel
+              authors={authors}
               depth={depth + 1}
               dir={node.path}
               filter={filter}
@@ -206,7 +194,13 @@ const TreeLevel = ({ depth, dir, filter, onOpen }: LevelProps) => {
             />
           </DirectoryRow>
         ) : (
-          <FileRow depth={depth} key={node.path} node={node} onOpen={onOpen} />
+          <FileRow
+            authors={authors}
+            depth={depth}
+            key={node.path}
+            node={node}
+            onOpen={onOpen}
+          />
         )
       )}
       {tree.data.truncated ? (
@@ -229,8 +223,8 @@ const FileViewer = ({
   onClose: () => void;
   path: string;
 }) => {
-  const { live, missionId } = useMission();
-  const content = useFileContent(missionId, path, live.workspaceSeq);
+  const { missionId } = useMission();
+  const content = useSharedFile(missionId, path);
   return (
     <div className="flex min-h-0 flex-col gap-md">
       <div className="flex h-7 items-center gap-sm">
@@ -252,7 +246,10 @@ const FileViewer = ({
           {errorMessage(content.error)}
         </p>
       ) : null}
-      {content.data?.kind === "text" ? (
+      {content.data?.kind === "text" && path.endsWith(".md") ? (
+        <Markdown>{content.data.content}</Markdown>
+      ) : null}
+      {content.data?.kind === "text" && !path.endsWith(".md") ? (
         <CodeBlock
           code={content.data.content}
           height="auto"
@@ -273,7 +270,7 @@ const FileViewer = ({
       ) : null}
       {content.data?.kind === "missing" ? (
         <p className="text-xs leading-sm text-text-tertiary">
-          This file no longer exists in the workspace.
+          This shared file no longer exists.
         </p>
       ) : null}
     </div>
@@ -335,8 +332,9 @@ const ArtifactRow = ({ artifact }: { artifact: Artifact }) => {
   );
 };
 
-/** Paper GNZ: mission artifacts, then the workspace tree with change marks. */
+/** Persistent shared knowledge and artifacts, never the repository checkout. */
 export const FilesTab = () => {
+  const authors = {};
   const { live } = useMission();
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -346,12 +344,11 @@ export const FilesTab = () => {
   if (open) {
     return <FileViewer onClose={() => setOpen(null)} path={open} />;
   }
-  const changed = live.changedPaths.length;
   return (
     <>
       <div className="flex h-7 shrink-0 items-center justify-between gap-md">
         <span className="text-xs leading-sm font-book tracking-tight text-text-tertiary">
-          {changed} changed
+          Shared mission files
           {artifacts.length > 0 ? ` · ${artifacts.length} from agents` : ""}
         </span>
         <label className="flex h-7 w-45 items-center gap-sm rounded-sm bg-bg px-md ring-1 ring-border focus-within:ring-border-strong">
@@ -373,8 +370,14 @@ export const FilesTab = () => {
           ))}
         </ul>
       ) : null}
-      <nav aria-label="Workspace files" className="-mx-md">
-        <TreeLevel depth={0} dir="" filter={filter} onOpen={setOpen} />
+      <nav aria-label="Shared mission files" className="-mx-md">
+        <TreeLevel
+          authors={authors}
+          depth={0}
+          dir=""
+          filter={filter}
+          onOpen={setOpen}
+        />
       </nav>
     </>
   );

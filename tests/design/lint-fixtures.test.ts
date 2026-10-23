@@ -38,7 +38,10 @@ const toRule = (code: string) => {
 const files = (pattern: string) =>
   globSync(pattern, { cwd: FIXTURE_APP }).toSorted();
 
-const invalidCases = files("src/cases/invalid/*.{ts,tsx}");
+const invalidCases = [
+  ...files("src/cases/invalid/*.{ts,tsx}"),
+  ...files("src/components/ui/invalid/*.tsx"),
+];
 const validCases = [
   ...files("src/cases/valid/*.{ts,tsx}"),
   ...files("src/components/ui/*.tsx"),
@@ -101,6 +104,30 @@ describe("design lint fixtures", () => {
 
   it.each(validCases)("%s passes every rule", (file) => {
     expect(byFile.get(file) ?? []).toStrictEqual([]);
+  });
+
+  it("rejects each migrated raw padding value, including safe-area floors", () => {
+    const messages = (
+      byFile.get("src/components/ui/invalid/raw-padding.tsx") ?? []
+    ).map((diagnostic) => diagnostic.message);
+    for (const cls of [
+      "px-[40px]",
+      "px-[5px]",
+      "py-[3px]",
+      "pb-[max(env(safe-area-inset-bottom),12px)]",
+      "pt-[max(env(safe-area-inset-top),4px)]",
+      "pb-[max(env(safe-area-inset-bottom),21px)]",
+    ]) {
+      expect(
+        messages.some((message) => message.includes(`"${cls}"`))
+      ).toBeTruthy();
+    }
+  });
+
+  it("rejects wrong-edge, non-padding, non-spacing and arbitrary safe-area expressions", () => {
+    expect(
+      byFile.get("src/components/ui/invalid/safe-area-expression.tsx")
+    ).toHaveLength(4);
   });
 
   it("reads the real web theme rather than the bundled grammar", () => {

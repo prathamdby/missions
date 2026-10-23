@@ -10,6 +10,7 @@ import type {
 } from "@missions/protocol/missions";
 
 import type { PermissionToolUse } from "../sdk/agent-runtime";
+import { commandCategory } from "./command-policy";
 import { StaleDecisionError } from "./stale-decision-error";
 
 export { StaleDecisionError } from "./stale-decision-error";
@@ -44,6 +45,8 @@ export interface AgentContext {
   epoch: number;
   planApproved: boolean;
   fenced: boolean;
+  /** Assignment capability. Omitted means writable for older callers. */
+  canWrite?: boolean;
 }
 
 export interface BrokerStore {
@@ -64,20 +67,6 @@ export interface PermissionBrokerOptions {
 export type AskResult =
   | { approved: true; via: "policy" | "grant" | "user" }
   | { approved: false; reason: string };
-
-const PUBLISH_PATTERNS = [
-  /\bgit\s+push\b/u,
-  /\bgh\s+pr\s+(?:create|merge|close|ready|edit|comment|review|reopen)\b/u,
-  /\bgh\s+repo\s+(?:create|delete|edit|rename|archive|fork)\b/u,
-  /\bgh\s+release\b/u,
-  /\bgh\s+api\b.*(?:-X|--method)\s*(?:POST|PUT|PATCH|DELETE)\b/iu,
-];
-const VCS_PATTERNS = [
-  /\bgit\s+(?:commit|reset|stash|clean|rebase|merge|cherry-pick|revert|tag|branch\s+-[dDmM]|worktree\s+remove)\b/u,
-  /\bgit\s+checkout\s+(?:--|\.)/u,
-  /\bgit\s+restore\b/u,
-];
-const WHITESPACE = /\s+/gu;
 
 const READ_TOOLS = new Set([
   "Read",
@@ -153,19 +142,17 @@ export const classifyToolUse = (
   }
   if (type === "exec") {
     const command = str(details.fullCommand) || str(details.command);
-    const normalized = command.trim().replaceAll(WHITESPACE, " ");
-    let category: ActionCategory = "execute";
-    if (PUBLISH_PATTERNS.some((pattern) => pattern.test(normalized))) {
-      category = "publish";
-    } else if (VCS_PATTERNS.some((pattern) => pattern.test(normalized))) {
-      category = "vcs";
-    }
+    // Exact command identity: quoted whitespace can change arguments and must
+    // never collide with an earlier Always allow grant. Version the key so
+    // legacy whitespace-collapsed grants cannot authorize a different command.
+    const normalized = `exec:v2:${command}`;
+    const category = commandCategory(command);
     return {
       action: "Execute",
       category,
       impact: impactOf(details.impactLevel),
       normalized,
-      summary: { ...base, summary: normalized },
+      summary: { ...base, summary: command },
     };
   }
   if (type === "edit" || type === "create" || type === "apply_patch") {
@@ -274,6 +261,30 @@ const isWritable = (use: ClassifiedUse) =>
     use.category === "unknown") &&
     use.impact !== "low");
 
+const requiresWriteCapability = (use: ClassifiedUse) =>
+  use.category !== "read" &&
+  use.category !== "role_tool" &&
+  use.category !== "blocked";
+
+const mandatoryDenial = (
+  context: AgentContext,
+  uses: ClassifiedUse[]
+): string | null => {
+  if (context.fenced) {
+    return "Mission is paused";
+  }
+  if (uses.some((use) => use.category === "blocked")) {
+    return "Built-in Factory Missions are disabled";
+  }
+  if (context.canWrite === false && uses.some(requiresWriteCapability)) {
+    return "This assignment is read-only";
+  }
+  if (!context.planApproved && uses.some(isWritable)) {
+    return "Changes are blocked until the plan is approved";
+  }
+  return null;
+};
+
 interface Pending {
   request: PermissionRequest;
   resolve: (decision: PermissionDecision | null) => void;
@@ -323,25 +334,14 @@ export class PermissionBroker {
         reason: "Agent is not part of an active mission",
       };
     }
-    if (context.fenced) {
-      return { approved: false, reason: "Mission is paused" };
-    }
     const uses = flattenToolUses(toolUses).map((use) =>
       classifyToolUse(use, context.workspacePath, this.#options.roleToolServer)
     );
-    if (uses.some((use) => use.category === "blocked")) {
-      return {
-        approved: false,
-        reason: "Built-in Factory Missions are disabled",
-      };
+    const denied = mandatoryDenial(context, uses);
+    if (denied) {
+      return { approved: false, reason: denied };
     }
     const writable = uses.some(isWritable);
-    if (writable && !context.planApproved) {
-      return {
-        approved: false,
-        reason: "Changes are blocked until the plan is approved",
-      };
-    }
     const needsPublishApproval = uses.some((use) => use.category === "publish");
     const covered = uses.every(
       (use) =>
@@ -376,6 +376,10 @@ export class PermissionBroker {
     const latest = this.#options.context(agentId);
     if (!latest || latest.fenced || latest.epoch !== context.epoch) {
       return { approved: false, reason: "Mission is paused" };
+    }
+    const latestDenial = mandatoryDenial(latest, uses);
+    if (latestDenial) {
+      return { approved: false, reason: latestDenial };
     }
     return { approved: true, via };
   }
@@ -441,7 +445,7 @@ export class PermissionBroker {
       epoch !== entry.request.epoch ||
       !current ||
       current.epoch !== entry.request.epoch ||
-      current.fenced
+      mandatoryDenial(current, entry.uses) !== null
     ) {
       this.#finish(entry, "stale", null, "Mission state changed");
       throw new StaleDecisionError("This approval belongs to an earlier run");

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { useState } from "react";
 
@@ -92,33 +91,4 @@ export const Meta = ({
   >
     {children}
   </span>
-);
-
-/**
- * Select lookalike for values the daemon cannot change in place. It links to
- * where the value can be changed instead of opening a menu.
- */
-export const StaticSelect = ({
-  children,
-  className,
-  href,
-  label,
-}: {
-  children: ReactNode;
-  className?: string;
-  href: string;
-  label: string;
-}) => (
-  <Link
-    aria-label={label}
-    className={cn(
-      "flex h-7 shrink-0 items-center gap-sm rounded-sm bg-surface-raised px-control shadow-button transition-colors duration-fast hover:bg-surface-overlay",
-      className
-    )}
-    href={href}
-    title={label}
-  >
-    {children}
-    <ChevronDownIcon className="size-3 text-text-tertiary" />
-  </Link>
 );

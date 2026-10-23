@@ -10,6 +10,71 @@ const setup = () => {
 };
 
 describe(NativeQueueTracker, () => {
+  it("lets restored consumption override an earlier removal claim", () => {
+    const { tracker } = setup();
+    tracker.hydrate([
+      { error: null, id: "old", mode: "queue", state: "removed", text: "text" },
+    ]);
+    tracker.reconcile({
+      consumedIds: new Set(["old"]),
+      pendingIds: [],
+      queuedIds: [],
+    });
+    expect(tracker.get("old")?.state).toBe("sent");
+  });
+
+  it("bounds terminal history without dropping unresolved identities", () => {
+    const tracker = new NativeQueueTracker(() => {}, 2);
+    tracker.submitted("unknown", "unresolved", "queue");
+    tracker.submitFailed("unknown", "timeout", false);
+    for (let i = 0; i < 10; i += 1) {
+      tracker.submitted(`internal-${i}`, "internal", "steer");
+      tracker.consumed(`internal-${i}`);
+    }
+    expect(tracker.list()).toHaveLength(3);
+    expect(tracker.get("internal-0")).toBeNull();
+    expect(tracker.get("unknown")?.state).toBe("unknown");
+    tracker.reconcile({
+      consumedIds: new Set(["unknown"]),
+      pendingIds: [],
+      queuedIds: [],
+    });
+    expect(tracker.get("unknown")?.state).toBe("sent");
+    expect(tracker.list()).toHaveLength(2);
+  });
+
+  it("retains in-flight removal identities across terminal pruning", () => {
+    const tracker = new NativeQueueTracker(() => {}, 1);
+    tracker.submitted("editing", "text", "queue");
+    const release = tracker.retain("editing");
+    tracker.removeConfirmed("editing");
+    tracker.submitted("internal", "text", "queue");
+    tracker.consumed("internal");
+    tracker.consumed("editing");
+    expect(tracker.get("editing")?.state).toBe("sent");
+    release();
+    expect(tracker.list()).toHaveLength(1);
+  });
+
+  it("bounds restored terminal history while keeping every open entry", () => {
+    const tracker = new NativeQueueTracker(() => {}, 1);
+    tracker.hydrate([
+      { error: null, id: "old", mode: "queue", state: "sent", text: "old" },
+      {
+        error: null,
+        id: "open",
+        mode: "queue",
+        state: "unknown",
+        text: "open",
+      },
+      { error: null, id: "new", mode: "queue", state: "removed", text: "new" },
+    ]);
+    expect(tracker.list().map((entry) => entry.id)).toStrictEqual([
+      "open",
+      "new",
+    ]);
+  });
+
   it("treats the add response as admission, not consumption", () => {
     const { tracker } = setup();
     tracker.submitted("a", "hi", "steer");

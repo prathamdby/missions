@@ -10,7 +10,7 @@ import {
 } from "@/components/mission/chat-cards";
 import { ClipboardIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
-import { reportMutationError } from "@/components/mission/report-error";
+import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -19,30 +19,24 @@ import {
 } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
-import { api } from "@/lib/api/endpoints";
 import { useModelName } from "@/lib/api/queries";
-import { useSingleFlightMutation } from "@/lib/api/use-operation";
-import { groupTodos } from "@/lib/mission/overview";
+import { todoProgress } from "@/lib/mission/overview";
 import { parsePlan } from "@/lib/mission/plan";
 
 const plural = (count: number, one: string) =>
   `${count} ${count === 1 ? one : `${one}s`}`;
 
 const PlanReview = ({ plan }: { plan: PlanRevision }) => {
-  const { applyLocal, missionId, refresh } = useMission();
   const [revising, setRevising] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const decide = useSingleFlightMutation({
-    mutationFn: (input: { approve: boolean; feedback?: string }) =>
-      api.decidePlan(missionId, { ...input, planRevision: plan.revision }),
-    onError: (error) =>
-      reportMutationError(error, refresh, "Could not send your decision"),
-    onSuccess: (value) => {
+  const decide = useMissionCommand(
+    "plan",
+    "Could not send your decision",
+    () => {
       setRevising(false);
       setFeedback("");
-      applyLocal({ kind: "plan", value });
-    },
-  });
+    }
+  );
 
   if (revising) {
     return (
@@ -52,7 +46,11 @@ const PlanReview = ({ plan }: { plan: PlanRevision }) => {
           onSubmit={(event) => {
             event.preventDefault();
             if (feedback.trim()) {
-              decide.mutate({ approve: false, feedback: feedback.trim() });
+              decide.mutate({
+                approve: false,
+                feedback: feedback.trim(),
+                planRevision: plan.revision,
+              });
             }
           }}
         >
@@ -84,7 +82,9 @@ const PlanReview = ({ plan }: { plan: PlanRevision }) => {
       <Button
         data-testid="plan-approve"
         disabled={decide.isPending}
-        onClick={() => decide.mutate({ approve: true })}
+        onClick={() =>
+          decide.mutate({ approve: true, planRevision: plan.revision })
+        }
         variant="primary"
       >
         {decide.isPending ? "Approving…" : "Approve and start"}
@@ -105,7 +105,7 @@ const PlanBody = ({ plan }: { plan: PlanRevision }) => {
   const orchestratorModel = useModelName(live.mission.orchestrator.modelId);
   const workerModel = useModelName(live.mission.worker.modelId);
   const parsed = parsePlan(plan.markdown);
-  const todoCount = groupTodos(live.todos, live.agents).main.length;
+  const todoCount = todoProgress(live.todos, live.agents).total;
   const counts = [
     parsed ? plural(parsed.steps.length, "step") : null,
     (plan.status === "approved" || plan.status === "proposed") && todoCount > 0

@@ -32,6 +32,22 @@ export interface EventStream {
   retryNow: () => void;
 }
 
+/** The browser transport is replaceable without replacing reconnect/batch policy. */
+export interface EventSourceAdapter {
+  addEventListener: (
+    type: string,
+    listener: (event: { data?: unknown }) => void
+  ) => void;
+  close: () => void;
+}
+
+export interface StreamTransport {
+  createSource?: (url: string) => EventSourceAdapter;
+  random?: () => number;
+}
+
+export type OpenEventStream = (options: EventStreamOptions) => EventStream;
+
 /** Events that arrive within one frame are applied together. */
 const BATCH_MS = 16;
 
@@ -51,8 +67,11 @@ const parseJson = (data: unknown): unknown => {
  * replaced by bounded, jittered backoff so many tabs do not hammer a daemon
  * that is restarting.
  */
-export const openEventStream = (options: EventStreamOptions): EventStream => {
-  let source: EventSource | null = null;
+export const openEventStream = (
+  options: EventStreamOptions,
+  { createSource = (url) => new EventSource(url), random }: StreamTransport = {}
+): EventStream => {
+  let source: EventSourceAdapter | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let batch: DaemonEvent[] = [];
@@ -97,17 +116,23 @@ export const openEventStream = (options: EventStreamOptions): EventStream => {
     clearRetry();
     detach();
     update({ phase: "connecting", retryAt: null });
-    const current = new EventSource(options.url());
+    const current = createSource(options.url());
     source = current;
 
     current.addEventListener("open", () => {
+      if (closed || source !== current) {
+        return;
+      }
       const reconnected = everOpened;
       everOpened = true;
       update({ attempt: 0, phase: "open", retryAt: null });
       options.onOpen(reconnected);
     });
 
-    current.addEventListener(SSE_EVENT, (message: MessageEvent) => {
+    current.addEventListener(SSE_EVENT, (message) => {
+      if (closed || source !== current) {
+        return;
+      }
       const parsed = DaemonEventSchema.safeParse(parseJson(message.data));
       if (parsed.success) {
         batch.push(parsed.data);
@@ -115,7 +140,10 @@ export const openEventStream = (options: EventStreamOptions): EventStream => {
       }
     });
 
-    current.addEventListener(SSE_RESYNC, (message: MessageEvent) => {
+    current.addEventListener(SSE_RESYNC, (message) => {
+      if (closed || source !== current) {
+        return;
+      }
       flush();
       const parsed = ResyncRequiredSchema.safeParse(parseJson(message.data));
       options.onResync(parsed.success ? parsed.data.oldestSeq : null);
@@ -131,7 +159,7 @@ export const openEventStream = (options: EventStreamOptions): EventStream => {
         return;
       }
       const attempt = status.attempt + 1;
-      const delay = backoffDelay(attempt);
+      const delay = backoffDelay(attempt, { random });
       update({ attempt, phase: "retrying", retryAt: Date.now() + delay });
       retryTimer = setTimeout(connect, delay);
     });

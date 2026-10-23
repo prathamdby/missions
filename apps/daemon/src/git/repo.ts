@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Branch } from "@missions/protocol/projects";
 import type { WorktreeInfo } from "@missions/protocol/workspaces";
 
+import { conflict } from "../lib/app-error";
 import { git, redactUrl } from "../lib/exec";
 
 export interface StatusEntry {
@@ -158,12 +159,18 @@ export const worktrees = async (dir: string): Promise<WorktreeInfo[]> => {
   return await Promise.all(
     parsed.map(async (info) => {
       const entries = await status(info.path);
-      return { ...info, dirty: entries === null ? false : entries.length > 0 };
+      if (entries === null) {
+        throw conflict(`Could not read the worktree status at ${info.path}`);
+      }
+      return { ...info, dirty: entries.length > 0 };
     })
   );
 };
 
 export const isInside = (root: string, target: string) => {
   const rel = path.relative(root, target);
-  return rel === "" || !(rel.startsWith("..") || path.isAbsolute(rel));
+  return (
+    rel === "" ||
+    !(rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
+  );
 };

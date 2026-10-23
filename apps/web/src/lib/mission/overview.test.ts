@@ -2,7 +2,8 @@ import type { Agent, Assignment, Todo } from "@missions/protocol/missions";
 import { describe, expect, it } from "vitest";
 
 import { MISSION_TODOS } from "../live/mission-state";
-import { agentRows, groupTodos } from "./overview";
+import { fileAuthors } from "./changes";
+import { agentRows, groupTodos, todoProgress } from "./overview";
 
 const AT = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-01-01T00:01:00.000Z";
@@ -63,6 +64,59 @@ const agents = {
     workingState: "working",
   }),
 };
+
+describe("Todo presentation", () => {
+  it("uses the same todo counts and fallback for every mission surface", () => {
+    const workers = {
+      w1: [todo("w1", 1, "pending"), todo("w1", 0, "completed")],
+    };
+    const fallback = todoProgress(workers, agents);
+    expect(fallback).toMatchObject({ done: 1, total: 2 });
+    expect(fallback.items.map((entry) => entry.position)).toStrictEqual([0, 1]);
+    const main = todoProgress(
+      {
+        ...workers,
+        [MISSION_TODOS]: [todo(null, 0, "completed")],
+        orch: [todo("orch", 0, "pending")],
+      },
+      agents
+    );
+    expect(main).toMatchObject({ done: 1, total: 1 });
+    expect(main.items[0]?.agentId).toBeNull();
+    expect(todoProgress({}, agents)).toMatchObject({
+      done: 0,
+      items: [],
+      total: 0,
+    });
+  });
+
+  it("indexes all file authors once with the newest handoff winning independent of record order", () => {
+    const older = {
+      ...assignment("handed_off"),
+      handoff: {
+        checks: [],
+        filesChanged: ["shared", "old"],
+        followUps: [],
+        summary: "",
+      },
+      updatedAt: AT,
+      workerAgentId: "old",
+    };
+    const newer = {
+      ...older,
+      handoff: { ...older.handoff, filesChanged: ["shared", "new"] },
+      updatedAt: LATER,
+      workerAgentId: "new",
+    };
+    expect(
+      fileAuthors({ newer, older }, { new: "Worker 2", old: "Worker 1" })
+    ).toStrictEqual({
+      new: "Worker 2",
+      old: "Worker 1",
+      shared: "Worker 2",
+    });
+  });
+});
 
 describe(groupTodos, () => {
   it("uses the Orchestrator's list as the mission todos and keeps worker lists apart", () => {

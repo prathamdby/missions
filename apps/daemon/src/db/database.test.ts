@@ -38,6 +38,13 @@ const LEGACY_MISSION = {
 };
 
 describe(openDatabase, () => {
+  it("can close the same database handle repeatedly", () => {
+    const handle = openDatabase(":memory:");
+    handle.close();
+    expect(() => handle.close()).not.toThrow();
+    expect(handle.sqlite.open).toBeFalsy();
+  });
+
   it("reopens its own database and keeps the data", async () => {
     const file = await tempFile("missions.db");
     const first = openDatabase(file);

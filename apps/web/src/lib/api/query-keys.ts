@@ -15,6 +15,7 @@ export const queryKeys = {
   missions: ["missions"] as const,
   models: ["models"] as const,
   projects: ["projects"] as const,
+  pullRequests: ["pull-requests"] as const,
   settings: ["settings"] as const,
   worktrees: (projectId: string) =>
     ["project", projectId, "worktrees"] as const,

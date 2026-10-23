@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { DeliveryMode } from "@missions/protocol/common";
+import type { AgentModelSettings } from "@missions/protocol/missions";
 
 import { errorMessage, sleep } from "../lib/async";
 import { isSystemRequest } from "../missions/messages";
@@ -52,6 +53,7 @@ const resultText = (value: unknown): string => {
 export class ScriptedRuntime implements RuntimeHandle {
   readonly queue: NativeQueueTracker;
   sessionId: string | null = null;
+  model: AgentModelSettings;
   readonly #options: AgentRuntimeOptions;
   readonly #delayMs: number;
   readonly #inbox: string[] = [];
@@ -67,10 +69,22 @@ export class ScriptedRuntime implements RuntimeHandle {
 
   constructor(options: AgentRuntimeOptions, delayMs = 250) {
     this.#options = options;
+    this.model = {
+      modelId: options.modelId,
+      reasoningEffort: options.reasoningEffort,
+    };
     this.#delayMs = delayMs;
     this.queue = new NativeQueueTracker((entry) =>
       options.onEvent({ entry, type: "queue" })
     );
+  }
+
+  updateModel(choice: AgentModelSettings): Promise<AgentModelSettings> {
+    if (this.#closed) {
+      return Promise.reject(new Error("Runtime is closed"));
+    }
+    this.model = choice;
+    return Promise.resolve(choice);
   }
 
   start(resumeSessionId?: string): Promise<RuntimeStartResult> {
@@ -504,8 +518,10 @@ export class ScriptedRuntime implements RuntimeHandle {
       return;
     }
     if (!rich) {
-      await this.#roleTool("update_todos", {
-        todos: [{ content: `Write ${NOTES_FILE}`, status: "in_progress" }],
+      await this.#tool({
+        content: "Todos saved",
+        input: { todos: `1. [in_progress] Write ${NOTES_FILE}` },
+        name: "TodoWrite",
       });
     }
     const created = await this.#create(

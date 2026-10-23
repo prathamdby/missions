@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LeaseAbortedError, WriteLeaseRegistry } from "./write-lease";
 
@@ -38,5 +38,53 @@ describe(WriteLeaseRegistry, () => {
     await expect(forgotten).rejects.toBeInstanceOf(LeaseAbortedError);
     leases.forget("a");
     expect(leases.holder("/w")).toBeNull();
+  });
+
+  it("does not grant an already-aborted free or reentrant acquisition", async () => {
+    const changed = vi.fn<(workspace: string, holder: string | null) => void>();
+    const leases = new WriteLeaseRegistry(changed);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      leases.acquire("/w", "a", controller.signal)
+    ).rejects.toBeInstanceOf(LeaseAbortedError);
+    expect([leases.holder("/w"), changed.mock.calls]).toStrictEqual([null, []]);
+    await leases.acquire("/w", "a");
+    await expect(
+      leases.acquire("/w", "a", controller.signal)
+    ).rejects.toBeInstanceOf(LeaseAbortedError);
+    expect(changed).toHaveBeenCalledOnce();
+  });
+
+  it("removes abort listeners when waits are granted, forgotten or aborted", async () => {
+    const leases = new WriteLeaseRegistry();
+    await leases.acquire("/w", "a");
+    const granted = new AbortController();
+    const forgotten = new AbortController();
+    const aborted = new AbortController();
+    const grantCleanup = vi.spyOn(granted.signal, "removeEventListener");
+    const forgetCleanup = vi.spyOn(forgotten.signal, "removeEventListener");
+    const abortCleanup = vi.spyOn(aborted.signal, "removeEventListener");
+    const b = leases.acquire("/w", "b", granted.signal);
+    const c = leases.acquire("/w", "c", forgotten.signal);
+    const d = leases.acquire("/w", "d", aborted.signal);
+    const cancelled = Promise.allSettled([c, d]);
+    leases.forget("c");
+    aborted.abort();
+    leases.release("/w", "a");
+    await Promise.all([b, cancelled]);
+    granted.abort();
+    expect([
+      grantCleanup.mock.calls.length,
+      forgetCleanup.mock.calls.length,
+      abortCleanup.mock.calls.length,
+    ]).toStrictEqual([1, 1, 1]);
+    expect(leases.holder("/w")).toBe("b");
+    leases.release("/w", "b");
+    await leases.acquire("/w", "fresh");
+    expect([leases.holder("/w"), leases.waiting("/w")]).toStrictEqual([
+      "fresh",
+      [],
+    ]);
   });
 });

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
-import { ChatColumn } from "@/components/mission/chat-column";
+import { AgentConversations } from "@/components/mission/agent-conversations";
 import { MissionProvider } from "@/components/mission/mission-context";
 import type {
   MissionContextValue,
@@ -20,6 +20,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage, isApiError } from "@/lib/api/api-error";
 import { agentLabels } from "@/lib/format";
 import { useMissionLive } from "@/lib/live/hooks";
+import { missionCommandTransport } from "@/lib/mission/command-transport";
+import { MissionCommands } from "@/lib/mission/commands";
 import { useMediaQuery, WIDE_QUERY } from "@/lib/use-media-query";
 
 const MissionPlaceholder = ({ error }: { error: unknown }) => {
@@ -69,7 +71,12 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
   const wide = useMediaQuery(WIDE_QUERY);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [tab, setTab] = useState<PanelTab>("overview");
-  const { applyLocal, live, prependTranscript, refresh } = mission;
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const showAgent = useCallback((agentId: string) => {
+    setSelectedAgentId(agentId);
+    setSheetOpen(false);
+  }, []);
+  const { applyLocal, error: sessionError, live, loadOlder, refresh } = mission;
 
   const showPanel = useCallback(
     (next: PanelTab) => {
@@ -81,9 +88,18 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
     [wide]
   );
 
+  const agents = live?.agents;
   const labels = useMemo(
-    () => (live ? agentLabels(Object.values(live.agents)) : {}),
-    [live]
+    () => (agents ? agentLabels(Object.values(agents)) : {}),
+    [agents]
+  );
+  const commands = useMemo(
+    () =>
+      new MissionCommands(
+        missionId,
+        missionCommandTransport(missionId, applyLocal, refresh)
+      ),
+    [missionId, applyLocal, refresh]
   );
   const value = useMemo<MissionContextValue | null>(
     () =>
@@ -91,14 +107,30 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
         ? {
             agentLabels: labels,
             applyLocal,
+            commands,
             live,
+            loadOlder,
             missionId,
-            prependTranscript,
             refresh,
+            selectedAgentId,
+            sessionError,
+            showAgent,
             showPanel,
           }
         : null,
-    [applyLocal, labels, live, missionId, prependTranscript, refresh, showPanel]
+    [
+      applyLocal,
+      commands,
+      labels,
+      live,
+      loadOlder,
+      missionId,
+      refresh,
+      sessionError,
+      selectedAgentId,
+      showAgent,
+      showPanel,
+    ]
   );
 
   if (!value) {
@@ -118,7 +150,7 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
             panelToggle={!wide}
           />
           <ConnectionBanner />
-          <ChatColumn />
+          <AgentConversations />
         </div>
         {wide ? (
           <aside

@@ -75,7 +75,12 @@ const needsOf = (input: DigestInput): DigestNeed[] => {
     }
   }
   const plan = latestPlan(input.plans);
-  if (plan && input.mission.status === "awaiting_approval") {
+  const planning = Object.values(input.agents).some(
+    (agent) =>
+      agent.role === "orchestrator" &&
+      (agent.status === "working" || agent.status === "starting")
+  );
+  if (plan && input.mission.status === "awaiting_approval" && !planning) {
     needs.push({
       at: plan.createdAt,
       id: `plan:${plan.id}`,

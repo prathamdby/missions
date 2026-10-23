@@ -425,8 +425,46 @@ export const prependTranscript = (
 /** Replaces state with a fresh snapshot and replays retained events newer than it. */
 export const rebase = (
   snapshot: MissionSnapshot,
-  log: readonly DaemonEvent[]
-): MissionLiveState => applyEvents(fromSnapshot(snapshot), log);
+  log: readonly DaemonEvent[],
+  previous?: MissionLiveState | null
+): MissionLiveState => {
+  const next = fromSnapshot(snapshot);
+  if (previous) {
+    // History pages are immutable; refreshed authoritative copies still win.
+    next.transcript = { ...previous.transcript, ...next.transcript };
+    next.transcriptHasMore =
+      previous.transcriptHasMore && next.transcriptHasMore;
+    next.previews = previous.previews;
+    next.finalized = previous.finalized;
+    next.notices = previous.notices;
+    next.operations = previous.operations;
+    const newest = Math.max(
+      -1,
+      ...Object.values(previous.transcript).map((item) => item.seq)
+    );
+    for (const item of snapshot.transcript) {
+      if (item.seq > newest || next.previews[item.id]) {
+        const kind = previewKindOf(item);
+        next.previews = prunePreviews(
+          next.previews,
+          item,
+          kind,
+          snapshot.cursor
+        );
+        if (kind !== null) {
+          next.finalized = {
+            ...next.finalized,
+            [`${item.agentId}:${kind}`]: Math.max(
+              next.finalized[`${item.agentId}:${kind}`] ?? 0,
+              snapshot.cursor
+            ),
+          };
+        }
+      }
+    }
+  }
+  return applyEvents(next, log);
+};
 
 type LocalEntity =
   | { kind: "mission"; value: Mission }
@@ -434,6 +472,14 @@ type LocalEntity =
   | { kind: "plan"; value: PlanRevision }
   | { kind: "question"; value: Question }
   | { kind: "queue"; value: QueueItem };
+
+const staleDecision = (
+  current: { epoch: number; status: string } | undefined,
+  next: { epoch: number; status: string }
+) =>
+  current !== undefined &&
+  (current.epoch > next.epoch ||
+    (current.status !== "pending" && next.status === "pending"));
 
 /**
  * Applies a mutation response before its event arrives. It keeps the entity's
@@ -459,18 +505,34 @@ export const applyLocal = (
           };
     }
     case "permission": {
+      const current = state.permissions[entity.value.id];
+      if (staleDecision(current, entity.value)) {
+        return state;
+      }
       return {
         ...state,
         permissions: { ...state.permissions, [entity.value.id]: entity.value },
       };
     }
     case "plan": {
+      const current = state.plans[entity.value.id];
+      if (
+        current &&
+        (current.revision > entity.value.revision ||
+          (current.status !== "proposed" && entity.value.status === "proposed"))
+      ) {
+        return state;
+      }
       return {
         ...state,
         plans: { ...state.plans, [entity.value.id]: entity.value },
       };
     }
     case "question": {
+      const current = state.questions[entity.value.id];
+      if (staleDecision(current, entity.value)) {
+        return state;
+      }
       return {
         ...state,
         questions: { ...state.questions, [entity.value.id]: entity.value },

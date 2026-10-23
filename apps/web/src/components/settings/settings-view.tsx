@@ -8,8 +8,9 @@ import type {
   UpdateSettingsRequest,
 } from "@missions/protocol/settings";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import {
   ChevronDownIcon,
@@ -19,6 +20,7 @@ import {
 import { ConnectionBanner } from "@/components/shell/connection-banner";
 import { useShell } from "@/components/shell/shell-context";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/selection";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
@@ -35,6 +37,16 @@ import { effortLabel } from "@/lib/mission/pr";
 import { toast } from "@/lib/toast-store";
 import { cn } from "@/lib/utils";
 
+import { LocationDraft } from "./location-draft";
+import {
+  DEFAULT_EFFORT,
+  selectModel,
+  selectEffort,
+  selectableModels,
+} from "./model-rules";
+import { createSettingsCoordinator } from "./settings-cache";
+import type { SettingsCoordinator } from "./settings-coordinator";
+
 /** Paper Z6J describes each level in full under "Default level". */
 const LEVEL_DETAIL: Record<Autonomy, string> = {
   high: "High · everything in Medium, plus pushes, migrations, and deploys.",
@@ -46,18 +58,29 @@ const LEVEL_DETAIL: Record<Autonomy, string> = {
 
 const NOT_YET = "The daemon does not support changing this yet.";
 
+const coordinators = new WeakMap<QueryClient, SettingsCoordinator>();
+
 const useUpdateSettings = () => {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (patch: UpdateSettingsRequest) => api.updateSettings(patch),
-    onError: (error) =>
-      toast({
-        description: errorMessage(error),
-        title: "Could not save the setting",
-        tone: "danger",
-      }),
-    onSuccess: (value) => queryClient.setQueryData(queryKeys.settings, value),
-  });
+  let coordinator = coordinators.get(queryClient);
+  if (!coordinator) {
+    coordinator = createSettingsCoordinator(queryClient, {
+      onError: (error) =>
+        toast({
+          description: errorMessage(error),
+          title: "Could not save the setting",
+          tone: "danger",
+        }),
+      persist: api.updateSettings,
+    });
+    coordinators.set(queryClient, coordinator);
+  }
+  const isPending = useSyncExternalStore(
+    coordinator.subscribe,
+    coordinator.getSnapshot,
+    coordinator.getSnapshot
+  );
+  return { isPending, save: coordinator.save };
 };
 
 const Group = ({
@@ -154,8 +177,6 @@ const SelectBox = ({
   </span>
 );
 
-const DEFAULT_EFFORT = "__default__";
-
 const ModelRow = ({
   description,
   disabled,
@@ -174,17 +195,7 @@ const ModelRow = ({
   value: AgentModelSettings;
 }) => {
   const current = models.find((model) => model.id === value.modelId);
-  const modelOptions = current
-    ? models
-    : [
-        {
-          defaultReasoningEffort: null,
-          displayName: value.modelId,
-          id: value.modelId,
-          supportedReasoningEfforts: [],
-        },
-        ...models,
-      ];
+  const modelOptions = selectableModels(models, value);
   const efforts = current?.supportedReasoningEfforts ?? [];
   return (
     <Row description={description} label={label}>
@@ -192,13 +203,7 @@ const ModelRow = ({
         className="w-32"
         disabled={disabled}
         label={`${label} model`}
-        onChange={(modelId) => {
-          const next = models.find((model) => model.id === modelId);
-          onChange({
-            modelId,
-            reasoningEffort: next?.defaultReasoningEffort ?? null,
-          });
-        }}
+        onChange={(modelId) => onChange(selectModel(models, modelId))}
         options={modelOptions.map((model) => ({
           label: model.displayName,
           value: model.id,
@@ -214,17 +219,17 @@ const ModelRow = ({
         className="w-35"
         disabled={disabled || efforts.length === 0}
         label={`${label} thinking`}
-        onChange={(effort) =>
-          onChange({
-            modelId: value.modelId,
-            reasoningEffort:
-              effort === DEFAULT_EFFORT
-                ? null
-                : (efforts.find((entry) => entry === effort) ?? null),
-          })
-        }
+        onChange={(effort) => onChange(selectEffort(current, value, effort))}
         options={[
           { label: "Default", value: DEFAULT_EFFORT },
+          ...(value.reasoningEffort && !efforts.includes(value.reasoningEffort)
+            ? [
+                {
+                  label: effortLabel(value.reasoningEffort),
+                  value: value.reasoningEffort,
+                },
+              ]
+            : []),
           ...efforts.map((effort) => ({
             label: effortLabel(effort),
             value: effort,
@@ -285,46 +290,6 @@ const Segmented = ({
   </fieldset>
 );
 
-const Switch = ({
-  checked,
-  disabled,
-  label,
-  onChange,
-  testId,
-  title,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  label: string;
-  onChange?: (checked: boolean) => void;
-  testId?: string;
-  title?: string;
-}) => (
-  <button
-    aria-checked={checked}
-    aria-disabled={disabled}
-    aria-label={label}
-    className={cn(
-      "flex h-4.5 w-3xl shrink-0 cursor-pointer items-center rounded-full p-2xs transition-colors duration-fast aria-disabled:cursor-not-allowed",
-      checked
-        ? "justify-end bg-accent"
-        : "bg-surface-active ring-1 ring-border ring-inset"
-    )}
-    data-testid={testId}
-    onClick={disabled ? undefined : () => onChange?.(!checked)}
-    role="switch"
-    title={title}
-    type="button"
-  >
-    <span
-      className={cn(
-        "size-3.5 rounded-full",
-        checked ? "bg-text" : "bg-text-secondary"
-      )}
-    />
-  </button>
-);
-
 const ValueBox = ({ children }: { children: ReactNode }) => (
   <span className="flex h-7.5 max-w-80 items-center rounded-sm bg-surface px-control ring-1 ring-border ring-inset">
     <span className="truncate font-mono text-xs leading-sm font-book text-text-secondary">
@@ -339,10 +304,15 @@ const LocationRow = ({
   value,
 }: {
   disabled: boolean;
-  onSave: (value: string) => void;
+  onSave: (value: string) => Promise<boolean>;
   value: string;
 }) => {
-  const [draft, setDraft] = useState<string | null>(null);
+  const location = useMemo(() => new LocationDraft(), []);
+  const { value: draft, pending } = useSyncExternalStore(
+    location.subscribe,
+    location.getSnapshot,
+    location.getSnapshot
+  );
   return (
     <Row
       description="Where the daemon creates worktrees on this machine."
@@ -354,7 +324,7 @@ const LocationRow = ({
           <Button
             data-testid="settings-worktree-change"
             disabled={disabled}
-            onClick={() => setDraft(value)}
+            onClick={() => location.edit(value)}
             variant="secondary"
           >
             Change
@@ -363,36 +333,34 @@ const LocationRow = ({
       ) : (
         <form
           className="flex items-center gap-md"
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            const next = draft.trim();
-            if (next && next !== value) {
-              onSave(next);
+            if (!disabled) {
+              await location.save(value, onSave);
             }
-            setDraft(null);
           }}
         >
           <input
             aria-label="Worktree location"
             className="h-7.5 w-64 rounded-sm bg-surface px-control font-mono text-xs leading-sm font-book text-text ring-1 ring-border-strong outline-none ring-inset focus-visible:shadow-focus"
             data-testid="settings-worktree-input"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => location.edit(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
-                setDraft(null);
+                location.cancel();
               }
             }}
             value={draft}
           />
           <Button
             data-testid="settings-save"
-            disabled={!draft.trim()}
+            disabled={disabled || pending || !draft.trim()}
             type="submit"
             variant="primary"
           >
             Save
           </Button>
-          <Button onClick={() => setDraft(null)} variant="ghost">
+          <Button onClick={() => location.cancel()} variant="ghost">
             Cancel
           </Button>
         </form>
@@ -567,7 +535,7 @@ const Grants = () => {
 const SettingsGroups = ({ data }: { data: Settings }) => {
   const models = useModels();
   const update = useUpdateSettings();
-  const save = (patch: UpdateSettingsRequest) => update.mutate(patch);
+  const save = (patch: UpdateSettingsRequest) => update.save(patch);
   const options = models.data?.models ?? [];
   const busy = update.isPending;
   return (
@@ -632,9 +600,10 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
           label="Copy .env files"
         >
           <Switch
+            appearance="settings"
+            aria-label="Copy .env files"
             checked={false}
             disabled
-            label="Copy .env files"
             title={NOT_YET}
           />
         </Row>
@@ -643,11 +612,12 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
           label="Delete worktree when merged"
         >
           <Switch
+            appearance="settings"
+            aria-label="Delete worktree when merged"
             checked={data.cleanupAfterMerge}
+            data-testid="settings-cleanup-after-merge"
             disabled={busy}
-            label="Delete worktree when merged"
-            onChange={(cleanupAfterMerge) => save({ cleanupAfterMerge })}
-            testId="settings-cleanup-after-merge"
+            onCheckedChange={(cleanupAfterMerge) => save({ cleanupAfterMerge })}
           />
         </Row>
       </Group>

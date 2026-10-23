@@ -3,9 +3,11 @@
 import type { Artifact, Todo } from "@missions/protocol/missions";
 import { useQuery } from "@tanstack/react-query";
 import Image from "next/image";
+import { useState } from "react";
 
 import {
   CheckIcon,
+  ChevronDownIcon,
   CircleIcon,
   CloseIcon,
   MergeIcon,
@@ -14,18 +16,18 @@ import {
   WarningIcon,
 } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
+import { Models } from "@/components/mission/model-settings";
 import {
   DotLoader,
   IconCell,
   PanelSection,
-  StaticSelect,
 } from "@/components/mission/panel-kit";
 import { api } from "@/lib/api/endpoints";
-import { useChanges, useModels } from "@/lib/api/queries";
+import { useChanges } from "@/lib/api/queries";
 import { formatDuration, shortAge } from "@/lib/format";
-import { agentRows, groupTodos } from "@/lib/mission/overview";
+import { agentRows, todoProgress } from "@/lib/mission/overview";
 import type { AgentRow } from "@/lib/mission/overview";
-import { checksLabel, effortLabel, prRef } from "@/lib/mission/pr";
+import { checksLabel, prRef } from "@/lib/mission/pr";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -75,42 +77,28 @@ const TodoList = ({ todos }: { todos: readonly Todo[] }) => {
 };
 
 const Todos = () => {
-  const { agentLabels, live } = useMission();
-  const groups = groupTodos(live.todos, live.agents);
-  const all = [...groups.main, ...groups.workers.flatMap((g) => g.todos)];
-  if (all.length === 0) {
+  const { live } = useMission();
+  const { items, total, done } = todoProgress(live.todos, live.agents);
+  if (total === 0) {
     return (
       <PanelSection title="Todos">
         <p className="text-xs leading-sm text-text-tertiary">
-          Todos appear here once you approve a plan.
+          Agent checklists appear here as work is planned.
         </p>
       </PanelSection>
     );
   }
-  const counted = groups.main.length > 0 ? groups.main : all;
-  const done = counted.filter((todo) => todo.status === "completed").length;
-  // Worker checklists only stand in for a missing mission plan; otherwise the
-  // Agents section already shows what each Worker is on.
-  const workers = groups.main.length > 0 ? [] : groups.workers;
   const draft =
     live.mission.status === "exploring" ||
     live.mission.status === "awaiting_approval";
   return (
-    <PanelSection count={`${done}/${counted.length}`} title="Todos">
-      {groups.main.length > 0 ? <TodoList todos={groups.main} /> : null}
+    <PanelSection count={`${done}/${total}`} title="Todos">
+      <TodoList todos={items} />
       {draft ? (
         <p className="py-xs text-xs leading-sm tracking-tight text-text-tertiary">
           Draft. Starts when you approve the plan.
         </p>
       ) : null}
-      {workers.map((group) => (
-        <div className="flex flex-col gap-xs" key={group.agentId}>
-          <span className="pt-xs text-xs leading-sm text-text-tertiary">
-            {agentLabels[group.agentId] ?? "Worker"}
-          </span>
-          <TodoList todos={group.todos} />
-        </div>
-      ))}
     </PanelSection>
   );
 };
@@ -189,8 +177,8 @@ const ArtifactPreview = ({ artifact }: { artifact: Artifact }) => {
   const isText = TEXT_TYPES.test(artifact.mediaType);
   const text = useQuery({
     enabled: isText,
-    queryFn: async () => {
-      const response = await fetch(url);
+    queryFn: async ({ signal }) => {
+      const response = await fetch(url, { signal });
       const body = await response.text();
       return body.slice(0, PREVIEW_CHARS);
     },
@@ -336,6 +324,66 @@ const AgentStatusCell = ({ row }: { row: AgentRow }) => {
   );
 };
 
+const AgentChecklist = ({ row }: { row: AgentRow }) => {
+  const { live, showAgent } = useMission();
+  const todos = (live.todos[row.id] ?? []).toSorted(
+    (a, b) => a.position - b.position
+  );
+  const [open, setOpen] = useState(row.phase === "working");
+  const done = todos.filter((todo) => todo.status === "completed").length;
+  return (
+    <li className="flex flex-col gap-sm">
+      <div className="flex h-8.5 shrink-0 items-center gap-control rounded-sm px-md">
+        <button
+          aria-label={`Open ${row.label} conversation`}
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-control rounded-xs text-left focus-visible:shadow-focus"
+          onClick={() => showAgent(row.id)}
+          type="button"
+        >
+          <IconCell>
+            <AgentIcon phase={row.phase} />
+          </IconCell>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-sm leading-sm font-book tracking-tight",
+              row.phase === "done" ? "text-text-secondary" : "text-text"
+            )}
+          >
+            {row.activity}
+          </span>
+        </button>
+        <span className="w-8 shrink-0 text-right font-mono text-2xs leading-xs text-text-tertiary">
+          {todos.length > 0 ? `${done}/${todos.length}` : ""}
+        </span>
+        <span className="shrink-0 text-xs leading-sm tracking-tight text-text-tertiary">
+          {row.role === "orchestrator" ? "Orchestrator" : "Worker"}
+        </span>
+        <button
+          aria-expanded={open && todos.length > 0}
+          aria-label={`${open ? "Collapse" : "Expand"} ${row.label} todos`}
+          className="flex size-3 shrink-0 cursor-pointer items-center justify-center rounded-xs text-text-tertiary focus-visible:shadow-focus disabled:cursor-default disabled:opacity-disabled"
+          disabled={todos.length === 0}
+          onClick={() => setOpen(!open)}
+          type="button"
+        >
+          <ChevronDownIcon
+            className={cn(
+              "size-3",
+              open && todos.length > 0 ? "" : "-rotate-90"
+            )}
+          />
+        </button>
+        <AgentStatusCell row={row} />
+      </div>
+      {open && todos.length > 0 ? (
+        <div className="pl-2xl">
+          <TodoList todos={todos} />
+        </div>
+      ) : null}
+    </li>
+  );
+};
+
 const Agents = () => {
   const { agentLabels, live } = useMission();
   const rows = agentRows(
@@ -364,92 +412,9 @@ const Agents = () => {
     <PanelSection count={rows.length} title="Agents">
       <ul className="-mx-md flex flex-col">
         {rows.map((row) => (
-          <li
-            className="flex h-8.5 shrink-0 items-center gap-control rounded-sm px-md"
-            key={row.id}
-            title={row.label}
-          >
-            <IconCell>
-              <AgentIcon phase={row.phase} />
-            </IconCell>
-            <span
-              className={cn(
-                "min-w-0 flex-1 truncate text-sm leading-sm font-book tracking-tight",
-                row.phase === "done" ? "text-text-secondary" : "text-text"
-              )}
-            >
-              {row.activity}
-            </span>
-            <span className="shrink-0 text-xs leading-sm tracking-tight text-text-tertiary">
-              {row.role === "orchestrator" ? "Orchestrator" : "Worker"}
-            </span>
-            <AgentStatusCell row={row} />
-          </li>
+          <AgentChecklist key={row.id} row={row} />
         ))}
       </ul>
-    </PanelSection>
-  );
-};
-
-const ModelRow = ({
-  effort,
-  label,
-  modelId,
-}: {
-  effort: string | null;
-  label: string;
-  modelId: string;
-}) => {
-  const models = useModels();
-  const name =
-    models.data?.models.find((model) => model.id === modelId)?.displayName ??
-    modelId;
-  const thinking = effortLabel(effort);
-  return (
-    <div className="flex h-9 shrink-0 items-center gap-lg">
-      <span className="min-w-0 flex-1 text-sm leading-sm font-book tracking-tight text-text-secondary">
-        {label}
-      </span>
-      <StaticSelect
-        className="w-29 justify-between"
-        href="/settings"
-        label={`${label} model: ${name}. Fixed for this mission; change defaults in Settings.`}
-      >
-        <span className="truncate font-mono text-2xs leading-xs text-text">
-          {name}
-        </span>
-      </StaticSelect>
-      <StaticSelect
-        className="w-36"
-        href="/settings"
-        label={`${label} thinking: ${thinking}. Fixed for this mission; change defaults in Settings.`}
-      >
-        <span className="text-xs leading-sm font-book tracking-tight text-text-tertiary">
-          Thinking
-        </span>
-        <span className="min-w-0 flex-1 truncate text-xs leading-sm font-medium tracking-tight text-text">
-          {thinking}
-        </span>
-      </StaticSelect>
-    </div>
-  );
-};
-
-const Models = () => {
-  const { live } = useMission();
-  const { orchestrator, worker } = live.mission;
-  return (
-    <PanelSection gap="xs" grow title="Models">
-      <ModelRow
-        effort={orchestrator.reasoningEffort}
-        label="Orchestrator"
-        modelId={orchestrator.modelId}
-      />
-      <ModelRow
-        effort={worker.reasoningEffort}
-        label="Workers"
-        modelId={worker.modelId}
-      />
     </PanelSection>
   );
 };
@@ -458,9 +423,9 @@ const Models = () => {
 export const OverviewTab = () => (
   <>
     <Todos />
+    <Agents />
     <PullRequests />
     <Files />
-    <Agents />
     <Models />
   </>
 );

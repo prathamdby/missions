@@ -80,7 +80,7 @@ export const ListCard = ({ className, ...props }: ComponentProps<"div">) => (
 );
 
 const listLabelVariants = cva(
-  "text-xs leading-sm font-medium tracking-tight text-text-tertiary",
+  "shrink-0 text-xs leading-sm font-medium tracking-tight text-text-tertiary",
   {
     defaultVariants: { size: "menu" },
     variants: {
@@ -111,9 +111,10 @@ const LISTBOX_ROLE = "listbox";
 const GROUP_ROLE = "group";
 const OPTION_ROLE = "option";
 
+/** Keep row groups at their intrinsic height; the containing viewport scrolls. */
 export const Listbox = ({ className, ...props }: ComponentProps<"div">) => (
   <div
-    className={cn("flex min-h-0 flex-col gap-hairline", className)}
+    className={cn("flex min-h-0 shrink-0 flex-col gap-hairline", className)}
     role={LISTBOX_ROLE}
     {...props}
   />
