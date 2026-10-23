@@ -37,6 +37,14 @@ describe("v1 document normalization", () => {
     expect({
       plan: normalizePlan({ id: "p", status: "proposed" }),
       queue: normalizeQueueItem({ id: "q", state: "queued" }),
+      storedQueue: normalizeQueueItem({
+        executionMode: "plan",
+        id: "s",
+        retryOf: "q",
+        sender: { agentId: "w", role: "worker", title: "Worker" },
+        sequence: 7,
+        state: "accepted",
+      }),
       transcript: normalizeTranscriptItem({
         id: "t",
         kind: "system",
@@ -62,6 +70,16 @@ describe("v1 document normalization", () => {
         sender: null,
         sequence: 0,
         state: "queued",
+      },
+      storedQueue: {
+        executionMode: "plan",
+        id: "s",
+        origin: "user",
+        purpose: "message",
+        retryOf: "q",
+        sender: { agentId: "w", role: "worker", title: "Worker" },
+        sequence: 7,
+        state: "accepted",
       },
       transcript: {
         id: "t",

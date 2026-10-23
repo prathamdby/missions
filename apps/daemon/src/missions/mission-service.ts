@@ -684,6 +684,10 @@ export class MissionService {
         if (agent.holdsWriteLease !== holdsWriteLease) {
           this.#saveAgent({ ...agent, holdsWriteLease });
         }
+        // A released lease can unblock a mode transition held in the outbox.
+        if (holder === null && agent.role === "orchestrator") {
+          this.#scheduleDelivery(agent.id);
+        }
       }
     }
   }
@@ -2682,6 +2686,7 @@ export class MissionService {
       }
       return false;
     }
+    const previous = mission.executionMode;
     this.#mutateMission(mission.id, (m) => ({
       ...m,
       executionMode: target,
@@ -2691,6 +2696,12 @@ export class MissionService {
       await this.#syncNativeMode(live);
       return true;
     } catch (error) {
+      // Keep the transition pending so the next pass retries the native switch.
+      this.#mutateMission(mission.id, (m) =>
+        m.executionMode === target
+          ? { ...m, executionMode: previous, pendingExecutionMode: target }
+          : m
+      );
       if (this.#isCurrent(live.agentId, live)) {
         this.#notice(
           mission.id,
@@ -2748,10 +2759,10 @@ export class MissionService {
     try {
       await this.#execute(live.agentId, runtime, () =>
         runtime.submit(
-          item.id,
-          this.#nativeText(item),
-          item.mode,
-          this.#submitOptions(item)
+          latest.id,
+          this.#nativeText(latest),
+          latest.mode,
+          this.#submitOptions(latest)
         )
       );
       this.#timing.mark(item.id, "delivery.admitted", ids);
@@ -3246,6 +3257,7 @@ export class MissionService {
     if (item.state === "accepted") {
       const removed = this.#reviseAccepted(item.id, { state: "removed" });
       if (removed) {
+        this.#scheduleDelivery(removed.agentId);
         return removed;
       }
     }
@@ -3301,6 +3313,23 @@ export class MissionService {
       throw notFound("Agent");
     }
     this.#requireRunningWorker(recipient);
+    const items = this.#store.queue.list(missionId);
+    if (items.some((entry) => entry.retryOf === item.id)) {
+      throw conflict(
+        "This message was already retried; retry the newest attempt"
+      );
+    }
+    const outstanding = items.filter(
+      (entry) =>
+        entry.agentId === item.agentId &&
+        entry.origin === item.origin &&
+        isOutstanding(entry)
+    ).length;
+    if (outstanding >= MAX_OUTSTANDING_MESSAGES) {
+      throw conflict(
+        `${recipient.title} already has ${outstanding} undelivered messages. Wait for them to be delivered or remove some`
+      );
+    }
     const retry = this.#newQueueItem({
       agentId: item.agentId,
       executionMode: item.executionMode,
@@ -3311,7 +3340,7 @@ export class MissionService {
       purpose: item.purpose,
       retryOf: item.id,
       sender: item.sender,
-      sequence: nextSequence(this.#store.queue.list(missionId)),
+      sequence: nextSequence(items),
       text: item.text,
     });
     this.#saveQueueItem(retry);
@@ -3969,6 +3998,16 @@ export class MissionService {
     }
     for (const question of this.#store.questions.listByStatus(["pending"])) {
       this.#saveQuestion({ ...question, status: "cancelled" });
+    }
+    // Native approval requests died with the old process; Resume asks again.
+    for (const mission of this.#store.listMissions()) {
+      for (const plan of this.#store.plans.list(mission.id)) {
+        if (plan.actionable) {
+          this.#log.commit((emit) =>
+            this.#savePlan({ ...plan, actionable: false }, emit)
+          );
+        }
+      }
     }
   }
 

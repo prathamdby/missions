@@ -114,12 +114,16 @@ describe(upstreamPath, () => {
       ["v1", "missions"],
       ["v2"],
       ["v2", "..", "secret"],
+      ["v2", ".", "missions"],
+      ["v2", "", "missions"],
       undefined,
     ];
     expect(cases.map((segments) => upstreamPath(segments))).toStrictEqual([
       "/v2/missions/abc",
       "/v2/a%20b",
       "/v2/x%2Fy",
+      null,
+      null,
       null,
       null,
       null,

@@ -283,13 +283,17 @@ const QueueRow = ({
 export const useVisibleQueue = () => {
   const { live, missionId } = useMission();
   const now = useNow();
+  const goalId = goalRequestId(missionId);
+  const goal = live.queue[goalId];
+  // A failed or uncertain goal stays in the tray so it can be retried.
+  const goalRetryable = goal ? isRetryable(goal) : false;
   const hidden = useMemo(
     () =>
       new Set([
         ...deliveredRequestIds(Object.values(live.transcript)),
-        goalRequestId(missionId),
+        ...(goalRetryable ? [] : [goalId]),
       ]),
-    [live.transcript, missionId]
+    [live.transcript, goalId, goalRetryable]
   );
   return visibleQueue(Object.values(live.queue), now, hidden);
 };

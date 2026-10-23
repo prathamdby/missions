@@ -29,6 +29,7 @@ const PURPOSE_LABEL: Partial<
 const DELIVERY_NOTE: Record<Exclude<DeliveryState, "sent">, string> = {
   failed: "Not delivered. Retry it from the message queue.",
   pending: "Waiting to be delivered",
+  removed: "Removed from the queue before delivery.",
   unknown:
     "Delivery uncertain. It may have arrived; retrying may send it twice.",
 };

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import Database from "better-sqlite3";
@@ -76,11 +76,13 @@ export const backupBeforeMigration = (
     return null;
   }
   const target = `${file}.pre-migration-${applied}.bak`;
-  if (existsSync(target)) {
-    return target;
-  }
-  sqlite.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`);
-  chmodSync(target, 0o600);
+  // An earlier attempt's copy may predate later writes, so always take a
+  // fresh one and swap it in only once it is complete.
+  const partial = `${target}.partial`;
+  rmSync(partial, { force: true });
+  sqlite.exec(`VACUUM INTO '${partial.replaceAll("'", "''")}'`);
+  chmodSync(partial, 0o600);
+  renameSync(partial, target);
   return target;
 };
 

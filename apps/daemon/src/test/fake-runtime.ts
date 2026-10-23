@@ -33,6 +33,8 @@ export class FakeRuntime implements RuntimeHandle {
   survivors: number[] = [];
   /** When set and returning true, every submit rejects. */
   failSubmits: (() => boolean) | null = null;
+  /** When set and returning true, every native mode switch rejects. */
+  failInteractionMode: (() => boolean) | null = null;
 
   constructor(options: AgentRuntimeOptions) {
     this.options = options;
@@ -87,6 +89,9 @@ export class FakeRuntime implements RuntimeHandle {
   }
 
   setInteractionMode(mode: "auto" | "spec") {
+    if (this.failInteractionMode?.()) {
+      return Promise.reject(new Error("mode switch failed"));
+    }
     this.interactionModes.push(mode);
     return Promise.resolve();
   }
