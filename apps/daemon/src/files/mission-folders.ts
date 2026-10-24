@@ -25,10 +25,12 @@ export const sweepMissionFolders = async (
 ) => {
   const entries = await readdir(root, { withFileTypes: true }).catch(
     (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") {
-        return [];
+      if (error.code !== "ENOENT") {
+        process.stderr.write(
+          `Mission folder cleanup failed: ${errorMessage(error)}\n`
+        );
       }
-      throw error;
+      return [];
     }
   );
   await Promise.all(

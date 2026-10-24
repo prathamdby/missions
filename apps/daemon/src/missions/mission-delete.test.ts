@@ -20,11 +20,13 @@ import { ArtifactStore } from "../files/artifact-store";
 import { SharedFiles } from "../files/shared-files";
 import * as execution from "../lib/exec";
 import { ProcessRecordRepository } from "../processes/process-record-repository";
+import { ProcessSupervisor } from "../processes/process-supervisor";
 import type { StopResult } from "../processes/process-supervisor";
 import { sh, testConfig } from "../test/fixtures";
 import {
   bootDaemon,
   control,
+  MODEL,
   pausedMission,
   outcome,
   RAW_MODELS,
@@ -476,6 +478,136 @@ describe("mission deletion", () => {
     }
   );
 
+  it("refuses owned-worktree removal while another mission runs there", async () => {
+    const ctx = await ownedMission();
+    const other = await ctx.daemon.missions.create({
+      goal: "Use the shared worktree",
+      operationId: "create-sharing-mission",
+      orchestrator: MODEL,
+      projectId: ctx.projectId,
+      worker: MODEL,
+      workspace: { mode: "existing_worktree", path: ctx.workspace.path },
+    });
+    await waitFor(
+      () =>
+        ctx.runtimes.some(
+          (runtime) =>
+            runtime.options.agentId === other.agents[0]?.id &&
+            runtime.submitted.length > 0
+        ),
+      Boolean
+    );
+    const file = path.join(ctx.workspace.path, "other-mission.txt");
+    await writeFile(file, "other mission's uncommitted work");
+    await expect(removeOwned(ctx)).rejects.toThrow(
+      /still owns this workspace/u
+    );
+    await expect(readFile(file, "utf-8")).resolves.toBe(
+      "other mission's uncommitted work"
+    );
+    expect(ctx.daemon.missions.get(ctx.missionId).workspace?.path).toBe(
+      ctx.workspace.path
+    );
+    await ctx.daemon.missions.pause(
+      other.mission.id,
+      control(ctx.daemon, other.mission.id, "pause-sharing-mission")
+    );
+    await expect(removeOwned(ctx)).resolves.toMatchObject({
+      status: "accepted",
+    });
+    expect(ctx.daemon.missions.get(other.mission.id).status).toBe("paused");
+  });
+
+  it("refuses removal when another mission has uncertain processes in the workspace", async () => {
+    const ctx = await ownedMission();
+    const other = await pausedMission(ctx, "other-owner");
+    ctx.daemon.missions.patch(other.missionId, (mission) => ({
+      ...mission,
+      status: "stop_failed",
+      workspace: {
+        ...ctx.workspace,
+        missionId: other.missionId,
+        mode: "existing_worktree",
+        owned: false,
+      },
+    }));
+    await expect(removeOwned(ctx)).rejects.toThrow(
+      /processes still own this workspace/u
+    );
+    expect(existsSync(ctx.workspace.path)).toBeTruthy();
+    ctx.daemon.missions.patch(other.missionId, (mission) => ({
+      ...mission,
+      status: "paused",
+    }));
+    await expect(removeOwned(ctx)).resolves.toMatchObject({
+      status: "accepted",
+    });
+  });
+
+  it.each([false, true])(
+    "ignores unrelated missing worktree folders (own folder missing=%s)",
+    async (missing) => {
+      const ctx = await ownedMission();
+      const unrelated = `${ctx.repo}-unrelated`;
+      sh(ctx.repo, ["worktree", "add", "-b", "unrelated", unrelated, "main"]);
+      await rm(unrelated, { force: true, recursive: true });
+      if (missing) {
+        await rm(ctx.workspace.path, { force: true, recursive: true });
+      }
+      await expect(removeOwned(ctx)).resolves.toMatchObject({
+        status: "accepted",
+      });
+      expect(existsSync(ctx.workspace.path)).toBeFalsy();
+      expect(
+        sh(ctx.repo, [
+          "for-each-ref",
+          "--format=%(refname)",
+          `refs/heads/${ctx.workspace.branch}`,
+        ])
+      ).toBe("");
+    }
+  );
+
+  it.each(["shared", "artifacts"])(
+    "continues process recovery when the %s sweep cannot list its root",
+    async (kind) => {
+      const ctx = await pausedMission(await bootDaemon(opened));
+      const root =
+        kind === "shared"
+          ? path.join(ctx.config.home, "shared")
+          : ctx.config.artifactsDir;
+      await mkdir(root, { recursive: true });
+      const record = {
+        agentId: "recorded-orphan",
+        pid: 999_999,
+        startTime: "",
+        tag: "recorded-orphan.gone",
+      };
+      new ProcessRecordRepository(ctx.daemon.store).save(
+        record,
+        record.agentId
+      );
+      await ctx.daemon.close();
+      await rename(root, `${root}-saved`);
+      await writeFile(root, "not a directory");
+      const stop = vi
+        .spyOn(ProcessSupervisor.prototype, "stopRecord")
+        .mockResolvedValue({ stopped: true, survivors: [] });
+      const log = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const restarted = await bootDaemon(opened, ctx.config);
+      expect(stop).toHaveBeenCalledWith(record);
+      expect(
+        new ProcessRecordRepository(restarted.daemon.store).list()
+      ).toStrictEqual([]);
+      expect(log.mock.calls.map(([line]) => line).join("")).toContain(
+        "Mission folder cleanup failed"
+      );
+      expect(restarted.daemon.missions.get(ctx.missionId).id).toBe(
+        ctx.missionId
+      );
+    }
+  );
+
   it.each([1, null])(
     "leaves the mission readable and retryable when git removal fails with %s",
     async (code) => {
@@ -580,25 +712,77 @@ describe("mission deletion", () => {
     vi.spyOn(ArtifactStore.prototype, "remove").mockRejectedValueOnce(
       new Error("artifacts blocked")
     );
-    const log = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    await ctx.daemon.missions.remove(
+    const result = await ctx.daemon.missions.remove(
       ctx.missionId,
       control(ctx.daemon, ctx.missionId, "delete-sweep-receipt")
     );
-    expect(log.mock.calls.map(([line]) => line).join("")).toContain(
-      "cleanup failed"
-    );
+    const warning =
+      "Some Missions-owned files could not be removed. Cleanup will be retried when the daemon restarts.";
+    expect({
+      notice: result.notice,
+      receipt: ctx.daemon.store.getOperation("delete-sweep-receipt")?.result,
+      warnings: ctx.daemon.log
+        .replay(null, 0, 10_000)
+        .filter((event) => event.type === "notice")
+        .map((event) => event.data.notice.message),
+    }).toStrictEqual({
+      notice: warning,
+      receipt: { notice: warning },
+      warnings: [
+        `Mission ${ctx.missionId} file cleanup failed: shared blocked; artifacts blocked`,
+      ],
+    });
     expect(
       roots.every((root) => existsSync(path.join(root, ctx.missionId)))
     ).toBeTruthy();
     await ctx.daemon.close();
-    await bootDaemon(opened, ctx.config);
+    const restarted = await bootDaemon(opened, ctx.config);
+    await expect(
+      restarted.daemon.missions.remove(ctx.missionId, {
+        expectedRevision: 0,
+        operationId: "delete-sweep-receipt",
+      })
+    ).resolves.toStrictEqual({ ...result, status: "duplicate" });
     for (const root of roots) {
       expect(existsSync(path.join(root, ctx.missionId))).toBeFalsy();
       expect(
         names.slice(1).every((name) => existsSync(path.join(root, name)))
       ).toBeTruthy();
     }
+  });
+
+  it("joins cleanup retries and preserves both branch and file warnings", async () => {
+    const ctx = await ownedMission();
+    sh(ctx.workspace.path, ["commit", "--allow-empty", "-qm", "unmerged work"]);
+    const entered = Promise.withResolvers<undefined>();
+    const finish = Promise.withResolvers<undefined>();
+    vi.spyOn(SharedFiles.prototype, "remove").mockImplementationOnce(
+      async () => {
+        entered.resolve(undefined);
+        await finish.promise;
+        throw new Error("shared blocked");
+      }
+    );
+    const first = removeOwned(ctx);
+    await entered.promise;
+    const retry = ctx.daemon.missions.remove(ctx.missionId, {
+      expectedRevision: 0,
+      operationId: "delete-owned-worktree",
+    });
+    finish.resolve(undefined);
+    const result = await first;
+    expect(result.notice).toContain(`Kept branch ${ctx.workspace.branch}`);
+    expect(result.notice).toContain(
+      "Some Missions-owned files could not be removed"
+    );
+    await expect(retry).resolves.toStrictEqual({
+      ...result,
+      status: "duplicate",
+    });
+    expect(
+      ctx.daemon.store.getOperation("delete-owned-worktree")?.result
+    ).toStrictEqual({ notice: result.notice });
+    expect(removedEvents(ctx.daemon, ctx.missionId)).toHaveLength(1);
   });
 
   it("rolls back a failure inside the transaction and leaves the mission intact", async () => {

@@ -494,7 +494,9 @@ const removeMissionBranch = async (
       throw conflict(base.stderr || "Could not read the base branch");
     }
   }
-  const trees = await repo.worktrees(binding.repoRoot);
+  const trees = repo.parseWorktrees(
+    await requireGit(binding.repoRoot, ["worktree", "list", "--porcelain"])
+  );
   if (trees.some((tree) => tree.branch === binding.branch)) {
     return `Kept branch ${binding.branch} because it is checked out elsewhere.`;
   }
@@ -538,9 +540,9 @@ export const removeMissionWorkspace = async (
     if (problems.length > 0) {
       throw conflict(problems.join("; "));
     }
-    // Read the list with checked error handling before trusting its main marker.
-    await requireGit(binding.repoRoot, ["worktree", "list", "--porcelain"]);
-    const trees = await repo.worktrees(binding.repoRoot);
+    const trees = repo.parseWorktrees(
+      await requireGit(binding.repoRoot, ["worktree", "list", "--porcelain"])
+    );
     const main = trees.find((tree) => tree.isMain);
     const owned = trees.find((tree) => tree.path === binding.path);
     if (

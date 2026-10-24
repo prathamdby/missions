@@ -97,6 +97,45 @@ describe("mission Auto titles", () => {
     await expect(ctx.daemon.close()).resolves.toBeUndefined();
   });
 
+  it.each(["User renamed this", "Add a greeting file"])(
+    "keeps an explicit placeholder title after a rename to %s",
+    async (firstTitle) => {
+      const { booted, title } = await setup();
+      const ctx = await startMission(booted);
+      const placeholder = ctx.daemon.missions.get(ctx.missionId).title;
+      await ctx.daemon.missions.update(ctx.missionId, {
+        expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
+        title: firstTitle,
+      });
+      await ctx.daemon.missions.update(ctx.missionId, {
+        expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
+        title: placeholder,
+      });
+      title.resolve("Generated title");
+      await tick();
+      expect(ctx.daemon.missions.get(ctx.missionId).title).toBe(placeholder);
+    }
+  );
+
+  it("does not cancel a title for a rejected explicit rename", async () => {
+    const { booted, title } = await setup();
+    const ctx = await startMission(booted);
+    await expect(
+      ctx.daemon.missions.update(ctx.missionId, {
+        expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision + 1,
+        title: "Rejected rename",
+      })
+    ).rejects.toMatchObject({ code: "stale_revision" });
+    title.resolve("Generated title");
+    await waitFor(
+      () => ctx.daemon.missions.get(ctx.missionId).title,
+      (value) => value === "Generated title"
+    );
+    expect(ctx.daemon.missions.get(ctx.missionId).title).toBe(
+      "Generated title"
+    );
+  });
+
   it("rejects the old revision once, then accepts a reviewed retry", async () => {
     const { booted, title } = await setup();
     const ctx = await startMission(booted);
