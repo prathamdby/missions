@@ -40,7 +40,7 @@ export const deliverableFor = (items: readonly QueueItem[], agentId: string) =>
  */
 export const sameMessage = (
   item: QueueItem,
-  intent: Pick<QueueItem, "agentId" | "executionMode" | "mode" | "text"> & {
+  intent: Pick<QueueItem, "agentId" | "mode" | "text"> & {
     missionId: string;
   }
 ) =>
@@ -48,5 +48,4 @@ export const sameMessage = (
   item.agentId === intent.agentId &&
   item.text === intent.text &&
   item.mode === intent.mode &&
-  (item.executionMode ?? null) === (intent.executionMode ?? null) &&
   item.replacesId === null;

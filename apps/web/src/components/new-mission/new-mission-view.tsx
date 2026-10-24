@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import type { FormEvent, KeyboardEvent } from "react";
 import { useMemo } from "react";
 
-import { AutonomyChip } from "@/components/missions/autonomy-chip";
-import { ExecutionModeChip } from "@/components/missions/execution-mode-chip";
 import { BranchPicker } from "@/components/new-mission/branch-picker";
 import { ModelPicker } from "@/components/new-mission/model-picker";
 import { ProjectPicker } from "@/components/new-mission/project-picker";
@@ -21,11 +19,7 @@ import { COMPOSER_ID } from "@/components/shell/global-shortcuts";
 import { PageHeader, PageTitle } from "@/components/shell/page-header";
 import { Button, IconButton } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import {
-  ComposerBox,
-  ComposerLegend,
-  ComposerToolbar,
-} from "@/components/ui/composer-box";
+import { ComposerBox, ComposerToolbar } from "@/components/ui/composer-box";
 import { Dot } from "@/components/ui/dot";
 import {
   ArrowUpIcon,
@@ -430,16 +424,6 @@ export const NewMissionView = () => {
                       size="responsive"
                     />
                   </Hint>
-                  <AutonomyChip
-                    disabled={!hasProject}
-                    onChange={form.handleAutonomyChange}
-                    value={form.autonomy}
-                  />
-                  <ExecutionModeChip
-                    disabled={!hasProject}
-                    onChange={form.handleExecutionModeChange}
-                    value={form.executionMode}
-                  />
                   <ModelPicker
                     disabled={!hasProject}
                     onChange={form.handleModelChange}
@@ -459,11 +443,6 @@ export const NewMissionView = () => {
               </ComposerBox>
             </form>
           </div>
-          <ComposerLegend>
-            {form.executionMode === "plan"
-              ? "Nothing changes until you approve the plan."
-              : "Agents act within the autonomy level you pick."}
-          </ComposerLegend>
         </div>
       </div>
     </div>

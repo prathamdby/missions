@@ -23,7 +23,7 @@ const until = async <T>(read: () => T, done: (value: T) => boolean) =>
 const SUMMARY =
   "Added NOTES.md and reviewed it.\n\nChecks:\n- test -f NOTES.md: passed";
 
-const start = async (executionMode?: "plan" | "work") => {
+const start = async (goal = "Write notes") => {
   const daemon = await createDaemon({
     config: await testConfig(),
     createRuntime: (options) => new ScriptedRuntime(options, 1),
@@ -39,16 +39,19 @@ const start = async (executionMode?: "plan" | "work") => {
     throw new Error("project not added");
   }
   const created = await daemon.missions.create({
-    autonomy: "high",
-    executionMode,
-    goal: "Write notes",
+    goal,
     operationId: "scripted-mission",
     orchestrator: MODEL,
     projectId: added.project.id,
     worker: MODEL,
     workspace: { mode: "current_checkout" },
   });
-  return { daemon, id: created.mission.id, repo };
+  return {
+    daemon,
+    id: created.mission.id,
+    initialMode: created.mission.executionMode,
+    repo,
+  };
 };
 
 describe(ScriptedRuntime, () => {
@@ -97,21 +100,30 @@ describe(ScriptedRuntime, () => {
     }
   );
 
-  it(
-    "walks a Plan-mode mission from native plan approval to completion",
+  it.each(["Plan it first.", "Scope it first.", "Review this first."])(
+    "enters Plan mode for '%s' and completes after native approval",
     { timeout: 20_000 },
-    async () => {
-      const { daemon, id } = await start("plan");
+    async (request) => {
+      const { daemon, id, repo, initialMode } = await start(
+        `Write notes. ${request}`
+      );
+      expect(initialMode).toBe("work");
       const proposed = await until(
         () => daemon.missions.snapshot(id),
         (snap) => snap.plans.some((plan) => plan.actionable)
       );
       expect({
+        enteredPlan: proposed.transcript.some(
+          (item) => item.kind === "tool_call" && item.toolName === "enter_plan"
+        ),
         mode: proposed.mission.executionMode,
+        notes: existsSync(path.join(repo, "NOTES.md")),
         plans: proposed.plans.map((plan) => [plan.status, plan.actionable]),
         status: proposed.mission.status,
       }).toStrictEqual({
+        enteredPlan: true,
         mode: "plan",
+        notes: false,
         plans: [["proposed", true]],
         status: "awaiting_approval",
       });

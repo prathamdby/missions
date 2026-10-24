@@ -24,7 +24,6 @@ const entry = (
   agentId: "a",
   createdAt: iso(NOW - 60_000 + (id.codePointAt(0) ?? 0)),
   error: null,
-  executionMode: null,
   id,
   missionId: "m",
   mode: "queue",

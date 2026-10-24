@@ -1,7 +1,7 @@
-import type { DeliveryMode, ExecutionMode } from "@missions/protocol/common";
+import type { DeliveryMode } from "@missions/protocol/common";
 
 export interface MessageDelivery {
-  input: { executionMode?: ExecutionMode; mode: DeliveryMode; text: string };
+  input: { mode: DeliveryMode; text: string };
   occurrence: string;
 }
 
@@ -30,26 +30,18 @@ export class MessageDraft {
     this.emit();
   }
 
-  /** `executionMode` is only set when the message asks for a mode change. */
-  take(
-    mode: DeliveryMode,
-    executionMode?: ExecutionMode
-  ): MessageDelivery | null {
+  take(mode: DeliveryMode): MessageDelivery | null {
     const text = this.text.trim();
     if (!text) {
       return null;
     }
     const same =
-      this.retry?.input.text === text &&
-      this.retry.input.mode === mode &&
-      this.retry.input.executionMode === executionMode;
+      this.retry?.input.text === text && this.retry.input.mode === mode;
     const delivery =
       same && this.retry
         ? this.retry
         : {
-            input: executionMode
-              ? { executionMode, mode, text }
-              : { mode, text },
+            input: { mode, text },
             occurrence: this.newId(),
           };
     this.text = "";

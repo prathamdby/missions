@@ -29,7 +29,6 @@ const mission = (
   revision: number,
   status: Mission["status"] = "running"
 ): Mission => ({
-  autonomy: "medium",
   createdAt: AT,
   endedAt: null,
   epoch: 0,
@@ -38,7 +37,6 @@ const mission = (
   id: MISSION_ID,
   lastError: null,
   orchestrator: { modelId: "opus", reasoningEffort: "high" },
-  pendingExecutionMode: null,
   projectId: "p-1",
   publish: {
     cleanup: "none",
@@ -80,7 +78,6 @@ const queueItem = (revision: number, state: QueueItem["state"]): QueueItem => ({
   agentId: "a-orch",
   createdAt: AT,
   error: null,
-  executionMode: null,
   id: "q-1",
   missionId: MISSION_ID,
   mode: "queue",

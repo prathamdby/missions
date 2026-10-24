@@ -6,9 +6,6 @@ export const RevisionSchema = z.int().nonnegative();
 /** Client-generated idempotency key for a mutating command. */
 export const OperationIdSchema = z.string().min(8).max(128);
 
-export const AutonomySchema = z.enum(["off", "low", "medium", "high"]);
-export type Autonomy = z.infer<typeof AutonomySchema>;
-
 export const RoleSchema = z.enum(["orchestrator", "worker"]);
 export type Role = z.infer<typeof RoleSchema>;
 

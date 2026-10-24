@@ -52,18 +52,3 @@ export const ComposerToolbar = ({
     {...props}
   />
 );
-
-/** One-line note under a composer, hidden on touch screens. */
-export const ComposerLegend = ({
-  className,
-  ...props
-}: ComponentProps<"p">) => (
-  <p
-    className={cn(
-      "hidden text-center text-xs leading-sm font-book tracking-tight text-text-tertiary md:block",
-      className
-    )}
-    data-slot="composer-legend"
-    {...props}
-  />
-);

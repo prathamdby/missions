@@ -12,7 +12,11 @@ describe("v1 document normalization", () => {
   it("fills fields added in v2 without overriding stored values", () => {
     expect({
       agent: normalizeAgent({ id: "a" }),
-      mission: normalizeMission({ id: "m" }),
+      mission: normalizeMission({
+        autonomy: "off",
+        id: "m",
+        pendingExecutionMode: "plan",
+      }),
       storedMode: normalizeMission({ executionMode: "plan", id: "m" })
         .executionMode,
     }).toStrictEqual({
@@ -27,7 +31,6 @@ describe("v1 document normalization", () => {
         endedAt: null,
         executionMode: "work",
         id: "m",
-        pendingExecutionMode: null,
       },
       storedMode: "plan",
     });
@@ -62,7 +65,6 @@ describe("v1 document normalization", () => {
         toolUseId: null,
       },
       queue: {
-        executionMode: null,
         id: "q",
         origin: "user",
         purpose: "message",
@@ -72,7 +74,6 @@ describe("v1 document normalization", () => {
         state: "queued",
       },
       storedQueue: {
-        executionMode: "plan",
         id: "s",
         origin: "user",
         purpose: "message",

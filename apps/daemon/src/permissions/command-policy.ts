@@ -210,8 +210,8 @@ const ghCommand = (args: string[]): CommandCategory => {
 
 /**
  * Branch changes and history- or worktree-destroying Git operations. They
- * keep the vcs category but count as high impact, so lower autonomy levels
- * ask and they wait until no other agent is writing.
+ * keep the vcs category but count as high impact, so they wait until no
+ * other agent is writing.
  */
 const GIT_HIGH_IMPACT = new Set([
   "reset",
