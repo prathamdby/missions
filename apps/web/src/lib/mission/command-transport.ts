@@ -6,7 +6,8 @@ import type { MissionCommandTransport } from "./commands";
 export const missionCommandTransport = (
   missionId: string,
   apply: (entity: LocalEntity) => void,
-  refresh: () => Promise<boolean>
+  refresh: () => Promise<boolean>,
+  onRemoved: () => void = () => null
 ): MissionCommandTransport => {
   const receive = async <K extends LocalEntity["kind"]>(
     kind: K,
@@ -26,6 +27,14 @@ export const missionCommandTransport = (
       receive("mission", api.cleanup(missionId, { ...body, operationId })),
     commit: (body, operationId) =>
       receive("mission", api.commit(missionId, { ...body, operationId })),
+    delete: async (body, operationId) => {
+      const accepted = await api.deleteMission(missionId, {
+        ...body,
+        operationId,
+      });
+      onRemoved();
+      return accepted;
+    },
     editQueue: async ({ itemId, ...body }, operationId) => {
       const result = await api.editQueueItem(missionId, itemId, {
         ...body,

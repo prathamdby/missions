@@ -9,7 +9,10 @@ import { queryKeys } from "../api/query-keys";
 import {
   applyGlobalEvent,
   applyMissionEvent,
+  isMissionRemoved,
+  onMissionRemoved,
   recoverQueryResources,
+  removeMission,
   upsertMissionSummary,
 } from "./global-cache";
 import { startGlobalSession } from "./global-session";
@@ -73,6 +76,7 @@ const project: Project = {
 const settings: Settings = {
   cleanupAfterMerge: true,
   defaultAutonomy: "medium",
+  defaultWorkspaceMode: "new_worktree",
   maxConcurrentWorkers: 2,
   orchestrator: mission().orchestrator,
   worker: mission().worker,
@@ -343,5 +347,38 @@ describe("global session and cache recovery", () => {
     ]) {
       expect(client.getQueryState(key)?.isInvalidated).toBeTruthy();
     }
+  });
+
+  it("removal drops mission reads once and late summaries, responses, and events cannot restore it", () => {
+    const client = makeClient();
+    seed(client);
+    upsertMissionSummary(client, mission(1));
+    const listener = vi.fn<(missionId: string) => void>();
+    cleanups.push(onMissionRemoved(client, listener));
+    applyGlobalEvent(
+      client,
+      event(
+        20,
+        { data: { missionId: MISSION_ID }, type: "mission.removed" },
+        null
+      )
+    );
+    removeMission(client, MISSION_ID);
+    upsertMissionSummary(client, mission(9));
+    applyMissionEvent(
+      client,
+      event(21, { data: { mission: mission(10) }, type: "mission.updated" })
+    );
+    expect({
+      changes: client.getQueryData(queryKeys.changes(MISSION_ID)),
+      listener: listener.mock.calls,
+      missions: client.getQueryData<MissionSummary[]>(queryKeys.missions),
+      removed: isMissionRemoved(client, MISSION_ID),
+    }).toStrictEqual({
+      changes: undefined,
+      listener: [[MISSION_ID]],
+      missions: [],
+      removed: true,
+    });
   });
 });

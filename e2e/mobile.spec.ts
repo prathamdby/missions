@@ -17,7 +17,7 @@ test("a phone can start a mission and open the navigation", async ({
 }) => {
   const project = await addProject(request, gitRepo("mobile"));
   await page.goto("/");
-  await page.getByRole("button", { name: "Project" }).click();
+  await page.getByRole("button", { exact: true, name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
   await chooseExecutionMode(page, "Plan");
   await page

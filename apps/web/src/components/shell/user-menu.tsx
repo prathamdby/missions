@@ -11,7 +11,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SettingsIcon, UnfoldIcon } from "@/components/ui/icons";
@@ -75,7 +74,6 @@ export const UserMenu = ({ layout }: { layout: SidebarLayout }) => {
         <DropdownMenuItem onSelect={() => router.push("/settings")}>
           <SettingsIcon />
           Settings
-          <DropdownMenuShortcut>⌘,</DropdownMenuShortcut>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

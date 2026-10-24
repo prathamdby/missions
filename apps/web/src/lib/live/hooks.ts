@@ -5,6 +5,7 @@ import { routes } from "@missions/protocol/routes";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 
+import { isApiError } from "@/lib/api/api-error";
 import { proxyUrl } from "@/lib/api/client";
 import { api } from "@/lib/api/endpoints";
 import {
@@ -16,6 +17,9 @@ import {
 import {
   applyMissionEvent,
   invalidateMissionResources,
+  isMissionRemoved,
+  onMissionRemoved,
+  removeMission,
   upsertMissionSummary,
 } from "@/lib/live/global-cache";
 import { createMissionStore } from "@/lib/live/mission-store";
@@ -30,12 +34,14 @@ export const useMissionLive = (missionId: string) => {
         eventsUrl: (after) => proxyUrl(routes.events(), { after, missionId }),
         fetchSnapshot: api.missionSnapshot,
         fetchTranscript: api.missionTranscript,
+        isMissing: (error) => isApiError(error) && error.code === "not_found",
         missionId,
         onEvents: (events) => {
           for (const event of events) {
             applyMissionEvent(client, event);
           }
         },
+        onMissing: () => removeMission(client, missionId),
         onMission: (mission) => {
           upsertMissionSummary(client, mission);
         },
@@ -45,9 +51,21 @@ export const useMissionLive = (missionId: string) => {
   );
 
   useEffect(() => {
+    if (isMissionRemoved(client, missionId)) {
+      store.remove();
+      return;
+    }
+    const unsubscribe = onMissionRemoved(client, (removed) => {
+      if (removed === missionId) {
+        store.remove();
+      }
+    });
     store.start();
-    return () => store.stop();
-  }, [store]);
+    return () => {
+      unsubscribe();
+      store.stop();
+    };
+  }, [client, missionId, store]);
 
   const snapshot = useSyncExternalStore(
     store.subscribe,

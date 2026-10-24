@@ -1,6 +1,8 @@
 "use client";
 
 import type { Autonomy, ExecutionMode } from "@missions/protocol/common";
+import type { AgentModelSettings } from "@missions/protocol/missions";
+import type { Settings } from "@missions/protocol/settings";
 import { useState } from "react";
 
 import { useAddProject } from "@/components/projects/add-project-context";
@@ -15,12 +17,20 @@ import {
 } from "@/lib/api/queries";
 
 import {
+  chooseModels,
+  defaultWorkspace,
+  draftDefaults,
   nextDirtyAcknowledgement,
   reviewMissionDraft,
   resolveProject,
   resolveDefaultBranch,
 } from "./mission-draft";
-import type { Evidence, WorkspaceChoice } from "./mission-draft";
+import type {
+  DraftDefaults,
+  Evidence,
+  ModelChoices,
+  WorkspaceChoice,
+} from "./mission-draft";
 
 /** A choice that only applies while the same project stays selected. */
 interface PerProject<T> {
@@ -53,6 +63,26 @@ const useChosenProject = () => {
     }
   }
   return [chosenProject, setChosenProject] as const;
+};
+
+/**
+ * Settings-derived defaults, frozen once confirmed so a later settings event
+ * cannot silently change what a draft will start with.
+ */
+const useDraftDefaults = (settings: Evidence<Settings>) => {
+  const [frozen, setFrozen] = useState<DraftDefaults | null>(null);
+  const next = frozen ?? draftDefaults(settings);
+  if (next !== frozen) {
+    setFrozen(next);
+  }
+  return next;
+};
+
+const useModelChoices = (defaults: DraftDefaults | null) => {
+  const [choice, setChoice] = useState<Partial<ModelChoices>>({});
+  const change = (role: keyof ModelChoices, value: AgentModelSettings) =>
+    setChoice((current) => ({ ...current, [role]: value }));
+  return [chooseModels(defaults, choice), change] as const;
 };
 
 const evidence = <T>(query: {
@@ -105,13 +135,14 @@ export const useNewMissionForm = () => {
   const [autonomyChoice, setAutonomyChoice] = useState<Autonomy | null>(null);
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("work");
   const [goal, setGoal] = useState("");
+  const defaults = useDraftDefaults(evidence(settings));
+  const [models, handleModelChange] = useModelChoices(defaults);
 
   const branch =
     pick(branchChoice, projectId) ??
     resolveDefaultBranch(project, branches.data);
   const workspace: WorkspaceChoice =
-    pick(workspaceChoice, projectId) ??
-    (isGit ? { mode: "new_worktree" } : { mode: "current_checkout" });
+    pick(workspaceChoice, projectId) ?? defaultWorkspace(isGit, defaults);
   const otherWorktrees = (worktrees.data ?? []).filter(
     (entry) => !entry.isMain
   );
@@ -126,6 +157,7 @@ export const useNewMissionForm = () => {
     checkout: evidence(checkout),
     executionMode,
     goal,
+    models,
     newBranch,
     project,
     projectsConfirmed: projects.isSuccess,
@@ -155,6 +187,7 @@ export const useNewMissionForm = () => {
     handleBranchChange: (value: string) =>
       projectId && setBranchChoice({ projectId, value }),
     handleExecutionModeChange: setExecutionMode,
+    handleModelChange,
     handleNewBranch: (value: string | null) =>
       setNewBranchChoice(projectId && value ? { projectId, value } : null),
     handleProjectChange: (value: string) => {
@@ -169,6 +202,7 @@ export const useNewMissionForm = () => {
     },
     isGit,
     missions: missions.data ?? [],
+    models,
     newBranch,
     otherWorktrees,
     project,

@@ -108,3 +108,34 @@ export const missionSnapshot = async (
   request: APIRequestContext,
   missionId: string
 ) => await call(request, "GET", `/missions/${missionId}/snapshot`);
+
+export const updateSettings = async (
+  request: APIRequestContext,
+  body: Record<string, unknown>
+) => await call(request, "PATCH", "/settings", body);
+
+/** Pause, resume, or archive with the mission's current revision. */
+export const controlMission = async (
+  request: APIRequestContext,
+  missionId: string,
+  action: "archive" | "pause" | "resume"
+) => {
+  const snapshot = (await missionSnapshot(request, missionId)) as {
+    mission: { revision: number };
+  };
+  return await call(request, "POST", `/missions/${missionId}/${action}`, {
+    expectedRevision: snapshot.mission.revision,
+    operationId: operationId(action),
+  });
+};
+
+/** The mission's current status, for polling. */
+export const missionStatus = async (
+  request: APIRequestContext,
+  missionId: string
+) => {
+  const snapshot = (await missionSnapshot(request, missionId)) as {
+    mission: { status: string };
+  };
+  return snapshot.mission.status;
+};

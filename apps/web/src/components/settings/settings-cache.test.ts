@@ -8,6 +8,7 @@ import { createSettingsCoordinator } from "./settings-cache";
 const initial: Settings = {
   cleanupAfterMerge: false,
   defaultAutonomy: "medium",
+  defaultWorkspaceMode: "new_worktree",
   maxConcurrentWorkers: 2,
   orchestrator: { modelId: "planner", reasoningEffort: "high" },
   worker: { modelId: "builder", reasoningEffort: null },

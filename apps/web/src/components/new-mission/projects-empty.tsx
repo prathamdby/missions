@@ -9,19 +9,16 @@ import {
   LinkIcon,
   ShieldIcon,
 } from "@/components/ui/icons";
-import { Kbd } from "@/components/ui/kbd";
 
 const SourceCard = ({
   description,
   icon,
   onSelect,
-  shortcut,
   title,
 }: {
   description: string;
   icon: ReactNode;
   onSelect: () => void;
-  shortcut?: string;
   title: string;
 }) => (
   <button
@@ -29,14 +26,7 @@ const SourceCard = ({
     onClick={onSelect}
     type="button"
   >
-    <span className="flex h-5 shrink-0 items-center justify-between text-text">
-      {icon}
-      {shortcut ? (
-        <Kbd className="max-md:hidden" size="sm">
-          {shortcut}
-        </Kbd>
-      ) : null}
-    </span>
+    <span className="flex h-5 shrink-0 items-center text-text">{icon}</span>
     <span className="flex flex-col gap-2xs tracking-tight">
       <span className="text-sm leading-sm font-medium text-text">{title}</span>
       <span className="text-xs leading-sm text-text-tertiary">
@@ -56,7 +46,6 @@ export const ProjectsEmpty = () => {
           description="Any Git repository on this machine"
           icon={<FolderAddIcon />}
           onSelect={() => openAddProject("browse")}
-          shortcut="⌘O"
           title="Open local folder"
         />
         <SourceCard

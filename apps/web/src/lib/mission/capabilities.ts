@@ -18,6 +18,14 @@ const RESUMABLE: ReadonlySet<MissionStatus> = new Set([
   "paused",
   "stop_failed",
 ]);
+/** Stopped missions the daemon will forget; files stay on disk. */
+const DELETABLE: ReadonlySet<MissionStatus> = new Set([
+  "paused",
+  "interrupted",
+  "completed",
+  "failed",
+  "archived",
+]);
 const PUBLISHABLE: ReadonlySet<MissionStatus> = new Set([
   "completed",
   "paused",
@@ -29,6 +37,7 @@ const PUBLISHABLE: ReadonlySet<MissionStatus> = new Set([
 export const missionCapabilities = (status: MissionStatus) => ({
   active: ACTIVE.has(status),
   archive: PUBLISHABLE.has(status),
+  delete: DELETABLE.has(status),
   message: PAUSABLE.has(status),
   pause: PAUSABLE.has(status),
   publish: PUBLISHABLE.has(status),

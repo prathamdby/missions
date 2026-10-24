@@ -578,3 +578,14 @@ export const PlugIcon = (props: IconProps) => (
     <path d="M11 9H13" strokeLinecap="round" strokeLinejoin="round" />
   </Svg>
 );
+
+export const MoreHorizontalIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path
+      d="M11.992 12H12.001M18 12H18.009M6 12H6.009"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2.5}
+    />
+  </Svg>
+);
