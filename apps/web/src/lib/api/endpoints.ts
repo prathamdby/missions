@@ -19,7 +19,10 @@ import {
   EditQueueItemResponseSchema,
 } from "@missions/protocol/commands";
 import { PageSchema } from "@missions/protocol/common";
-import { FileMatchListSchema } from "@missions/protocol/composer";
+import {
+  ComposerCatalogSchema,
+  FileMatchListSchema,
+} from "@missions/protocol/composer";
 import type { ComparisonMode } from "@missions/protocol/files";
 import {
   ChangesSchema,
@@ -121,6 +124,17 @@ export const api = {
       body,
       method: "POST",
     }),
+  composerCatalog: (
+    scope: { kind: "mission" | "project"; id: string },
+    signal?: AbortSignal
+  ) =>
+    apiRequest(
+      scope.kind === "mission"
+        ? routes.missionComposerCatalog(scope.id)
+        : routes.projectComposerCatalog(scope.id),
+      ComposerCatalogSchema,
+      { signal }
+    ),
   connection: (signal?: AbortSignal) =>
     apiRequest(routes.connection(), ConnectionStatusSchema, { signal }),
   createMission: (body: CreateMissionRequest) =>

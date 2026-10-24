@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 export interface ComposerSuggestion {
   value: string;
+  label?: string;
   description?: string;
 }
 
@@ -49,7 +50,7 @@ export const ComposerSuggestions = ({
           {items.map((item, index) => (
             <ListOption
               id={`${id}-${index}`}
-              key={item.value}
+              key={item.label ?? item.value}
               onClick={() => onChoose(item)}
               onMouseDown={(event) => event.preventDefault()}
               ref={index === activeIndex ? selected : undefined}
@@ -58,7 +59,7 @@ export const ComposerSuggestions = ({
             >
               <span className="flex min-w-0 flex-col gap-2xs text-left">
                 <span className="truncate font-mono text-xs leading-sm">
-                  {item.value}
+                  {item.label ?? item.value}
                 </span>
                 {item.description ? (
                   <span className="truncate text-xs leading-sm text-text-tertiary">

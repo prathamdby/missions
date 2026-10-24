@@ -22,6 +22,7 @@ import type {
   StopResult,
 } from "../processes/process-supervisor";
 import { toModelOption } from "../settings/models";
+import { listCommands, listSkills } from "./composer-catalog";
 import { NativeQueueTracker } from "./native-queue";
 import type { NativeQueueEntry } from "./native-queue";
 import { SESSION_START_TIMEOUT_MS, withDeadline } from "./startup";
@@ -827,6 +828,14 @@ export class AgentRuntime {
       throw new Error("Agent runtime is not connected");
     }
     return this.#client;
+  }
+
+  async listSkills() {
+    return await listSkills(this.#requireClient());
+  }
+
+  async listCommands() {
+    return await listCommands(this.#requireClient());
   }
 
   /** Native in-place session settings: no interrupt, replacement or replay. */

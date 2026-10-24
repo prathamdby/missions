@@ -1,7 +1,6 @@
 "use client";
 
 import type { DeliveryMode } from "@missions/protocol/common";
-import { useQuery } from "@tanstack/react-query";
 import type { KeyboardEvent, ReactNode } from "react";
 import { useId, useRef, useState, useSyncExternalStore } from "react";
 
@@ -13,14 +12,10 @@ import { AtIcon, AttachIcon } from "@/components/ui/icons";
 import { Textarea } from "@/components/ui/input";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { Hint } from "@/components/ui/tooltip";
-import { api } from "@/lib/api/endpoints";
 import { composerTrigger, insertSuggestion } from "@/lib/composer/trigger";
+import { useComposerSuggestions } from "@/lib/composer/use-suggestions";
+import type { ComposerScope } from "@/lib/composer/use-suggestions";
 import type { MessageDraft } from "@/lib/mission/message-draft";
-
-export interface ComposerScope {
-  kind: "mission" | "project";
-  id: string;
-}
 
 export const ComposerField = ({
   action,
@@ -62,23 +57,11 @@ export const ComposerField = ({
     ? `${scope?.id}:${trigger.kind}:${trigger.range.start}:${trigger.query}`
     : "";
   const open =
-    !disabled &&
-    scope !== null &&
-    trigger?.kind === "file" &&
-    key !== dismissed;
-  const search = useQuery({
-    enabled: open,
-    queryFn: async ({ signal }) => {
-      if (!scope) {
-        return { matches: [] };
-      }
-      return await api.fileSearch(scope, trigger?.query ?? "", signal);
-    },
-    queryKey: ["composer-files", scope?.kind, scope?.id, trigger?.query ?? ""],
-    staleTime: 30_000,
-  });
-  const items: ComposerSuggestion[] = (search.data?.matches ?? []).map(
-    (match) => ({ value: match.path })
+    !disabled && scope !== null && trigger !== null && key !== dismissed;
+  const { items, loading, unavailable } = useComposerSuggestions(
+    scope,
+    trigger,
+    open
   );
   const activeIndex =
     selection.key === key ? Math.min(selection.index, items.length - 1) : 0;
@@ -209,9 +192,9 @@ export const ComposerField = ({
           activeIndex={activeIndex}
           id={listId}
           items={items}
-          loading={search.isFetching}
+          loading={loading}
           onChoose={choose}
-          unavailable={search.isError}
+          unavailable={unavailable}
         />
       ) : null}
     </Popover>
