@@ -70,9 +70,6 @@ export const Hint = ({
   </Tooltip>
 );
 
-// Rich disabled controls cannot sit inside another native button.
-const HINT_TARGET_ROLE = "button";
-
 /** Keyboard target for a hint explaining a disabled or read-only control. */
 export const HintTarget = ({
   appearance,
@@ -88,7 +85,7 @@ export const HintTarget = ({
     className={
       appearance === "control" ? "flex items-center gap-control" : "inline-flex"
     }
-    role={inactive ? HINT_TARGET_ROLE : undefined}
+    role={inactive ? "button" : undefined}
     tabIndex={inactive ? 0 : undefined}
     {...props}
   >

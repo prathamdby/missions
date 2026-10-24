@@ -217,7 +217,9 @@ const expectClosedGeometry = async (page: Page) => {
         exact: true,
         name: `${label} thinking`,
       });
-      const row = model.locator("..");
+      const row = page.getByTestId(
+        label === "Orchestrator" ? "orchestrator-model-row" : "worker-model-row"
+      );
       await expect(row).toHaveCSS("height", "36px");
       await expect(row).toHaveCSS("gap", "12px");
       await expect(model).toHaveCSS("width", "116px");
@@ -616,6 +618,10 @@ test("loading, failed and empty catalogs cannot send settings; missing saved mod
   );
   await expect(model).toBeDisabled();
   expect(fixture.patches).toHaveLength(0);
+  const unavailableModel = model.locator("..");
+  await unavailableModel.scrollIntoViewIfNeeded();
+  await unavailableModel.focus();
+  await expect(page.getByRole("tooltip")).toHaveText("Model unavailable");
   state = "ready";
   await section.getByRole("button", { name: "Retry model catalog" }).click();
   await expect(model).toBeEnabled();
@@ -629,6 +635,10 @@ test("loading, failed and empty catalogs cannot send settings; missing saved mod
     name: "Orchestrator thinking",
   });
   await expect(thinking).toBeDisabled();
+  const unavailableThinking = thinking.locator("..");
+  await unavailableThinking.scrollIntoViewIfNeeded();
+  await unavailableThinking.focus();
+  await expect(page.getByRole("tooltip")).toHaveText("Model unavailable");
   await expect(model).toHaveAccessibleDescription(/not in the live catalog/u);
   await model.click();
   await page.getByRole("option", { name: "Balanced (fixture)" }).click();

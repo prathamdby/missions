@@ -107,10 +107,13 @@ test("a new mission starts with the picked models and the default workspace", as
   try {
     await page.goto("/settings");
     const workspaceSetting = page.getByTestId("settings-default-workspace");
-    await workspaceSetting.selectOption("current_checkout");
-    await expect(workspaceSetting).toHaveValue("current_checkout");
+    await workspaceSetting.click();
+    await page
+      .getByRole("option", { exact: true, name: "Current checkout" })
+      .click();
+    await expect(workspaceSetting).toContainText("Current checkout");
     await page.reload();
-    await expect(workspaceSetting).toHaveValue("current_checkout");
+    await expect(workspaceSetting).toContainText("Current checkout");
 
     await page.goto("/");
     await page.getByRole("button", { exact: true, name: "Project" }).click();

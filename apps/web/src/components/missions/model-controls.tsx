@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Hint } from "@/components/ui/tooltip";
+import { Hint, HintTarget } from "@/components/ui/tooltip";
 import { settingsForModel } from "@/lib/mission/model-settings";
 import { effortLabel } from "@/lib/mission/pr";
 
@@ -101,15 +101,17 @@ const ThinkingPicker = ({
       value={settings.reasoningEffort ?? DEFAULT_EFFORT}
     >
       <Hint disabled={!hint || open || pending} label={hint}>
-        <SelectTrigger
-          appearance="thinking"
-          aria-describedby={descriptionId}
-          aria-label={`${label} thinking`}
-          aria-disabled={disabled || !model || noEfforts || pending}
-        >
-          <span>Thinking</span>
-          <SelectValue>{thinking}</SelectValue>
-        </SelectTrigger>
+        <HintTarget inactive={disabled || !model || noEfforts}>
+          <SelectTrigger
+            appearance="thinking"
+            aria-describedby={descriptionId}
+            aria-label={`${label} thinking`}
+            aria-disabled={disabled || !model || noEfforts || pending}
+          >
+            <span>Thinking</span>
+            <SelectValue>{thinking}</SelectValue>
+          </SelectTrigger>
+        </HintTarget>
       </Hint>
       <SelectContent
         appearance="thinking"
@@ -214,14 +216,16 @@ export const ModelControls = ({
           disabled={(!unavailable && model !== undefined) || open || pending}
           label="Model unavailable"
         >
-          <SelectTrigger
-            appearance="model"
-            aria-describedby={descriptionId}
-            aria-label={`${label} model`}
-            aria-disabled={unavailable || pending}
-          >
-            <SelectValue>{name}</SelectValue>
-          </SelectTrigger>
+          <HintTarget inactive={unavailable}>
+            <SelectTrigger
+              appearance="model"
+              aria-describedby={descriptionId}
+              aria-label={`${label} model`}
+              aria-disabled={unavailable || pending}
+            >
+              <SelectValue>{name}</SelectValue>
+            </SelectTrigger>
+          </HintTarget>
         </Hint>
         <SelectContent appearance="model" aria-label={`${label} models`}>
           <SelectGroup appearance="model">
