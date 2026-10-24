@@ -108,12 +108,12 @@ export const Diagram = ({ text }: { text: string }) => {
 
   if (failed) {
     return (
-      <div className="flex min-w-0 flex-col gap-xs">
+      <figure className="flex min-w-0 flex-col gap-xs">
         <CodeBlock code={text} />
-        <p className="text-xs leading-sm text-text-tertiary">
+        <figcaption className="text-xs leading-sm text-text-tertiary">
           Diagram unavailable
-        </p>
-      </div>
+        </figcaption>
+      </figure>
     );
   }
   return (
