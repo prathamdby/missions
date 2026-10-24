@@ -98,6 +98,47 @@ describe("attachment bytes", () => {
     ).rejects.toThrow(/10/u);
   });
 
+  it("serves only attachments claimed by the requested mission", async () => {
+    const store = new AttachmentStore(await tempDir("attachments"));
+    const ref = await store.upload("private.txt", Buffer.from("content"));
+    const missionId = randomUUID();
+    await expect(store.read(ref.id, missionId)).rejects.toThrow(/Attachment/u);
+    await expect(store.read(ref.id)).resolves.toMatchObject({ ref });
+    await store.claim([ref.id], missionId);
+    await expect(store.read(ref.id, missionId)).resolves.toMatchObject({ ref });
+    await expect(store.read(ref.id, randomUUID())).rejects.toThrow(
+      /Attachment/u
+    );
+    await expect(store.read(ref.id)).rejects.toThrow(/Attachment/u);
+  });
+
+  it("expires pending reads without sweeping but retains claimed reads", async () => {
+    let now = Date.now();
+    const store = new AttachmentStore(
+      await tempDir("attachments"),
+      () => new Date(now)
+    );
+    const pending = await store.upload("pending", Buffer.from("pending"));
+    const claimed = await store.upload("claimed", Buffer.from("claimed"));
+    const missionId = randomUUID();
+    await store.claim([claimed.id], missionId);
+    now += DAY - 1;
+    await expect(store.read(pending.id)).resolves.toMatchObject({
+      ref: pending,
+    });
+    now += 1;
+    await expect(store.read(pending.id)).rejects.toThrow(/Attachment/u);
+    await expect(store.read(pending.id, missionId)).rejects.toThrow(
+      /Attachment/u
+    );
+    await expect(store.claim([pending.id], missionId)).rejects.toThrow(
+      /expired/u
+    );
+    await expect(store.read(claimed.id, missionId)).resolves.toMatchObject({
+      ref: claimed,
+    });
+  });
+
   it("sweeps abandoned uploads but retains claimed mission content", async () => {
     const dir = await tempDir("attachments");
     let now = Date.now();

@@ -87,6 +87,29 @@ describe(ComposerCatalog, () => {
     await catalog.close();
   });
 
+  it("returns unavailable on immediate runtime and probe errors without caching", async () => {
+    vi.useFakeTimers();
+    const probe = vi
+      .fn<(cwd: string) => Promise<RawComposerCatalog>>()
+      .mockRejectedValueOnce(new Error("probe unavailable"))
+      .mockResolvedValue(RAW);
+    const runtime = {
+      listCommands: () => Promise.reject(new Error("runtime unavailable")),
+      listSkills: () => Promise.reject(new Error("runtime unavailable")),
+    };
+    const catalog = new ComposerCatalog("missing", { probe });
+    await expect(catalog.list("/project", runtime)).resolves.toStrictEqual({
+      commands: [],
+      source: "unavailable",
+    });
+    await expect(catalog.list("/project", runtime)).resolves.toMatchObject({
+      source: "droid",
+    });
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    await catalog.close();
+  });
+
   it("bounds hung discovery and permits retry", async () => {
     vi.useFakeTimers();
     const probe = vi

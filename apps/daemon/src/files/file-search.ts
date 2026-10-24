@@ -30,7 +30,7 @@ const walk = async (root: string): Promise<string[]> => {
     }
     const entries = await readdir(path.join(root, current.directory), {
       withFileTypes: true,
-    });
+    }).catch(() => []);
     for (const entry of entries) {
       visited += 1;
       if (visited > MAX_FILES) {

@@ -116,7 +116,7 @@ export const itemsFromMessage = (
       })
     );
   }
-  if (message.text) {
+  if (message.text || (message.role === "user" && message.requestId !== null)) {
     const kind = message.role === "assistant" ? "assistant" : message.role;
     items.push(
       item(base, {

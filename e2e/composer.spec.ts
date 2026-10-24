@@ -115,6 +115,107 @@ test("slash suggestions insert literal commands in both composers", async ({
   await expect(page.getByRole("option", { name: /\/inspect/u })).toHaveCount(0);
 });
 
+test("picker preserves shifted keys and empty-result submission", async ({
+  page,
+  request,
+}) => {
+  await useScriptedModels(request);
+  await addProject(request, gitRepo("composer-keyboard"));
+  await page.route("**/composer-catalog", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      json: {
+        commands: [
+          { description: "Review changes", kind: "skill", name: "review" },
+        ],
+        source: "droid",
+      },
+    })
+  );
+  await page.goto("/");
+  await page.getByRole("button", { exact: true, name: "Project" }).click();
+  await page
+    .getByRole("option")
+    .filter({ hasText: "composer-keyboard" })
+    .click();
+  const goal = page.getByRole("textbox", { name: "Mission goal" });
+  const option = page.getByRole("option", { name: /\/review/u });
+  await goal.fill("/rev");
+  await expect(option).toBeVisible();
+  await goal.press("Shift+Enter");
+  await expect(goal).toHaveValue("/rev\n");
+  await goal.fill("/rev");
+  await expect(option).toBeVisible();
+  await goal.press("Shift+Tab");
+  await expect(goal).not.toBeFocused();
+  await expect(goal).toHaveValue("/rev");
+  await goal.fill("/unmatched");
+  await expect(page.getByText("No matches", { exact: true })).toBeVisible();
+  await goal.press("Tab");
+  await expect(goal).not.toBeFocused();
+  await goal.focus();
+  const sent = page.waitForRequest(
+    (req) => req.method() === "POST" && req.url().endsWith("/missions")
+  );
+  await goal.press("Enter");
+  const submitted = await sent;
+  expect(submitted.postDataJSON()).toMatchObject({ goal: "/unmatched" });
+  await expect(page).toHaveURL(/\/missions\/[^/]+$/u);
+});
+
+test("lost creation receipt retries the original attachment claim", async ({
+  page,
+  request,
+}) => {
+  await useScriptedModels(request);
+  await addProject(request, gitRepo("composer-create-retry"));
+  await page.goto("/");
+  await page.getByRole("button", { exact: true, name: "Project" }).click();
+  await page
+    .getByRole("option")
+    .filter({ hasText: "composer-create-retry" })
+    .click();
+  await page.getByLabel("Choose attachments").setInputFiles({
+    buffer: Buffer.from("creation evidence"),
+    mimeType: "text/plain",
+    name: "creation.txt",
+  });
+  await expect(page.getByRole("link", { name: "creation.txt" })).toBeVisible();
+  const goal = page.getByRole("textbox", { name: "Mission goal" });
+  await goal.fill("Fix flaky retry tests");
+  let original: unknown;
+  await page.route(
+    "**/missions",
+    async (route) => {
+      original = route.request().postDataJSON();
+      await route.fetch();
+      await route.abort("failed");
+    },
+    { times: 1 }
+  );
+  await page
+    .getByRole("button", { exact: true, name: "Start mission" })
+    .click();
+  await expect(
+    page.getByText(
+      "Retry to recover the original mission before making changes."
+    )
+  ).toBeVisible();
+  await expect(goal).toBeDisabled();
+  const retry = page.waitForRequest(
+    (req) => req.method() === "POST" && req.url().endsWith("/missions")
+  );
+  await page.getByRole("button", { name: "Retry mission creation" }).click();
+  const retried = await retry;
+  expect(retried.postDataJSON()).toEqual(original);
+  await expect(page).toHaveURL(/\/missions\/[^/]+$/u);
+  await expect(
+    page
+      .getByRole("list", { name: "Message attachments" })
+      .getByRole("link", { name: "creation.txt" })
+  ).toBeVisible();
+});
+
 test("attachments upload in both composers and survive a lost message receipt", async ({
   page,
   request,
@@ -171,6 +272,10 @@ test("attachments upload in both composers and survive a lost message receipt", 
   });
   const chips = page.getByRole("list", { exact: true, name: "Attachments" });
   await expect(chips.getByRole("link", { name: "pasted.txt" })).toBeVisible();
+  await expect(chips.getByRole("link", { name: "pasted.txt" })).toHaveAttribute(
+    "href",
+    /^blob:/u
+  );
   await composer.evaluate((element) => {
     const data = new DataTransfer();
     data.items.add(
@@ -199,6 +304,10 @@ test("attachments upload in both composers and survive a lost message receipt", 
   await composer.press("Enter");
   await expect(composer).toHaveValue("Read pasted evidence");
   await expect(chips.getByRole("link", { name: "pasted.txt" })).toBeVisible();
+  await expect(chips.getByRole("link", { name: "pasted.txt" })).toHaveAttribute(
+    "href",
+    /^blob:/u
+  );
   const retry = page.waitForRequest("**/messages");
   await composer.press("Enter");
   const retried = await retry;

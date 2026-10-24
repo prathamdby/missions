@@ -164,6 +164,42 @@ describe("attachment delivery", () => {
     ).rejects.toThrow(/operation/u);
   });
 
+  it("persists a captionless image in the transcript after native consumption", async () => {
+    const ctx = await startMission(await bootDaemon(opened));
+    const store = new AttachmentStore(ctx.config.attachmentsDir);
+    const bytes = Buffer.from("89504e470d0a1a0a", "hex");
+    const ref = await store.upload("captionless.png", bytes);
+    const receipt = await ctx.daemon.missions.submitMessage(ctx.missionId, {
+      attachmentIds: [ref.id],
+      mode: "queue",
+      operationId: "captionless-image",
+      text: "",
+    });
+    const sent = await waitFor(
+      () => ctx.orchestrator.submitted.find((entry) => entry.id === receipt.id),
+      Boolean
+    );
+    expect(sent?.options.images).toStrictEqual([
+      {
+        data: bytes.toString("base64"),
+        mediaType: "image/png",
+        type: "base64",
+      },
+    ]);
+    ctx.orchestrator.consume(receipt.id);
+    const snapshot = ctx.daemon.missions.snapshot(ctx.missionId);
+    expect(snapshot.transcript).toContainEqual(
+      expect.objectContaining({
+        kind: "user",
+        requestId: receipt.id,
+        text: "",
+      })
+    );
+    expect(
+      snapshot.queue.find((item) => item.id === receipt.id)?.attachments
+    ).toStrictEqual([ref]);
+  });
+
   it("returns a durable receipt when bytes are later missing and never attempts native submission", async () => {
     const ctx = await startMission(await bootDaemon(opened));
     const store = new AttachmentStore(ctx.config.attachmentsDir);
