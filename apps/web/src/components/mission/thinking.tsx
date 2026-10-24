@@ -8,6 +8,7 @@ import {
   ChevronRightIcon,
 } from "@/components/mission/icons";
 import { IndentRule } from "@/components/mission/tool-group";
+import { Markdown } from "@/components/ui/markdown";
 import { Spinner } from "@/components/ui/spinner";
 
 /**
@@ -44,9 +45,11 @@ export const Thinking = ({
       {open && text ? (
         <div className="flex">
           <IndentRule />
-          <p className="min-w-0 flex-1 py-xs pl-control text-xs leading-sm font-book tracking-tight whitespace-pre-wrap text-text-secondary">
-            {text}
-          </p>
+          <div className="min-w-0 flex-1 py-xs pl-control">
+            <Markdown appearance="thought" streaming={streaming}>
+              {text}
+            </Markdown>
+          </div>
         </div>
       ) : null}
     </div>

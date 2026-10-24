@@ -8,3 +8,4 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - ultracite@8.0.2
+  - pele@1.10.0
