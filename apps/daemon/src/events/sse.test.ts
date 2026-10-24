@@ -276,4 +276,30 @@ describe("event stream lifecycle", () => {
     expect(globalFrame).toContain('"type":"mission.removed"');
     expect(unsubscribed).toHaveBeenCalledWith();
   });
+
+  it("delivers buffered live events when removal interrupts a mission stream's replay", async () => {
+    const missions = new Set(["mission-one"]);
+    const { connect, log } = setup(undefined, (missionId) =>
+      missions.has(missionId)
+    );
+    log.publish("mission-one", notice("history-one"));
+    log.publish("mission-one", notice("history-two"));
+    const scoped = await connect("?missionId=mission-one&after=0");
+    await flush();
+    // The reader is blocked, so replay is still in progress.
+    log.publish("mission-one", notice("live"));
+    log.commit((emit) => {
+      log.removeStream("mission-one");
+      missions.delete("mission-one");
+      emit(null, {
+        data: { missionId: "mission-one" },
+        type: "mission.removed",
+      });
+    });
+    const text = await readFrames(scoped.reader, 4);
+    expect(idsOf(text)).toStrictEqual([1, 2, 3]);
+    expect(text).toContain("live");
+    const end = await scoped.reader.read();
+    expect(end.done).toBeTruthy();
+  });
 });

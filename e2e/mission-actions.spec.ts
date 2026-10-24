@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 
-import type { Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 import type { ModelOption } from "../packages/protocol/src/settings";
@@ -11,6 +11,7 @@ import {
   gitRepo,
   missionSnapshot,
   missionStatus,
+  renameMission,
   updateSettings,
   useScriptedModels,
 } from "./fixtures";
@@ -200,4 +201,92 @@ test("sidebar actions rename and delete a stopped mission but keep its files", a
   await expect(link).toHaveCount(0);
   await expect(missionSnapshot(request, mission.id)).rejects.toThrow("404");
   expect(existsSync(`${repo}/README.md`)).toBe(true);
+});
+
+const stoppedMission = async (
+  request: APIRequestContext,
+  name: string,
+  goal: string
+) => {
+  const project = await addProject(request, gitRepo(name));
+  const mission = await createMission(request, project.id, "medium", goal);
+  await expect
+    .poll(() => missionStatus(request, mission.id), { timeout: 30_000 })
+    .toBe("awaiting_approval");
+  await controlMission(request, mission.id, "pause");
+  await expect
+    .poll(() => missionStatus(request, mission.id), { timeout: 30_000 })
+    .toBe("paused");
+  const { mission: current } = (await missionSnapshot(request, mission.id)) as {
+    mission: { id: string; title: string };
+  };
+  return current;
+};
+
+test("a rename that hits a newer revision saves on retry and keeps the typed title", async ({
+  page,
+  request,
+}) => {
+  const mission = await stoppedMission(
+    request,
+    "stale-rename",
+    "Outline the stale rename project"
+  );
+  await page.goto("/");
+  const sidebar = page.getByRole("navigation", { name: "Missions" });
+  await sidebar
+    .getByRole("button", { name: `More actions for ${mission.title}` })
+    .click();
+  await page.getByTestId("mission-action-rename").click();
+  const input = page.getByTestId("rename-mission-input");
+  await input.fill("Typed in the dialog");
+  await renameMission(request, mission.id, "Renamed elsewhere");
+  await page.getByTestId("rename-mission-save").click();
+  await expect(
+    page.getByText("Already updated", { exact: true })
+  ).toBeVisible();
+  await expect(input).toHaveValue("Typed in the dialog");
+  await page.getByTestId("rename-mission-save").click();
+  await expect(page.getByTestId("rename-mission-dialog")).toBeHidden();
+  await expect(
+    sidebar.getByRole("link", { name: /Typed in the dialog/u })
+  ).toBeVisible();
+});
+
+test("a delete answered with not_found stays put when the mission cannot be re-read", async ({
+  page,
+  request,
+}) => {
+  const mission = await stoppedMission(
+    request,
+    "unconfirmed-delete",
+    "Outline the unconfirmed delete project"
+  );
+  await page.goto("/");
+  const sidebar = page.getByRole("navigation", { name: "Missions" });
+  await sidebar
+    .getByRole("button", { name: `More actions for ${mission.title}` })
+    .click();
+  await page.getByTestId("mission-action-delete").click();
+  await page.route(`**${API}/missions/${mission.id}`, async (route) => {
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({
+        json: { error: { code: "not_found", message: "Not found" } },
+        status: 404,
+      });
+      return;
+    }
+    await route.abort("connectionreset");
+  });
+  await page.getByTestId("delete-mission-confirm").click();
+  await expect(
+    page.getByText("Could not delete", { exact: true })
+  ).toBeVisible();
+  const dialog = page.getByTestId("delete-mission-dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { exact: true, name: "Cancel" }).click();
+  await expect(
+    sidebar.getByRole("link", { name: mission.title })
+  ).toBeVisible();
+  await expect(missionStatus(request, mission.id)).resolves.toBe("paused");
 });

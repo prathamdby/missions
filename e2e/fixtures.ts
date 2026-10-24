@@ -139,3 +139,18 @@ export const missionStatus = async (
   };
   return snapshot.mission.status;
 };
+
+/** Renames a mission with its current revision, as another client would. */
+export const renameMission = async (
+  request: APIRequestContext,
+  missionId: string,
+  title: string
+) => {
+  const snapshot = (await missionSnapshot(request, missionId)) as {
+    mission: { revision: number };
+  };
+  return await call(request, "PATCH", `/missions/${missionId}`, {
+    expectedRevision: snapshot.mission.revision,
+    title,
+  });
+};

@@ -179,7 +179,9 @@ class EventSession {
         yield event;
       }
     }
-    return !(this.#stopped || this.#ended);
+    // A removal can cut replay short; live events then follow only if no gap
+    // remains, and the purged history cannot fill one.
+    return !this.#stopped && this.#cursor >= this.#highWater;
   }
 
   async #nextLive(): Promise<Frame> {
