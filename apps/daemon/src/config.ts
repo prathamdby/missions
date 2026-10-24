@@ -10,6 +10,7 @@ export interface DaemonConfig {
   binDir: string;
   reposDir: string;
   artifactsDir: string;
+  attachmentsDir: string;
   defaultWorktreeRoot: string;
   droidPath: string;
   port: number;
@@ -39,6 +40,7 @@ export const loadConfig = (
   );
   return {
     artifactsDir: path.join(home, "artifacts"),
+    attachmentsDir: path.join(home, "attachments"),
     binDir: path.join(home, "bin"),
     dbPath: path.join(home, "missions.db"),
     defaultWorktreeRoot: path.join(home, "worktrees"),

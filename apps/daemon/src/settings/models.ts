@@ -1,14 +1,11 @@
-import { randomUUID } from "node:crypto";
 import os from "node:os";
-import path from "node:path";
 
-import { DroidClient, ProcessTransport } from "@factory/droid-sdk/node";
 import { ReasoningEffortSchema } from "@missions/protocol/common";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import type { ModelList, ModelOption } from "@missions/protocol/settings";
 
 import { badRequest, conflict } from "../lib/app-error";
-import { ProcessSupervisor } from "../processes/process-supervisor";
+import { ProbeSessions } from "../sdk/probe-session";
 import { MODEL_PROBE_TIMEOUT_MS, withDeadline } from "../sdk/startup";
 
 export type ModelLoader = () => Promise<unknown[]>;
@@ -17,82 +14,6 @@ const CACHE_MS = 10 * 60_000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
-
-/**
- * `listModels` needs a Factory API key; a throwaway session reports the
- * models the logged-in CLI actually accepts, so probe with one instead.
- */
-type ProbeCleanup = () => Promise<void>;
-
-const probeModels = async (
-  droidPath: string,
-  probes: Set<ProbeCleanup>
-): Promise<unknown[]> => {
-  const agentId = `model-probe-${randomUUID()}`;
-  const supervisor = new ProcessSupervisor({
-    binDir: path.join(os.tmpdir(), `missions-${agentId}`),
-    droidPath,
-  });
-  let client: DroidClient | null = null;
-  let closing = false;
-  const dispose = async () => {
-    closing = true;
-    const cooperative = client
-      ? withDeadline(
-          client.close(),
-          1000,
-          "Model probe cleanup timed out"
-        ).catch(() => null)
-      : Promise.resolve();
-    try {
-      const result = await supervisor.stop(agentId);
-      if (!result.stopped) {
-        throw new Error("Model discovery process could not be stopped");
-      }
-    } finally {
-      await cooperative;
-    }
-  };
-  probes.add(dispose);
-  try {
-    const launcher = await supervisor.ensureLauncher();
-    if (closing) {
-      throw new Error("Model discovery was cancelled");
-    }
-    const transport = new ProcessTransport({
-      cwd: os.tmpdir(),
-      droidExecPath: launcher,
-      env: supervisor.launchEnv(agentId),
-      onSpawned: (child) => supervisor.register(agentId, child),
-    });
-    client = new DroidClient({
-      sessionInitTimeout: MODEL_PROBE_TIMEOUT_MS,
-      transport,
-    });
-    const connecting = transport.connect().finally(async () => {
-      if (closing) {
-        await dispose();
-      }
-    });
-    await withDeadline(
-      connecting,
-      MODEL_PROBE_TIMEOUT_MS,
-      "Model probe connection timed out"
-    );
-    const init = await client.initializeSession({
-      cwd: os.tmpdir(),
-      machineId: "default",
-      worktree: false,
-    });
-    const result: unknown = init.result;
-    return isRecord(result) && Array.isArray(result.availableModels)
-      ? result.availableModels
-      : [];
-  } finally {
-    await dispose();
-    probes.delete(dispose);
-  }
-};
 
 const effort = (value: unknown) => {
   const parsed = ReasoningEffortSchema.safeParse(value);
@@ -120,14 +41,23 @@ export const toModelOption = (raw: unknown): ModelOption | null => {
 /** Models come from the installed Droid CLI, so options match what sessions accept. */
 export class ModelCatalog {
   readonly #load: ModelLoader;
-  readonly #probes = new Set<ProbeCleanup>();
+  readonly #probes: ProbeSessions;
   readonly #cancel = new AbortController();
   #closed = false;
   #cache: { at: number; list: ModelList } | null = null;
   #pending: Promise<ModelList> | null = null;
 
   constructor(droidPath: string, load?: ModelLoader) {
-    this.#load = load ?? (() => probeModels(droidPath, this.#probes));
+    this.#probes = new ProbeSessions(droidPath);
+    this.#load =
+      load ??
+      (() =>
+        this.#probes.run(os.tmpdir(), (_client, init) => {
+          const result: unknown = init.result;
+          return isRecord(result) && Array.isArray(result.availableModels)
+            ? result.availableModels
+            : [];
+        }));
   }
 
   async list(): Promise<ModelList> {
@@ -160,15 +90,7 @@ export class ModelCatalog {
   async close(): Promise<void> {
     this.#closed = true;
     this.#cancel.abort();
-    const outcomes = await Promise.allSettled(
-      [...this.#probes].map((dispose) => dispose())
-    );
-    const failures = outcomes
-      .filter((outcome) => outcome.status === "rejected")
-      .map((outcome) => outcome.reason as unknown);
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Model discovery cleanup failed");
-    }
+    await this.#probes.close();
   }
 
   async #fetch(): Promise<ModelList> {

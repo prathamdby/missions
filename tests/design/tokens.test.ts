@@ -26,6 +26,19 @@ const PAPER_SPACING = [
 ];
 
 describe("token manifest", () => {
+  it("generates scoped Pele color aliases and rejects non-color references", () => {
+    expect(renderTokensCss(manifest)).toContain(
+      ".pele {\n  --pele-bg: var(--color-surface-raised);"
+    );
+    expect(definedVariables(manifest).has("--pele-fg")).toBeTruthy();
+    expect(() =>
+      parseManifest({
+        ...manifest,
+        aliases: { ...manifest.aliases, pele: { font: "sans" } },
+      })
+    ).toThrow(/unknown color token/u);
+  });
+
   it("generated tokens.css matches the manifest", () => {
     expect(readFileSync(TOKENS_CSS_PATH, "utf-8")).toBe(
       renderTokensCss(manifest)

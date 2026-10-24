@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 
+import type { AttachmentRef } from "@missions/protocol/attachments";
 import type {
   AnswerQuestionRequest,
   ChangeQueueModeRequest,
@@ -47,6 +48,7 @@ import type { OperationJournal } from "../db/journal";
 import type { Store } from "../db/store";
 import type { Emit, EventLog } from "../events/event-log";
 import type { ArtifactStore } from "../files/artifact-store";
+import type { AttachmentStore } from "../files/attachment-store";
 import type { SharedFiles } from "../files/shared-files";
 import { mediaTypeOf, resolveWorkspacePath } from "../files/workspace-files";
 import { AppError, conflict, notFound, stale } from "../lib/app-error";
@@ -73,6 +75,8 @@ import type {
   RuntimeStartResult,
   SubmitOptions,
 } from "../sdk/agent-runtime";
+import { attachmentPayload } from "../sdk/attachments";
+import type { ComposerRuntime } from "../sdk/composer-catalog";
 import type { NativeQueueEntry, NativeQueueTracker } from "../sdk/native-queue";
 import { nativeTodos } from "../sdk/native-todos";
 import { PLAN_GUIDANCE, PLAN_GUIDANCE_VERSION } from "../sdk/plan-guidance";
@@ -141,7 +145,7 @@ import {
 import type { NewTranscriptItem } from "./transcript";
 
 /** The subset of `AgentRuntime` the service drives; tests substitute a scripted runtime. */
-export interface RuntimeHandle {
+export interface RuntimeHandle extends ComposerRuntime {
   readonly queue: NativeQueueTracker;
   readonly sessionId: string | null;
   readonly model: AgentModelSettings | null;
@@ -163,7 +167,8 @@ export interface RuntimeHandle {
   edit: (
     id: string,
     replacementId: string,
-    text: string
+    text: string,
+    options?: SubmitOptions
   ) => Promise<EditOutcome>;
   interrupt: () => Promise<void>;
   close: () => Promise<StopResult>;
@@ -182,6 +187,7 @@ export interface MissionServiceOptions {
   supervisor: ProcessSupervisor;
   processRecords?: ProcessRecordRepository;
   artifacts: ArtifactStore;
+  attachments: AttachmentStore;
   sharedFiles: SharedFiles;
   createRuntime?: RuntimeFactory;
   now?: () => Date;
@@ -320,6 +326,7 @@ export class MissionService {
   /** Queue items with a remove or edit in flight; a second change must wait. */
   readonly #queueBusy = new Set<string>();
   readonly #artifacts: ArtifactStore;
+  readonly #attachments: AttachmentStore;
   readonly #sharedFiles: SharedFiles;
   readonly #timing: TimingLog;
   /** Live ExitSpecMode confirmations by plan revision ID. */
@@ -348,6 +355,7 @@ export class MissionService {
     this.#processRecords =
       options.processRecords ?? new ProcessRecordRepository(options.store);
     this.#artifacts = options.artifacts;
+    this.#attachments = options.attachments;
     this.#sharedFiles = options.sharedFiles;
     this.#createRuntime =
       options.createRuntime ??
@@ -439,6 +447,26 @@ export class MissionService {
     return mission;
   }
 
+  /** Discovery never starts an agent. Reuse only an already-ready Orchestrator. */
+  composerRuntime(cwd: string): ComposerRuntime | null {
+    const owner = [...this.#live.values()].find(
+      (live) =>
+        live.workspace === cwd &&
+        live.phase === "ready" &&
+        this.#store.getAgent(live.agentId)?.role === "orchestrator" &&
+        this.#isCurrent(live.agentId, live) !== null
+    );
+    if (!owner) {
+      return null;
+    }
+    const { agentId, runtime } = owner;
+    return {
+      listCommands: () =>
+        this.#execute(agentId, runtime, () => runtime.listCommands()),
+      listSkills: () =>
+        this.#execute(agentId, runtime, () => runtime.listSkills()),
+    };
+  }
   list(projectId?: string) {
     return this.#store.listMissions(projectId);
   }
@@ -836,9 +864,23 @@ export class MissionService {
   async #create(input: CreateMissionRequest): Promise<MissionSnapshot> {
     const request = CreateMissionRequestSchema.parse(input);
     const project = this.#projects.get(request.projectId);
+    const previous = this.#journal.get(request.operationId, {
+      kind: "mission.create",
+      missionId: null,
+    });
+    if (
+      previous &&
+      JSON.stringify(previous.operation.detail.attachmentIds ?? []) !==
+        JSON.stringify(request.attachmentIds ?? [])
+    ) {
+      throw conflict(DUPLICATE_OPERATION);
+    }
     const { result, duplicate } = await this.#journal.run(
       {
-        detail: { projectId: project.id },
+        detail: {
+          attachmentIds: request.attachmentIds ?? [],
+          projectId: project.id,
+        },
         id: request.operationId,
         kind: "mission.create",
         missionId: null,
@@ -854,6 +896,11 @@ export class MissionService {
           request.operationId,
           title
         );
+        const attachments = await this.#attachments.claim(
+          request.attachmentIds ?? [],
+          id
+        );
+        this.#requireOpen();
         const at = this.#iso();
         const mission: Mission = {
           createdAt: at,
@@ -889,6 +936,7 @@ export class MissionService {
         );
         const goalItem = this.#newQueueItem({
           agentId: orchestrator.id,
+          attachments,
           id: `${mission.id}:goal`,
           missionId: mission.id,
           mode: "steer",
@@ -979,6 +1027,7 @@ export class MissionService {
     text: string;
     mode: DeliveryMode;
     sequence: number;
+    attachments?: AttachmentRef[];
     origin?: QueueItem["origin"];
     purpose?: MessagePurpose;
     sender?: MessageParty | null;
@@ -988,6 +1037,7 @@ export class MissionService {
     const at = this.#iso();
     return {
       agentId: fields.agentId,
+      attachments: fields.attachments ?? [],
       createdAt: at,
       error: null,
       id: fields.id,
@@ -2721,15 +2771,21 @@ export class MissionService {
     const ids = { agentId: live.agentId, missionId: live.missionId };
     live.awaitingText = item.id;
     this.#timing.mark(item.id, "delivery.submitting", ids);
+    let attempted = false;
     try {
-      await this.#execute(live.agentId, runtime, () =>
-        runtime.submit(
+      const options = {
+        ...this.#submitOptions(latest),
+        ...(await attachmentPayload(this.#attachments, latest)),
+      };
+      await this.#execute(live.agentId, runtime, () => {
+        attempted = true;
+        return runtime.submit(
           latest.id,
           this.#nativeText(latest),
           latest.mode,
-          this.#submitOptions(latest)
-        )
-      );
+          options
+        );
+      });
       this.#timing.mark(item.id, "delivery.admitted", ids);
       return true;
     } catch (error) {
@@ -2739,7 +2795,7 @@ export class MissionService {
           ...after,
           error: errorMessage(error),
           revision: after.revision + 1,
-          state: isDefiniteFailure(error) ? "failed" : "unknown",
+          state: !attempted || isDefiniteFailure(error) ? "failed" : "unknown",
           updatedAt: this.#iso(),
         });
       }
@@ -3016,14 +3072,32 @@ export class MissionService {
     missionId: string,
     request: SubmitMessageRequest
   ): Promise<QueueItem> {
+    return this.#own(this.#submitMessage(missionId, structuredClone(request)));
+  }
+
+  async #submitMessage(
+    missionId: string,
+    request: SubmitMessageRequest
+  ): Promise<QueueItem> {
     if (this.#closing) {
-      return Promise.reject(conflict("The daemon is stopping"));
+      throw conflict("The daemon is stopping");
     }
-    try {
-      return Promise.resolve(this.#acceptUserMessage(missionId, request));
-    } catch (error) {
-      return Promise.reject(error);
+    this.#admit(missionId);
+    this.get(missionId);
+    const existing = this.#acceptedBefore(request.operationId, {
+      agentId: request.agentId ?? this.#orchestrator(missionId).id,
+      attachmentIds: request.attachmentIds ?? [],
+      missionId,
+      mode: request.mode,
+      text: request.text,
+    });
+    if (existing) {
+      return existing;
     }
+    const attachments = request.attachmentIds?.length
+      ? await this.#attachments.claim(request.attachmentIds, missionId)
+      : [];
+    return this.#acceptUserMessage(missionId, request, attachments);
   }
 
   /** The receipt for a retried operation ID, or a conflict if its intent differs. */
@@ -3031,6 +3105,7 @@ export class MissionService {
     operationId: string,
     intent: Pick<QueueItem, "agentId" | "mode" | "text"> & {
       missionId: string;
+      attachmentIds?: readonly string[];
     }
   ) {
     const saved = this.#journal.get(operationId, {
@@ -3043,7 +3118,9 @@ export class MissionService {
       if (
         detail.agentId !== intent.agentId ||
         detail.text !== intent.text ||
-        detail.mode !== intent.mode
+        detail.mode !== intent.mode ||
+        JSON.stringify(detail.attachmentIds ?? []) !==
+          JSON.stringify(intent.attachmentIds ?? [])
       ) {
         throw conflict(DUPLICATE_OPERATION);
       }
@@ -3076,12 +3153,17 @@ export class MissionService {
    * outbox delivers in sequence order once the recipient can take it, even
    * while its startup is still in progress.
    */
-  #acceptUserMessage(missionId: string, request: SubmitMessageRequest) {
+  #acceptUserMessage(
+    missionId: string,
+    request: SubmitMessageRequest,
+    attachments: AttachmentRef[]
+  ) {
     this.#admit(missionId);
     const mission = this.get(missionId);
     const agentId = request.agentId ?? this.#orchestrator(missionId).id;
     const intent = {
       agentId,
+      attachmentIds: request.attachmentIds ?? [],
       missionId,
       mode: request.mode,
       text: request.text,
@@ -3112,6 +3194,7 @@ export class MissionService {
     }
     const item = this.#newQueueItem({
       ...intent,
+      attachments,
       id: request.operationId,
       sequence: nextSequence(items),
     });
@@ -3296,6 +3379,7 @@ export class MissionService {
     }
     const retry = this.#newQueueItem({
       agentId: item.agentId,
+      attachments: item.attachments,
       id: request.operationId,
       missionId,
       mode: item.mode,
@@ -3390,6 +3474,7 @@ export class MissionService {
     }
     const replacement = this.#newQueueItem({
       agentId: latest.agentId,
+      attachments: latest.attachments,
       id: request.operationId,
       missionId: latest.missionId,
       mode: latest.mode,
@@ -3429,10 +3514,15 @@ export class MissionService {
     runtime: RuntimeHandle,
     request: EditQueueItemRequest
   ): Promise<EditQueueItemResponse> {
+    const options = {
+      ...this.#submitOptions(item),
+      ...(await attachmentPayload(this.#attachments, item)),
+    };
     const replacementId = request.operationId;
     const replacement: QueueItem = {
       ...this.#newQueueItem({
         agentId: item.agentId,
+        attachments: item.attachments,
         id: replacementId,
         missionId,
         mode: item.mode,
@@ -3461,7 +3551,7 @@ export class MissionService {
     let outcome: EditOutcome;
     try {
       outcome = await this.#execute(item.agentId, runtime, () =>
-        runtime.edit(item.id, replacementId, request.text)
+        runtime.edit(item.id, replacementId, request.text, options)
       );
     } catch (error) {
       const latest = this.#store.queue.get(replacementId) ?? replacement;
@@ -4125,6 +4215,7 @@ export class MissionService {
     const results = await Promise.allSettled([
       this.#sharedFiles.remove(missionId),
       this.#artifacts.remove(missionId),
+      this.#attachments.remove(missionId),
     ]);
     const failures = results.flatMap((outcome) =>
       outcome.status === "rejected" ? [errorMessage(outcome.reason)] : []
@@ -4180,6 +4271,7 @@ export class MissionService {
     await Promise.all([
       this.#sharedFiles.sweepRemoved(deleted),
       this.#artifacts.sweepRemoved(deleted),
+      this.#attachments.sweepRemoved(deleted),
     ]);
     const records = this.#processRecords.list();
     const stopped = await Promise.all(

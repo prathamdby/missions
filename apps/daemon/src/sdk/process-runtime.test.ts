@@ -80,7 +80,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     send({ type: "notification", method: "droid.session_notification",
       params: { notification: { type: "settings_updated", settings: notificationSettings } } });
     send({ type: "response", id: request.id, result: {} });
+  } else if (request.method === "droid.resolve_queued_user_message") {
+    send({ type: "response", id: request.id, result: {} });
   } else if (request.method === "droid.add_user_message") {
+    appendFileSync(process.env.WIRE_MESSAGE_RECORD, JSON.stringify(request.params) + "\\n");
     send({ type: "notification", method: "droid.session_notification",
       params: { notification: { type: "assistant_text_delta",
         blockIndex: 0, messageId: "wire-turn", textDelta: settings.modelId + ":" + settings.reasoningEffort } } });
@@ -97,6 +100,7 @@ const createWireRuntime = async (
   const executable = path.join(dir, "wire-peer.mjs");
   const record = path.join(dir, "methods");
   const settingsRecord = path.join(dir, "settings");
+  const messagesRecord = path.join(dir, "messages");
   await writeFile(executable, PEER, { mode: 0o755 });
   const supervisor = new ProcessSupervisor({
     binDir: path.join(dir, "bin"),
@@ -109,6 +113,7 @@ const createWireRuntime = async (
     cwd: dir,
     extraEnv: {
       NO_EFFORT_NOTIFICATION: noEffortNotification,
+      WIRE_MESSAGE_RECORD: messagesRecord,
       WIRE_RECORD: record,
       WIRE_SETTINGS_RECORD: settingsRecord,
     },
@@ -121,7 +126,15 @@ const createWireRuntime = async (
     role: "orchestrator",
     supervisor,
   });
-  return { events, record, runtime, server, settingsRecord, supervisor };
+  return {
+    events,
+    messagesRecord,
+    record,
+    runtime,
+    server,
+    settingsRecord,
+    supervisor,
+  };
 };
 
 describe("ProcessTransport integration", () => {
@@ -227,6 +240,51 @@ describe("ProcessTransport integration", () => {
         messageId: "wire-turn",
         type: "text_delta",
       });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("passes raw attachment payloads through the installed SDK on send and native edit", async () => {
+    const { runtime, messagesRecord } = await createWireRuntime();
+    const options = {
+      files: [
+        {
+          data: "hello λ",
+          mediaType: "text/plain" as const,
+          name: "notes.txt",
+          type: "text" as never,
+        },
+        {
+          data: "JVBERi0xLjc=",
+          mediaType: "application/pdf" as const,
+          name: "doc.pdf",
+          type: "base64" as never,
+        },
+      ],
+      images: [
+        {
+          data: "iVBORw0KGgo=",
+          mediaType: "image/png" as const,
+          type: "base64" as const,
+        },
+      ],
+    };
+    try {
+      await runtime.start();
+      await runtime.submit("with-files", "Read attachments", "queue", options);
+      await expect(
+        runtime.edit("with-files", "edited-files", "Read again", options)
+      ).resolves.toBe("replaced");
+      const record = await readFile(messagesRecord, "utf-8");
+      const messages: unknown[] = record
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(messages).toMatchObject([
+        { ...options, text: "Read attachments" },
+        { ...options, text: "Read again" },
+      ]);
     } finally {
       await runtime.close();
     }

@@ -22,6 +22,8 @@ import type {
   StopResult,
 } from "../processes/process-supervisor";
 import { toModelOption } from "../settings/models";
+import type { SdkAttachments } from "./attachments";
+import { listCommands, listSkills } from "./composer-catalog";
 import { NativeQueueTracker } from "./native-queue";
 import type { NativeQueueEntry } from "./native-queue";
 import { SESSION_START_TIMEOUT_MS, withDeadline } from "./startup";
@@ -67,7 +69,7 @@ export type RuntimeSender =
   | { kind: "orchestrator"; sessionId: string }
   | { kind: "agent"; sessionId: string; title: string };
 
-export interface SubmitOptions {
+export interface SubmitOptions extends SdkAttachments {
   /** Server-bound sender identity; absent for user and daemon messages. */
   sender?: RuntimeSender;
 }
@@ -198,6 +200,13 @@ const senderOf = (raw: unknown): RuntimeSender | null => {
   return null;
 };
 
+const isEmptyMessage = (message: RuntimeMessage) =>
+  message.text === "" &&
+  message.thinking === "" &&
+  message.toolUses.length === 0 &&
+  message.toolResults.length === 0 &&
+  !(message.role === "user" && message.requestId !== null);
+
 export const normalizeMessage = (
   raw: unknown,
   requestId: string | null
@@ -245,12 +254,7 @@ export const normalizeMessage = (
   }
   message.text = texts.join("\n");
   message.thinking = thoughts.join("\n");
-  const empty =
-    message.text === "" &&
-    message.thinking === "" &&
-    message.toolUses.length === 0 &&
-    message.toolResults.length === 0;
-  return empty ? null : message;
+  return isEmptyMessage(message) ? null : message;
 };
 
 const optionalString = (value: unknown) =>
@@ -829,6 +833,14 @@ export class AgentRuntime {
     return this.#client;
   }
 
+  async listSkills() {
+    return await listSkills(this.#requireClient());
+  }
+
+  async listCommands() {
+    return await listCommands(this.#requireClient());
+  }
+
   /** Native in-place session settings: no interrupt, replacement or replay. */
   async updateModel(choice: AgentModelSettings): Promise<AgentModelSettings> {
     this.#assertStarting();
@@ -887,6 +899,8 @@ export class AgentRuntime {
     try {
       await client.addUserMessage(
         {
+          files: options.files,
+          images: options.images,
           queuePlacement: PLACEMENT[mode] as never,
           text,
           ...(options.sender ? { sender: options.sender as never } : {}),
@@ -981,7 +995,8 @@ export class AgentRuntime {
   async edit(
     id: string,
     replacementId: string,
-    text: string
+    text: string,
+    options: SubmitOptions = {}
   ): Promise<EditOutcome> {
     const release = this.queue.retain(id);
     try {
@@ -993,7 +1008,7 @@ export class AgentRuntime {
       if (removed === "unconfirmed") {
         return "delete_unconfirmed";
       }
-      await this.submit(replacementId, text, mode);
+      await this.submit(replacementId, text, mode, options);
       return "replaced";
     } finally {
       release();

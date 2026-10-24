@@ -197,6 +197,26 @@
   --default-transition-timing-function: var(--ease-out);
 }
 
+.pele {
+  --pele-bg: var(--color-surface-raised);
+  --pele-fg: var(--color-text);
+  --pele-muted: var(--color-text-secondary);
+  --pele-line: var(--color-text-secondary);
+  --pele-surface: var(--color-surface-overlay);
+  --pele-surface-alt: var(--color-surface-active);
+  --pele-border: var(--color-border-strong);
+  --pele-accent: var(--color-accent);
+  --pele-critical: var(--color-danger);
+  --pele-series-1: var(--color-accent);
+  --pele-series-2: var(--color-info);
+  --pele-series-3: var(--color-success);
+  --pele-series-4: var(--color-warning);
+  --pele-series-5: var(--color-text-secondary);
+  --pele-series-6: var(--color-syntax-keyword);
+  --pele-series-7: var(--color-syntax-type);
+  --pele-series-8: var(--color-text-tertiary);
+}
+
 @utility type-display {
   font-size: var(--text-3xl);
   line-height: var(--leading-2xl);

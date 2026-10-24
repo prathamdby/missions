@@ -12,6 +12,15 @@ const INLINE_STYLE = /style="/u;
 const TOKEN_SPAN = /<span class="text-syntax-(?<token>[a-z]+)">/gu;
 
 describe("streaming markdown", () => {
+  it("keeps incomplete Mermaid as code and mounts only complete fences", () => {
+    const incomplete = render("```mermaid\nflowchart LR\nA --> B", true);
+    expect(incomplete).toContain("<pre");
+    expect(incomplete).not.toContain('data-slot="diagram"');
+    const complete = render("```mermaid\nflowchart LR\nA --> B\n```", true);
+    expect(complete).toContain('data-slot="diagram"');
+    expect(complete).not.toContain("<pre");
+  });
+
   it("renders an unclosed fence as a code block with app chrome", () => {
     const markup = render("Here:\n\n```ts\nconst answer = 4", true);
     expect(markup).toContain("<pre");

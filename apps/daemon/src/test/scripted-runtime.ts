@@ -14,6 +14,7 @@ import type {
   RuntimeStartResult,
   SubmitOptions,
 } from "../sdk/agent-runtime";
+import type { ComposerSkill, SdkCommand } from "../sdk/composer-catalog";
 import { NativeQueueTracker } from "../sdk/native-queue";
 import {
   EXPLORE_TOOLS,
@@ -85,6 +86,15 @@ export class ScriptedRuntime implements RuntimeHandle {
     this.queue = new NativeQueueTracker((entry) =>
       options.onEvent({ entry, type: "queue" })
     );
+  }
+
+  readonly skills: ComposerSkill[] = [];
+  readonly commands: SdkCommand[] = [];
+  listSkills() {
+    return Promise.resolve(this.skills);
+  }
+  listCommands() {
+    return Promise.resolve(this.commands);
   }
 
   updateModel(choice: AgentModelSettings): Promise<AgentModelSettings> {

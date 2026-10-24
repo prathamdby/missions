@@ -23,6 +23,8 @@ const idleRuntime = (): RuntimeHandle => ({
   close: () => Promise.resolve({ stopped: true, survivors: [] }),
   edit: () => Promise.resolve("replaced"),
   interrupt: () => Promise.resolve(),
+  listCommands: () => Promise.resolve([]),
+  listSkills: () => Promise.resolve([]),
   model: null,
   queue: new NativeQueueTracker(() => null),
   remove: () => Promise.resolve("removed"),

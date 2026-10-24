@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Hint } from "@/components/ui/tooltip";
+import { Hint, HintTarget } from "@/components/ui/tooltip";
 import { settingsForModel } from "@/lib/mission/model-settings";
 import { effortLabel } from "@/lib/mission/pr";
 
@@ -55,8 +55,19 @@ const selectionDescription = (
   return notes.join(" ");
 };
 
+const thinkingHint = (
+  model: ModelOption | undefined,
+  effortUnavailable: boolean
+) => {
+  if (!model) {
+    return "Model unavailable";
+  }
+  if (model.supportedReasoningEfforts.length === 0) {
+    return "No thinking levels";
+  }
+  return effortUnavailable ? "Level unavailable" : "";
+};
 const ThinkingPicker = ({
-  description,
   descriptionId,
   disabled,
   label,
@@ -65,7 +76,6 @@ const ThinkingPicker = ({
   onValueChange,
   settings,
 }: {
-  description: string;
   descriptionId: string;
   disabled: boolean;
   label: string;
@@ -81,6 +91,7 @@ const ThinkingPicker = ({
   const effortUnavailable =
     settings.reasoningEffort !== null &&
     !efforts.includes(settings.reasoningEffort);
+  const hint = thinkingHint(model, effortUnavailable);
   return (
     <Select
       disabled={disabled || !model || noEfforts}
@@ -89,16 +100,18 @@ const ThinkingPicker = ({
       open={open}
       value={settings.reasoningEffort ?? DEFAULT_EFFORT}
     >
-      <Hint disabled={!description || open || pending} label={description}>
-        <SelectTrigger
-          appearance="thinking"
-          aria-describedby={descriptionId}
-          aria-label={`${label} thinking`}
-          aria-disabled={disabled || !model || noEfforts || pending}
-        >
-          <span>Thinking</span>
-          <SelectValue>{thinking}</SelectValue>
-        </SelectTrigger>
+      <Hint disabled={!hint || open || pending} label={hint}>
+        <HintTarget inactive={disabled || !model || noEfforts}>
+          <SelectTrigger
+            appearance="thinking"
+            aria-describedby={descriptionId}
+            aria-label={`${label} thinking`}
+            aria-disabled={disabled || !model || noEfforts || pending}
+          >
+            <span>Thinking</span>
+            <SelectValue>{thinking}</SelectValue>
+          </SelectTrigger>
+        </HintTarget>
       </Hint>
       <SelectContent
         appearance="thinking"
@@ -139,6 +152,7 @@ export const ModelControls = ({
   pending = false,
   scope,
   settings,
+  showLabel = true,
   testId,
   unavailable,
 }: {
@@ -148,6 +162,7 @@ export const ModelControls = ({
   pending?: boolean;
   scope?: string;
   settings: AgentModelSettings;
+  showLabel?: boolean;
   testId: string;
   unavailable: boolean;
 }) => {
@@ -182,9 +197,11 @@ export const ModelControls = ({
       className="flex h-9 shrink-0 items-center gap-lg max-md:h-auto max-md:flex-wrap"
       data-testid={testId}
     >
-      <span className="min-w-0 flex-1 text-sm leading-sm font-book tracking-tight text-text-secondary max-md:basis-full">
-        {label}
-      </span>
+      {showLabel ? (
+        <span className="min-w-0 flex-1 text-sm leading-sm font-book tracking-tight text-text-secondary max-md:basis-full">
+          {label}
+        </span>
+      ) : null}
       <span className="sr-only" id={descriptionId}>
         {description}
       </span>
@@ -195,15 +212,20 @@ export const ModelControls = ({
         onValueChange={changeModel}
         value={settings.modelId}
       >
-        <Hint disabled={!description || open || pending} label={description}>
-          <SelectTrigger
-            appearance="model"
-            aria-describedby={descriptionId}
-            aria-label={`${label} model`}
-            aria-disabled={unavailable || pending}
-          >
-            <SelectValue>{name}</SelectValue>
-          </SelectTrigger>
+        <Hint
+          disabled={(!unavailable && model !== undefined) || open || pending}
+          label="Model unavailable"
+        >
+          <HintTarget inactive={unavailable}>
+            <SelectTrigger
+              appearance="model"
+              aria-describedby={descriptionId}
+              aria-label={`${label} model`}
+              aria-disabled={unavailable || pending}
+            >
+              <SelectValue>{name}</SelectValue>
+            </SelectTrigger>
+          </HintTarget>
         </Hint>
         <SelectContent appearance="model" aria-label={`${label} models`}>
           <SelectGroup appearance="model">
@@ -217,7 +239,6 @@ export const ModelControls = ({
         </SelectContent>
       </Select>
       <ThinkingPicker
-        description={description}
         descriptionId={descriptionId}
         disabled={unavailable}
         label={label}

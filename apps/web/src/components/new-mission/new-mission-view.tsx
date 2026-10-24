@@ -2,9 +2,10 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import type { FormEvent, KeyboardEvent } from "react";
+import type { FormEvent } from "react";
 import { useMemo } from "react";
 
+import { ComposerField } from "@/components/composer/composer-field";
 import { BranchPicker } from "@/components/new-mission/branch-picker";
 import { ModelPicker } from "@/components/new-mission/model-picker";
 import { ProjectPicker } from "@/components/new-mission/project-picker";
@@ -19,15 +20,8 @@ import { COMPOSER_ID } from "@/components/shell/global-shortcuts";
 import { PageHeader, PageTitle } from "@/components/shell/page-header";
 import { Button, IconButton } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import { ComposerBox, ComposerToolbar } from "@/components/ui/composer-box";
 import { Dot } from "@/components/ui/dot";
-import {
-  ArrowUpIcon,
-  AtIcon,
-  AttachIcon,
-  LaptopIcon,
-} from "@/components/ui/icons";
-import { Textarea } from "@/components/ui/input";
+import { ArrowUpIcon, LaptopIcon } from "@/components/ui/icons";
 import { ListCard } from "@/components/ui/list-row";
 import {
   Popover,
@@ -36,7 +30,6 @@ import {
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Hint } from "@/components/ui/tooltip";
 import { Wordmark } from "@/components/ui/wordmark";
 import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
@@ -49,8 +42,6 @@ import { markReceipt, markSubmit } from "@/lib/perf-marks";
 import { cn } from "@/lib/utils";
 
 import { MissionCreation } from "./mission-creation";
-
-const UNSUPPORTED = "Attachments and mentions are coming soon";
 
 const changesLabel = (count: number) =>
   count === 1 ? "1 uncommitted change" : `${count} uncommitted changes`;
@@ -338,34 +329,27 @@ export const NewMissionView = () => {
       const { mission } = snapshot;
       markReceipt(goalRequestId(mission.id), "create-mission");
       upsertMissionSummary(client, mission);
-      form.setGoal("");
+      form.messageDraft.clear();
       router.push(`/missions/${mission.id}`);
     },
   });
 
   const hasProject = form.project !== null;
-  const canSubmit = form.draft !== null && !create.isPending;
+  const { uncertainDraft } = creation;
+  const submitDraft = uncertainDraft ?? form.draft;
+  const canSubmit =
+    form.draft !== null && !create.isPending && uncertainDraft === null;
 
   const submit = () => {
-    if (form.draft && !create.isPending) {
+    if (submitDraft && !create.isPending) {
       markSubmit("create-mission");
-      create.mutate(form.draft);
+      create.mutate(submitDraft);
     }
   };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     submit();
-  };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) {
-      return;
-    }
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      submit();
-    }
   };
 
   return (
@@ -388,52 +372,28 @@ export const NewMissionView = () => {
               <DirtyWarning form={form} />
               {create.isError ? (
                 <Callout
+                  actions={
+                    uncertainDraft ? (
+                      <Button onClick={submit}>Retry mission creation</Button>
+                    ) : undefined
+                  }
                   appearance="filled"
                   role="alert"
                   title="Could not start the mission"
                   tone="danger"
                 >
                   {errorMessage(create.error)}
+                  {uncertainDraft ? (
+                    <p>
+                      Retry to recover the original mission before making
+                      changes.
+                    </p>
+                  ) : null}
                 </Callout>
               ) : null}
               <form onSubmit={onSubmit}>
-                <ComposerBox inert={!hasProject}>
-                  <Textarea
-                    aria-label="Mission goal"
-                    disabled={!hasProject}
-                    id={COMPOSER_ID}
-                    onChange={(event) => form.setGoal(event.target.value)}
-                    onKeyDown={onKeyDown}
-                    placeholder={
-                      hasProject
-                        ? "Describe the mission. What should be true when it’s done?"
-                        : "Add a project to start a mission"
-                    }
-                    rows={1}
-                    value={form.goal}
-                    variant="bare"
-                  />
-                  <ComposerToolbar>
-                    <Hint label={UNSUPPORTED}>
-                      <IconButton
-                        icon={<AttachIcon tone="secondary" />}
-                        label="Attach files"
-                        size="responsive"
-                      />
-                    </Hint>
-                    <Hint label={UNSUPPORTED}>
-                      <IconButton
-                        icon={<AtIcon tone="secondary" />}
-                        label="Mention a file"
-                        size="responsive"
-                      />
-                    </Hint>
-                    <ModelPicker
-                      disabled={!hasProject}
-                      onChange={form.handleModelChange}
-                      value={form.models}
-                    />
-                    <span className="flex-1" />
+                <ComposerField
+                  action={
                     <IconButton
                       disabled={!canSubmit}
                       icon={<ArrowUpIcon />}
@@ -443,8 +403,33 @@ export const NewMissionView = () => {
                       type="submit"
                       variant="submit"
                     />
-                  </ComposerToolbar>
-                </ComposerBox>
+                  }
+                  disabled={
+                    !hasProject || create.isPending || uncertainDraft !== null
+                  }
+                  draft={form.messageDraft}
+                  id={COMPOSER_ID}
+                  label="Mission goal"
+                  onSubmit={submit}
+                  placeholder={
+                    hasProject
+                      ? "Describe the mission. What should be true when it’s done?"
+                      : "Add a project to start a mission"
+                  }
+                  scope={
+                    form.project
+                      ? { id: form.project.id, kind: "project" }
+                      : null
+                  }
+                >
+                  <ModelPicker
+                    disabled={
+                      !hasProject || create.isPending || uncertainDraft !== null
+                    }
+                    onChange={form.handleModelChange}
+                    value={form.models}
+                  />
+                </ComposerField>
               </form>
             </div>
           </div>
