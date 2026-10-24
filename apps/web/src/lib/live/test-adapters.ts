@@ -17,7 +17,6 @@ export const AT = "2026-01-01T00:00:00.000Z";
 export const MISSION_ID = "m-1";
 
 export const mission = (revision = 1): Mission => ({
-  autonomy: "medium",
   createdAt: AT,
   endedAt: null,
   epoch: 0,

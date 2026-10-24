@@ -28,7 +28,7 @@ export const menuItemVariants = cva(
         md: "h-8 items-center [&>svg]:size-4",
         /** Icon, title with tag, and description (PNO workspace choices). */
         option: "items-start px-md py-control",
-        /** Icon, title, description, and examples (autonomy levels). */
+        /** Icon, title and description. */
         rich: "items-start p-md",
       },
       variant: {

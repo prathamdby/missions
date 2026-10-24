@@ -39,7 +39,6 @@ const start = async (executionMode?: "plan" | "work") => {
     throw new Error("project not added");
   }
   const created = await daemon.missions.create({
-    autonomy: "high",
     executionMode,
     goal: "Write notes",
     operationId: "scripted-mission",

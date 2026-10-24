@@ -492,7 +492,6 @@ describe.runIf(process.env.MISSIONS_LIVE === "1")("live Droid runner", () => {
       } as unknown as RoleToolHandlers;
       let planMode = true;
       const context = (): AgentContext => ({
-        autonomy: "high",
         epoch: 0,
         fenced: false,
         missionId: "m",

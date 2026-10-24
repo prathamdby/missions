@@ -169,7 +169,6 @@ const appSample = async (cwd: string, index: number): Promise<Sample[]> => {
     const model = { modelId: MODEL, reasoningEffort: null };
     const coldStart = Date.now();
     const created = await daemon.missions.create({
-      autonomy: "low",
       goal: COLD_PROMPT,
       operationId: `perf-mission-${index}`,
       orchestrator: model,

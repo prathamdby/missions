@@ -7,7 +7,6 @@ import { createSettingsCoordinator } from "./settings-cache";
 
 const initial: Settings = {
   cleanupAfterMerge: false,
-  defaultAutonomy: "medium",
   defaultWorkspaceMode: "new_worktree",
   maxConcurrentWorkers: 2,
   orchestrator: { modelId: "planner", reasoningEffort: "high" },
@@ -54,11 +53,11 @@ describe("settings cache persistence", () => {
       }
     });
     try {
-      const pending = coordinator.save({ defaultAutonomy: "high" });
+      const pending = coordinator.save({ cleanupAfterMerge: true });
       await admitted.promise;
       const newer = { ...initial, worktreeRoot: "/newer-event" };
       client.setQueryData(queryKeys.settings, newer);
-      response.resolve({ ...initial, defaultAutonomy: "high" });
+      response.resolve({ ...initial, cleanupAfterMerge: true });
       await expect(pending).resolves.toBeTruthy();
       await refetchStarted.promise;
       expect({
@@ -68,13 +67,13 @@ describe("settings cache persistence", () => {
       }).toStrictEqual({ cached: newer, errors: [], reads: 1 });
       authoritative.resolve({
         ...newer,
-        defaultAutonomy: "high",
+        cleanupAfterMerge: true,
         worktreeRoot: "/authoritative",
       });
       await reconciled.promise;
       expect(client.getQueryData(queryKeys.settings)).toStrictEqual({
         ...newer,
-        defaultAutonomy: "high",
+        cleanupAfterMerge: true,
         worktreeRoot: "/authoritative",
       });
     } finally {
@@ -86,9 +85,9 @@ describe("settings cache persistence", () => {
   it("projects a successful response when the observed cache has not changed", async () => {
     const { admitted, client, coordinator, errors, response } = setup();
     try {
-      const pending = coordinator.save({ defaultAutonomy: "high" });
+      const pending = coordinator.save({ cleanupAfterMerge: true });
       await admitted.promise;
-      const saved = { ...initial, defaultAutonomy: "high" as const };
+      const saved = { ...initial, cleanupAfterMerge: true };
       response.resolve(saved);
       await expect(pending).resolves.toBeTruthy();
       expect({

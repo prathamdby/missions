@@ -36,10 +36,10 @@ describe(SettingsService, () => {
     const first = open(file);
     first.store.putSetting("app", LEGACY_SETTINGS);
     expect(first.service.get()).toMatchObject({
-      defaultAutonomy: "high",
       defaultWorkspaceMode: "new_worktree",
       maxConcurrentWorkers: 3,
     });
+    expect(first.service.get()).not.toHaveProperty("defaultAutonomy");
     first.handle.close();
   });
 
@@ -52,10 +52,12 @@ describe(SettingsService, () => {
 
     const second = open(file);
     expect(second.service.get()).toMatchObject({
-      defaultAutonomy: "high",
       defaultWorkspaceMode: "current_checkout",
       worktreeRoot: "/tmp/legacy-worktrees",
     });
+    expect(second.store.getSetting("app")).not.toHaveProperty(
+      "defaultAutonomy"
+    );
     second.handle.close();
   });
 

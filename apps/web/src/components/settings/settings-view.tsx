@@ -1,6 +1,5 @@
 "use client";
 
-import type { Autonomy } from "@missions/protocol/common";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import type {
   DefaultWorkspaceMode,
@@ -13,11 +12,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useMemo, useSyncExternalStore } from "react";
 
-import {
-  ChevronDownIcon,
-  ShieldIcon,
-  SidebarIcon,
-} from "@/components/mission/icons";
+import { ChevronDownIcon, SidebarIcon } from "@/components/mission/icons";
 import { ConnectionBanner } from "@/components/shell/connection-banner";
 import { useShell } from "@/components/shell/shell-context";
 import { Button } from "@/components/ui/button";
@@ -33,7 +28,6 @@ import {
   useSettings,
 } from "@/lib/api/queries";
 import { queryKeys } from "@/lib/api/query-keys";
-import { AUTONOMY, AUTONOMY_LEVELS } from "@/lib/autonomy";
 import { effortLabel } from "@/lib/mission/pr";
 import { toast } from "@/lib/toast-store";
 import { cn } from "@/lib/utils";
@@ -47,15 +41,6 @@ import {
 } from "./model-rules";
 import { createSettingsCoordinator } from "./settings-cache";
 import type { SettingsCoordinator } from "./settings-coordinator";
-
-/** Paper Z6J describes each level in full under "Default level". */
-const LEVEL_DETAIL: Record<Autonomy, string> = {
-  high: "High · everything in Medium, plus pushes, migrations, and deploys.",
-  low: "Low · edits and safe commands like ls, cat, git status.",
-  medium:
-    "Medium · edits, low-risk commands, and reversible changes like npm install, git commit, build.",
-  off: "Off · reads only. Droids ask before every edit or command.",
-};
 
 const NOT_YET = "The daemon does not support changing this yet.";
 
@@ -268,47 +253,6 @@ const ModelRow = ({
     </Row>
   );
 };
-
-const Segmented = ({
-  disabled,
-  onChange,
-  value,
-}: {
-  disabled: boolean;
-  onChange: (value: Autonomy) => void;
-  value: Autonomy;
-}) => (
-  <fieldset className="flex items-center gap-2xs rounded-sm bg-surface p-2xs ring-1 ring-border ring-inset">
-    <legend className="sr-only">Default autonomy</legend>
-    {AUTONOMY_LEVELS.map((level) => {
-      const active = level === value;
-      return (
-        <label
-          className={cn(
-            "flex h-6.5 cursor-pointer items-center gap-sm rounded-xs px-control text-xs leading-sm font-medium tracking-tight transition-colors duration-fast has-focus-visible:shadow-focus has-disabled:cursor-not-allowed",
-            active
-              ? "bg-surface-active text-text shadow-button"
-              : "text-text-tertiary hover:text-text-secondary"
-          )}
-          key={level}
-        >
-          <input
-            checked={active}
-            className="sr-only"
-            data-testid={`settings-autonomy-${level}`}
-            disabled={disabled}
-            name="default-autonomy"
-            onChange={() => onChange(level)}
-            type="radio"
-            value={level}
-          />
-          {active ? <ShieldIcon className="size-3" /> : null}
-          {AUTONOMY[level].label}
-        </label>
-      );
-    })}
-  </fieldset>
-);
 
 const ValueBox = ({ children }: { children: ReactNode }) => (
   <span className="flex h-7.5 max-w-80 items-center rounded-sm bg-surface px-control ring-1 ring-border ring-inset">
@@ -582,21 +526,6 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
           agentRole="worker"
           value={data.worker}
         />
-      </Group>
-      <Group
-        description="What droids can run without asking. Each mission can change it from the composer."
-        title="Autonomy"
-      >
-        <Row
-          description={LEVEL_DETAIL[data.defaultAutonomy]}
-          label="Default level"
-        >
-          <Segmented
-            disabled={busy}
-            onChange={(defaultAutonomy) => save({ defaultAutonomy })}
-            value={data.defaultAutonomy}
-          />
-        </Row>
       </Group>
       <Group
         description="Where new missions run. You can still pick another workspace when you start one."

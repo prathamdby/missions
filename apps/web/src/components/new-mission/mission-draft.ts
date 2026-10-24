@@ -1,5 +1,5 @@
 import type { CreateMissionRequest } from "@missions/protocol/commands";
-import type { Autonomy, ExecutionMode } from "@missions/protocol/common";
+import type { ExecutionMode } from "@missions/protocol/common";
 import type {
   AgentModelSettings,
   MissionSummary,
@@ -98,7 +98,6 @@ export const resolveDefaultBranch = (
 
 interface DraftInput {
   acknowledged: string | null;
-  autonomy: Autonomy;
   branch: string | null;
   branches: Evidence<readonly Branch[]>;
   checkout: Evidence<CheckoutStatus>;
@@ -209,7 +208,6 @@ const buildRequest = (
   }
   const models = input.models ?? settings.data;
   return {
-    autonomy: input.autonomy,
     ...(input.executionMode === "plan"
       ? { executionMode: "plan" as const }
       : {}),

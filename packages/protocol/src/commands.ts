@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import {
-  AutonomySchema,
   DeliveryModeSchema,
   ExecutionModeSchema,
   IdSchema,
@@ -16,7 +15,6 @@ import {
 import { WorkspaceRequestSchema } from "./workspaces";
 
 export const CreateMissionRequestSchema = z.strictObject({
-  autonomy: AutonomySchema.optional(),
   /** Work (default) acts directly; Plan starts read-only planning. */
   executionMode: ExecutionModeSchema.optional(),
   goal: z.string().trim().min(1).max(20_000),
@@ -30,7 +28,6 @@ export const CreateMissionRequestSchema = z.strictObject({
 export type CreateMissionRequest = z.input<typeof CreateMissionRequestSchema>;
 
 export const UpdateMissionRequestSchema = z.strictObject({
-  autonomy: AutonomySchema.optional(),
   expectedRevision: RevisionSchema,
   orchestrator: AgentModelSettingsSchema.optional(),
   title: z.string().trim().min(1).max(200).optional(),

@@ -29,7 +29,6 @@ const mission = (
   revision: number,
   status: Mission["status"] = "running"
 ): Mission => ({
-  autonomy: "medium",
   createdAt: AT,
   endedAt: null,
   epoch: 0,

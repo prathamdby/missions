@@ -22,7 +22,7 @@ Missions coordinate agents working toward a goal in a local project.
 
 **Agent message**: A message from one agent to another in the same mission, such as a Worker's question or the Orchestrator's reply. Its sender is set by the daemon, and it is task context, never user authorization.
 
-**Work mode**: The default execution mode, in which agents act within the mission's autonomy level.
+**Work mode**: The default execution mode, in which agents act directly under the fixed High permission policy.
 
 **Plan mode**: An optional, read-only execution mode for every agent, in which the Orchestrator plans and asks the user to approve the plan.
 
@@ -35,8 +35,6 @@ Missions coordinate agents working toward a goal in a local project.
 **Steer**: Delivery at the agent's next tool boundary. _Avoid_: Interrupt
 
 **Permission**: Authorization for an agent action that requires approval.
-
-**Autonomy**: The level of actions agents may take without asking.
 
 **Publish**: Sharing mission changes through a commit, push, or pull request.
 

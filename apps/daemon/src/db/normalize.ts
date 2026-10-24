@@ -14,7 +14,8 @@ import type {
 type Stored<T> = Partial<T> & Record<string, unknown>;
 
 export const normalizeMission = (data: unknown): Mission => {
-  const stored = data as Stored<Mission>;
+  const stored = { ...(data as Stored<Mission>) };
+  delete stored.autonomy;
   return {
     executionMode: "work",
     pendingExecutionMode: null,

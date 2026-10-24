@@ -13,7 +13,6 @@ const tempFile = async (name: string) =>
   path.join(await mkdtemp(path.join(tmpdir(), "missions-db-")), name);
 
 const LEGACY_MISSION = {
-  autonomy: "medium",
   createdAt: "2026-01-01T00:00:00.000Z",
   epoch: 0,
   goal: "Fix it",

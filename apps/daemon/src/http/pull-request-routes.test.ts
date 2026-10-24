@@ -15,7 +15,6 @@ import { registerPullRequestRoutes } from "./pull-request-routes";
 const opened: DatabaseHandle[] = [];
 const mission = (id: string, updatedAt: string, hasPr = true): Mission =>
   MissionSchema.parse({
-    autonomy: "medium",
     createdAt: "2026-01-01T00:00:00.000Z",
     epoch: 0,
     goal: "Ship it",

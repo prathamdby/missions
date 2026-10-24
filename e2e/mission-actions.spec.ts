@@ -46,7 +46,6 @@ test("the page itself never scrolls and shows no shortcut hints", async ({
   const mission = await createMission(
     request,
     project.id,
-    "medium",
     "Write a NOTES.md file summarizing the project",
     "work"
   );
@@ -72,7 +71,6 @@ test("the composer button sends with text and resumes a paused mission", async (
   const mission = await createMission(
     request,
     project.id,
-    "medium",
     "Summarize the composer project"
   );
   await expect
@@ -163,7 +161,6 @@ test("sidebar actions rename and delete a stopped mission but keep its files", a
   const mission = await createMission(
     request,
     project.id,
-    "medium",
     "Describe the sidebar project"
   );
   await expect
@@ -209,7 +206,7 @@ const stoppedMission = async (
   goal: string
 ) => {
   const project = await addProject(request, gitRepo(name));
-  const mission = await createMission(request, project.id, "medium", goal);
+  const mission = await createMission(request, project.id, goal);
   await expect
     .poll(() => missionStatus(request, mission.id), { timeout: 30_000 })
     .toBe("awaiting_approval");
