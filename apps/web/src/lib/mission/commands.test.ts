@@ -130,10 +130,7 @@ describe(MissionCommands, () => {
     const header = commands.run("resume", { expectedRevision: 1 });
     expect(commands.pendingControl()).toBe("resume");
     const banner = commands.run("resume", { expectedRevision: 1 });
-    expect([
-      banner,
-      commands.run("pause", { expectedRevision: 1 }),
-    ]).toStrictEqual([header, header]);
+    expect(banner).toBe(header);
     await Promise.resolve();
     expect(resume).toHaveBeenCalledOnce();
     pending.resolve(mission);
@@ -141,6 +138,32 @@ describe(MissionCommands, () => {
     expect(commands.pendingControl()).toBeNull();
     expect(listener).toHaveBeenCalledTimes(2);
     unsubscribe();
+  });
+
+  it("rejects a different control instead of handing it the running one's result", async () => {
+    const resuming = Promise.withResolvers<Mission>();
+    const resume = vi
+      .fn<MissionCommandTransport["resume"]>()
+      .mockReturnValue(resuming.promise);
+    const pause = vi.fn<MissionCommandTransport["pause"]>();
+    const archive = vi.fn<MissionCommandTransport["archive"]>();
+    const commands = new MissionCommands(
+      "m",
+      fakeTransport({ archive, pause, resume }),
+      intents()
+    );
+    const resumed = commands.run("resume", { expectedRevision: 1 });
+    await expect(
+      commands.run("pause", { expectedRevision: 1 })
+    ).rejects.toThrow(CONTROL_BUSY);
+    await expect(
+      commands.run("archive", { expectedRevision: 1 })
+    ).rejects.toThrow(CONTROL_BUSY);
+    resuming.resolve(mission);
+    await expect(resumed).resolves.toBe(mission);
+    expect([pause, archive].map((fn) => fn.mock.calls.length)).toStrictEqual([
+      0, 0,
+    ]);
   });
 
   it("never hands a Mission from another control to delete", async () => {

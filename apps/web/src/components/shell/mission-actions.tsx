@@ -63,7 +63,8 @@ const resumeLabel = (status: MissionStatus) =>
 
 /**
  * The full mission carries the revision every mutation must send. Opening a
- * menu re-reads it, so actions act on what the user just reviewed.
+ * menu re-reads it, so actions act on what the user just reviewed; an open
+ * dialog follows each later re-read, such as the refresh after a stale save.
  */
 const useReviewedMission = (summary: MissionSummary) => {
   const detail = useQuery({
@@ -75,8 +76,19 @@ const useReviewedMission = (summary: MissionSummary) => {
     const result = await detail.refetch();
     return result.isSuccess;
   };
+  // Only the daemon answering not_found proves the mission is gone; a failed
+  // read proves nothing.
+  const confirmMissing = async () => {
+    const result = await detail.refetch();
+    return isApiError(result.error) && result.error.code === "not_found";
+  };
   const ready = detail.isSuccess && !detail.isFetching;
-  return { mission: ready ? detail.data : undefined, review };
+  return {
+    confirmMissing,
+    latest: detail.data,
+    mission: ready ? detail.data : undefined,
+    review,
+  };
 };
 
 const copyLink = async (href: string) => {
@@ -311,11 +323,12 @@ const RenameDialog = ({
 };
 
 const DeleteDialog = ({
+  confirmMissing,
   mission,
   onClose,
   returnFocus,
   review,
-}: DialogProps) => {
+}: DialogProps & { confirmMissing: () => Promise<boolean> }) => {
   const client = useQueryClient();
   const remove = useMutation({
     mutationFn: () =>
@@ -326,7 +339,7 @@ const DeleteDialog = ({
       // An older daemon answers an unknown route with not_found too, so only
       // a confirmed missing mission counts as already deleted.
       if (isApiError(error) && error.code === "not_found") {
-        const confirmedGone = !(await review());
+        const confirmedGone = await confirmMissing();
         if (confirmedGone) {
           removeMission(client, mission.id);
           onClose();
@@ -400,7 +413,8 @@ export const MissionActions = ({
     commands.pendingControl,
     commands.pendingControl
   );
-  const { mission, review } = useReviewedMission(summary);
+  const { confirmMissing, latest, mission, review } =
+    useReviewedMission(summary);
   const [dialog, setDialog] = useState<{
     kind: DialogKind;
     mission: Mission;
@@ -451,7 +465,7 @@ export const MissionActions = ({
   };
   const close = () => setDialog(null);
   const dialogProps = dialog && {
-    mission: dialog.mission,
+    mission: latest ?? dialog.mission,
     onClose: close,
     returnFocus,
     review,
@@ -505,10 +519,10 @@ export const MissionActions = ({
         open={dialog !== null}
       >
         {dialogProps && dialog?.kind === "rename" ? (
-          <RenameDialog key={dialog.mission.revision} {...dialogProps} />
+          <RenameDialog {...dialogProps} />
         ) : null}
         {dialogProps && dialog?.kind === "delete" ? (
-          <DeleteDialog {...dialogProps} />
+          <DeleteDialog confirmMissing={confirmMissing} {...dialogProps} />
         ) : null}
       </Dialog>
     </div>

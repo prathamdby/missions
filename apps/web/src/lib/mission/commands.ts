@@ -136,13 +136,9 @@ export class MissionCommands {
       .map((lane) => this.flights.get(lane))
       .find((flight) => flight !== undefined);
     if (existing) {
-      // Delete acknowledges with CommandAccepted, not a Mission, so it never
-      // shares another control's result.
-      if (
-        isControl(kind) &&
-        this.control !== kind &&
-        (kind === "delete" || this.control === "delete")
-      ) {
+      // Only a repeat of the running control may share its result: pause,
+      // resume, archive and delete each ask the daemon for something else.
+      if (isControl(kind) && this.control !== kind) {
         return Promise.reject(new Error(CONTROL_BUSY));
       }
       // Each shared lane has one result type: Mission or PermissionRequest.

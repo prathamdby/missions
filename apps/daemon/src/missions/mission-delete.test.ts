@@ -562,6 +562,35 @@ describe("mission deletion", () => {
     ).toHaveLength(1);
   });
 
+  it("refuses deletion when an agent process cannot be observed", async () => {
+    const ctx = await pausedMission(await bootDaemon(opened));
+    const [agentId] = agentIdsOf(ctx.daemon, ctx.missionId);
+    if (!agentId) {
+      throw new Error("Missing agent");
+    }
+    new ProcessRecordRepository(ctx.daemon.store).save(
+      { agentId, pid: 4343, startTime: "1", tag: `${agentId}.unknown` },
+      agentId
+    );
+    const signal = vi.spyOn(ctx.daemon.supervisor, "stopRecord");
+    vi.spyOn(ctx.daemon.supervisor, "inspectRecord").mockResolvedValue({
+      stopped: false,
+      survivors: [],
+      unobservable: true,
+    });
+    await expect(
+      ctx.daemon.missions.remove(
+        ctx.missionId,
+        control(ctx.daemon, ctx.missionId, "delete-unobservable")
+      )
+    ).rejects.toThrow(/could not be confirmed stopped/u);
+    expect(signal).not.toHaveBeenCalled();
+    expect(ctx.daemon.missions.get(ctx.missionId).status).toBe("paused");
+    expect(
+      new ProcessRecordRepository(ctx.daemon.store).list([agentId])
+    ).toHaveLength(1);
+  });
+
   it("deletes a mission whose workspace directory is already gone", async () => {
     const ctx = await pausedMission(await bootDaemon(opened));
     await rename(ctx.repo, `${ctx.repo}-moved`);
