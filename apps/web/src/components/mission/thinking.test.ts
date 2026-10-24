@@ -5,6 +5,14 @@ import { describe, expect, it } from "vitest";
 import { Thinking } from "./thinking";
 
 describe("thinking disclosure", () => {
+  it("renders streamed thought text as markdown", () => {
+    const markup = renderToStaticMarkup(
+      createElement(Thinking, { streaming: true, text: "**x**" })
+    );
+    expect(markup).toContain('<strong class="font-semibold">x</strong>');
+    expect(markup).toContain("text-xs leading-sm text-text-secondary");
+  });
+
   it("streams reasoning inside the open disclosure", () => {
     const markup = renderToStaticMarkup(
       createElement(Thinking, { streaming: true, text: "Checking the tests" })

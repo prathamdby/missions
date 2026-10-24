@@ -9,6 +9,7 @@ import {
 import type { Components, StreamdownProps } from "streamdown";
 
 import { CodeBlock, InlineCode } from "@/components/ui/code-block";
+import { Diagram } from "@/components/ui/diagram";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   codePlugin,
@@ -151,6 +152,9 @@ const Fence = ({ children, className }: Props<"code">) => {
   const lang = LANGUAGE.exec(className ?? "")?.groups?.lang ?? "";
   const code = String(children ?? "").replace(TRAILING_NEWLINE, "");
   const highlighted = useHighlightedCode(code, lang, incomplete);
+  if (lang === "mermaid" && !incomplete) {
+    return <Diagram text={code} />;
+  }
   return (
     <CodeBlock
       code={code}
@@ -236,6 +240,22 @@ const PANEL_COMPONENTS: Components = {
   p: PanelParagraph,
 };
 
+const ThoughtParagraph = ({ node: _node, ...props }: Props<"p">) => (
+  <p className="text-xs leading-sm text-text-secondary" {...props} />
+);
+const ThoughtListItem = ({ node: _node, ...props }: Props<"li">) => (
+  <li className="text-xs leading-sm text-text-secondary" {...props} />
+);
+const THOUGHT_COMPONENTS: Components = {
+  ...PANEL_COMPONENTS,
+  li: ThoughtListItem,
+  p: ThoughtParagraph,
+};
+const APPEARANCES = {
+  default: COMPONENTS,
+  panel: PANEL_COMPONENTS,
+  thought: THOUGHT_COMPONENTS,
+} as const;
 const { harden: hardenEntry, sanitize } = defaultRehypePlugins;
 if (!(sanitize && Array.isArray(hardenEntry))) {
   throw new TypeError(
@@ -280,17 +300,17 @@ export const Markdown = ({
 }: {
   children: string;
   className?: string;
-  appearance?: "default" | "panel";
+  appearance?: keyof typeof APPEARANCES;
   streaming?: boolean;
 }) => (
   <Streamdown
     className={cn(
       // space-y-0 replaces Streamdown's root spacing; blocks use our gap instead.
       "flex min-w-0 flex-col space-y-0 break-words select-text",
-      appearance === "panel" ? "gap-sm" : "gap-md",
+      appearance === "default" ? "gap-md" : "gap-sm",
       className
     )}
-    components={appearance === "panel" ? PANEL_COMPONENTS : COMPONENTS}
+    components={APPEARANCES[appearance]}
     controls={false}
     isAnimating={streaming}
     lineNumbers={false}
