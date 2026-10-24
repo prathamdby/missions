@@ -301,6 +301,7 @@ export class MissionService {
   readonly #settings: SettingsService;
   readonly #models: ModelCatalog;
   readonly #titleGenerator: MissionTitleGenerator | null;
+  readonly #pendingTitles = new Set<string>();
   readonly #modelUpdates = new Set<string>();
   readonly #supervisor: ProcessSupervisor;
   readonly #processRecords: ProcessRecordRepository;
@@ -910,6 +911,7 @@ export class MissionService {
     this.#own(this.#launch(missionId));
     const snapshot = this.snapshot(missionId);
     if (!duplicate && request.title === undefined && this.#titleGenerator) {
+      this.#pendingTitles.add(missionId);
       this.#own(this.#autoTitle(missionId, snapshot.mission.title));
     }
     return snapshot;
@@ -926,6 +928,7 @@ export class MissionService {
       const current = this.#store.getMission(missionId);
       if (
         !title ||
+        !this.#pendingTitles.has(missionId) ||
         this.#closing ||
         this.#deleting.has(missionId) ||
         !current ||
@@ -936,6 +939,8 @@ export class MissionService {
       this.#mutateMission(missionId, (value) => ({ ...value, title }));
     } catch {
       // A title failure must not fail creation or resurrect a deleted mission.
+    } finally {
+      this.#pendingTitles.delete(missionId);
     }
   }
 
@@ -3580,6 +3585,9 @@ export class MissionService {
         ...(request.orchestrator ? { orchestrator: request.orchestrator } : {}),
         ...(request.worker ? { worker: request.worker } : {}),
       }));
+      if (request.title !== undefined) {
+        this.#pendingTitles.delete(missionId);
+      }
       if (request.orchestrator && !owner) {
         this.#patchAgent(agent.id, { model: saved.orchestrator });
       }
@@ -3941,14 +3949,6 @@ export class MissionService {
     };
     try {
       this.#requireOpen();
-      const replay = this.#journal.replay<{ notice: string } | null>({
-        id: request.operationId,
-        kind: MISSION_DELETE,
-        missionId,
-      });
-      if (replay) {
-        return Promise.resolve({ ...duplicate, ...replay.result });
-      }
       const running = this.#deleting.get(missionId);
       if (running) {
         if (running.operationId !== request.operationId) {
@@ -3958,6 +3958,14 @@ export class MissionService {
           ...result,
           status: "duplicate",
         }));
+      }
+      const replay = this.#journal.replay<{ notice: string } | null>({
+        id: request.operationId,
+        kind: MISSION_DELETE,
+        missionId,
+      });
+      if (replay) {
+        return Promise.resolve({ ...duplicate, ...replay.result });
       }
       const mission = this.#requireDeletable(
         missionId,
@@ -4022,15 +4030,21 @@ export class MissionService {
     mission: Mission,
     request: MissionControlRequest
   ): Promise<CommandAccepted> {
-    const settle = async () => {
+    const settle = async (canonical?: string) => {
       this.#requireDeletable(mission.id, request.expectedRevision);
       await this.#requireProcessesGone(mission.id);
+      if (
+        canonical &&
+        mission.workspace?.owned &&
+        mission.workspace.mode === "new_worktree"
+      ) {
+        await this.#requireWorkspaceQuiescent(canonical);
+      }
       const notice = mission.workspace
         ? await removeMissionWorkspace(mission.workspace)
         : null;
       const result = this.#commitRemoval(mission.id, request, notice);
-      await this.#removeFiles(mission.id);
-      return result;
+      return await this.#removeFiles(mission.id, result);
     };
     // The trusted stored binding serializes with admission even after the
     // directory was removed outside the app.
@@ -4086,6 +4100,7 @@ export class MissionService {
       emit(null, { data: { missionId }, type: "mission.removed" });
       return { agentIds, planIds, questionIds };
     });
+    this.#pendingTitles.delete(missionId);
     this.#planEntries.delete(missionId);
     for (const planId of owned.planIds) {
       this.#planBindings.delete(planId);
@@ -4103,18 +4118,50 @@ export class MissionService {
     };
   }
 
-  async #removeFiles(missionId: string) {
+  async #removeFiles(
+    missionId: string,
+    result: CommandAccepted
+  ): Promise<CommandAccepted> {
     const results = await Promise.allSettled([
       this.#sharedFiles.remove(missionId),
       this.#artifacts.remove(missionId),
     ]);
-    for (const result of results) {
-      if (result.status === "rejected") {
-        process.stderr.write(
-          `Mission file cleanup failed: ${errorMessage(result.reason)}\n`
-        );
-      }
+    const failures = results.flatMap((outcome) =>
+      outcome.status === "rejected" ? [errorMessage(outcome.reason)] : []
+    );
+    if (failures.length === 0) {
+      return result;
     }
+    const cleanupNotice =
+      "Some Missions-owned files could not be removed. Cleanup will be retried when the daemon restarts.";
+    const notice = result.notice
+      ? `${result.notice} ${cleanupNotice}`
+      : cleanupNotice;
+    this.#log.commit((emit) => {
+      const receipt = this.#journal.get(result.operationId, {
+        kind: MISSION_DELETE,
+        missionId,
+      });
+      if (!receipt) {
+        throw new Error("Missing mission deletion receipt");
+      }
+      this.#store.putOperation(
+        { ...receipt.operation, updatedAt: this.#iso() },
+        { notice }
+      );
+      emit(null, {
+        data: {
+          notice: {
+            code: "environment",
+            level: "warning",
+            message: `Mission ${missionId} file cleanup failed: ${failures.join("; ")}`,
+            retryAfterMs: null,
+          },
+        },
+        type: "notice",
+      });
+    });
+    return { ...result, notice };
   }
 
   // ------------------------------------------------------------ recovery
