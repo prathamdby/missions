@@ -138,6 +138,8 @@ export const CleanupRequestSchema = z.strictObject({
 export type CleanupRequest = z.input<typeof CleanupRequestSchema>;
 
 export const CommandAcceptedSchema = z.object({
+  /** Delete may retain a branch to preserve commits. */
+  notice: z.string().nullable().optional(),
   operationId: z.string(),
   status: z.enum(["accepted", "duplicate"]),
 });

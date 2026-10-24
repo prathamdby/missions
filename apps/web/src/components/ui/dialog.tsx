@@ -6,6 +6,7 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import type { ComponentProps, ReactNode } from "react";
 
 import { CloseIcon } from "@/components/ui/icons";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 export const Dialog = DialogPrimitive.Root;
@@ -197,8 +198,8 @@ export const DialogRowButton = ({
 );
 
 export const DialogBody = ({ className, ...props }: ComponentProps<"div">) => (
-  <div
-    className={cn("flex min-h-0 flex-1 flex-col overflow-y-auto", className)}
+  <ScrollArea
+    className={cn("flex min-h-0 flex-1 flex-col", className)}
     data-slot="dialog-body"
     {...props}
   />

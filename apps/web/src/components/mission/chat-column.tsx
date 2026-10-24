@@ -18,6 +18,7 @@ import {
   WorkspaceLine,
 } from "@/components/mission/transcript";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { errorMessage } from "@/lib/api/api-error";
 import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration, isMissionActive } from "@/lib/format";
@@ -55,7 +56,7 @@ const EarlierMessages = ({ onLoaded }: { onLoaded: () => void }) => {
         {load.isPending ? "Loading…" : "Load earlier messages"}
       </Button>
       {load.isError ? (
-        <p className="text-xs leading-sm text-danger" role="alert">
+        <p className="text-xs leading-sm text-danger select-text" role="alert">
           {errorMessage(sessionError ?? load.error)}
         </p>
       ) : null}
@@ -219,50 +220,52 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <section
-        aria-label="Conversation"
-        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3xl max-md:px-lg"
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          pinned.current =
-            element.scrollHeight - element.scrollTop - element.clientHeight <
-            STICK_THRESHOLD_PX;
-        }}
-        ref={scroller}
-      >
-        <div
-          aria-live="polite"
-          aria-relevant="additions"
-          ref={content}
-          className="mx-auto flex min-h-full w-full max-w-chat min-w-0 flex-col justify-end gap-lg pt-md pb-2xl"
+      <ScrollArea asChild axis="y" overscroll="contain">
+        <section
+          aria-label="Conversation"
+          className="relative min-h-0 flex-1 px-3xl max-md:px-lg"
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            pinned.current =
+              element.scrollHeight - element.scrollTop - element.clientHeight <
+              STICK_THRESHOLD_PX;
+          }}
+          ref={scroller}
         >
-          {live.transcriptHasMore ? (
-            <EarlierMessages
-              onLoaded={() => {
-                const element = scroller.current;
-                // The session applies the page before resolving loadOlder.
-                // The observer still holds the pre-page height until paint,
-                // including any output/scrolling that happened during the fetch.
-                preserveFrom.current =
-                  element && observedHeight.current !== null
-                    ? observedHeight.current - element.scrollTop
-                    : null;
-              }}
-            />
-          ) : null}
-          {goalBubble ? <UserMessage text={live.mission.goal} /> : null}
-          {goalBubble ? <WorkspaceLine /> : null}
-          <Transcript entries={entries} running={running} />
-          <WorkingLine agentId={agentId} transcript={transcript} />
-          {worker ? null : (
-            <>
-              <MissionBanners />
-              <FinishFlow />
-              <PublishNotices />
-            </>
-          )}
-        </div>
-      </section>
+          <div
+            aria-live="polite"
+            aria-relevant="additions"
+            ref={content}
+            className="mx-auto flex min-h-full w-full max-w-chat min-w-0 flex-col justify-end gap-lg pt-md pb-2xl"
+          >
+            {live.transcriptHasMore ? (
+              <EarlierMessages
+                onLoaded={() => {
+                  const element = scroller.current;
+                  // The session applies the page before resolving loadOlder.
+                  // The observer still holds the pre-page height until paint,
+                  // including any output/scrolling that happened during the fetch.
+                  preserveFrom.current =
+                    element && observedHeight.current !== null
+                      ? observedHeight.current - element.scrollTop
+                      : null;
+                }}
+              />
+            ) : null}
+            {goalBubble ? <UserMessage text={live.mission.goal} /> : null}
+            {goalBubble ? <WorkspaceLine /> : null}
+            <Transcript entries={entries} running={running} />
+            <WorkingLine agentId={agentId} transcript={transcript} />
+            {worker ? null : (
+              <>
+                <MissionBanners />
+                <FinishFlow />
+                <PublishNotices />
+              </>
+            )}
+          </div>
+        </section>
+      </ScrollArea>
       <div className="flex justify-center px-3xl pb-gutter max-md:px-md max-md:pb-md">
         {worker ? (
           <p className="py-lg text-xs leading-sm text-text-tertiary">

@@ -21,6 +21,7 @@ export const TabsList = ({
       className
     )}
     {...props}
+    tabIndex={-1}
   />
 );
 
@@ -50,5 +51,6 @@ export const TabsContent = ({
   <TabsPrimitive.Content
     className={cn("relative min-h-0 flex-1 outline-none", className)}
     {...props}
+    tabIndex={-1}
   />
 );

@@ -20,6 +20,7 @@ import {
   Listbox,
   ListboxGroup,
 } from "@/components/ui/list-row";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useMissions, useProjects } from "@/lib/api/queries";
 import { MISSION_STATUS } from "@/lib/format";
 
@@ -89,7 +90,7 @@ const ResultRow = ({
     onMouseMove={onHover}
     selected={active}
     size="menu"
-    tabIndex={-1}
+    virtualFocus
   >
     {result.kind === "mission" ? <TaskDoneIcon /> : <FolderIcon />}
     <span className="min-w-0 flex-1 truncate">
@@ -172,27 +173,29 @@ const SearchPanel = ({ onClose }: { onClose: () => void }) => {
           value={query}
         />
       </div>
-      <div className="max-h-96 min-h-0 overflow-y-auto p-xs">
-        <Listbox aria-label="Results" id="search-results">
-          {missionResults.length > 0 ? (
-            <ListboxGroup>
-              <ListLabel>Missions</ListLabel>
-              {missionResults.map(renderRow)}
-            </ListboxGroup>
-          ) : null}
-          {projectResults.length > 0 ? (
-            <ListboxGroup>
-              <ListLabel>Projects</ListLabel>
-              {projectResults.map(renderRow)}
-            </ListboxGroup>
-          ) : null}
-          {results.length === 0 ? (
-            <p className="px-md py-lg text-xs leading-sm text-text-tertiary">
-              Nothing matches “{query.trim()}”.
-            </p>
-          ) : null}
-        </Listbox>
-      </div>
+      <ScrollArea asChild axis="y">
+        <div className="max-h-96 min-h-0 p-xs">
+          <Listbox aria-label="Results" id="search-results">
+            {missionResults.length > 0 ? (
+              <ListboxGroup>
+                <ListLabel>Missions</ListLabel>
+                {missionResults.map(renderRow)}
+              </ListboxGroup>
+            ) : null}
+            {projectResults.length > 0 ? (
+              <ListboxGroup>
+                <ListLabel>Projects</ListLabel>
+                {projectResults.map(renderRow)}
+              </ListboxGroup>
+            ) : null}
+            {results.length === 0 ? (
+              <p className="px-md py-lg text-xs leading-sm text-text-tertiary">
+                Nothing matches “{query.trim()}”.
+              </p>
+            ) : null}
+          </Listbox>
+        </div>
+      </ScrollArea>
     </>
   );
 };

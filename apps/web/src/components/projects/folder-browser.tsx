@@ -31,6 +31,7 @@ import {
 import type { IconProps } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { ListLabel, ListOption, Listbox } from "@/components/ui/list-row";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/selection";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Hint } from "@/components/ui/tooltip";
@@ -591,22 +592,24 @@ export const FolderBrowser = ({
       />
       <DialogSection className="h-82 flex-row">
         <Places current={current} home={home} onGo={go} />
-        <div className="min-w-0 flex-1 overflow-y-auto p-md">
-          <Listbox aria-label={`Folders in ${tildePath(current, home)}`}>
-            <BrowseState browse={browse} />
-            {entries.map((entry) => (
-              <EntryRow
-                entry={entry}
-                key={entry.path}
-                onOpen={() => go(entry.path)}
-                onPick={() => onConfirm(entry.path, false)}
-                onSelect={() => setSelectedPath(entry.path)}
-                project={byPath.get(entry.path)}
-                selected={entry.path === selectedPath}
-              />
-            ))}
-          </Listbox>
-        </div>
+        <ScrollArea asChild axis="y">
+          <div className="min-w-0 flex-1 p-md">
+            <Listbox aria-label={`Folders in ${tildePath(current, home)}`}>
+              <BrowseState browse={browse} />
+              {entries.map((entry) => (
+                <EntryRow
+                  entry={entry}
+                  key={entry.path}
+                  onOpen={() => go(entry.path)}
+                  onPick={() => onConfirm(entry.path, false)}
+                  onSelect={() => setSelectedPath(entry.path)}
+                  project={byPath.get(entry.path)}
+                  selected={entry.path === selectedPath}
+                />
+              ))}
+            </Listbox>
+          </div>
+        </ScrollArea>
       </DialogSection>
       {browse.isSuccess ? (
         <SelectionBand

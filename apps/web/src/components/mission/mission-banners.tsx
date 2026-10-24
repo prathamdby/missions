@@ -30,6 +30,7 @@ import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { useMissionControl } from "@/components/mission/use-mission-control";
 import { Button } from "@/components/ui/button";
 import { ProgressBar } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/selection";
 import {
   canResume,
@@ -230,23 +231,25 @@ const RateLimitCard = ({
 const OutputBlock = ({ text }: { text: string }) => {
   const lines = text.split("\n").filter((line) => line.trim() !== "");
   return (
-    <div className="flex flex-col gap-2xs overflow-x-auto rounded-sm bg-bg px-lg py-control ring-1 ring-border-subtle ring-inset">
-      {lines.map((line, index) => (
-        <span
-          className={cn(
-            "font-mono text-2xs leading-sm whitespace-pre",
-            line.startsWith("$ ") || (index > 0 && index === lines.length - 1)
-              ? "text-text-tertiary"
-              : "text-danger"
-          )}
-          // Output lines can repeat; their order is their identity.
-          // oxlint-disable-next-line no-array-index-key
-          key={index}
-        >
-          {line}
-        </span>
-      ))}
-    </div>
+    <ScrollArea asChild axis="x">
+      <div className="flex flex-col gap-2xs rounded-sm bg-bg px-lg py-control ring-1 ring-border-subtle select-text ring-inset">
+        {lines.map((line, index) => (
+          <span
+            className={cn(
+              "font-mono text-2xs leading-sm whitespace-pre",
+              line.startsWith("$ ") || (index > 0 && index === lines.length - 1)
+                ? "text-text-tertiary"
+                : "text-danger"
+            )}
+            // Output lines can repeat; their order is their identity.
+            // oxlint-disable-next-line no-array-index-key
+            key={index}
+          >
+            {line}
+          </span>
+        ))}
+      </div>
+    </ScrollArea>
   );
 };
 

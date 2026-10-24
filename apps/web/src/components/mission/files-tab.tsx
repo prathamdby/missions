@@ -166,7 +166,10 @@ const TreeLevel = ({ authors, depth, dir, filter, onOpen }: LevelProps) => {
   }
   if (tree.isError) {
     return (
-      <p className="px-md py-xs text-xs leading-sm text-danger" role="alert">
+      <p
+        className="px-md py-xs text-xs leading-sm text-danger select-text"
+        role="alert"
+      >
         {errorMessage(tree.error)}
       </p>
     );
@@ -242,7 +245,7 @@ const FileViewer = ({
       </div>
       {content.isPending ? <Skeleton className="h-40 w-full" /> : null}
       {content.isError ? (
-        <p className="text-xs leading-sm text-danger" role="alert">
+        <p className="text-xs leading-sm text-danger select-text" role="alert">
           {errorMessage(content.error)}
         </p>
       ) : null}

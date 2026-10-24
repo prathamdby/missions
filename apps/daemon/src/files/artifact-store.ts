@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Artifact } from "@missions/protocol/missions";
 
 import { badRequest, forbidden } from "../lib/app-error";
+import { removeMissionFolder, sweepMissionFolders } from "./mission-folders";
 import { mediaTypeOf } from "./workspace-files";
 
 export const ARTIFACT_LIMIT = 50 * 1024 * 1024;
@@ -30,6 +31,14 @@ export class ArtifactStore {
 
   constructor(dir: string) {
     this.#dir = dir;
+  }
+
+  async remove(missionId: string) {
+    await removeMissionFolder(this.#dir, missionId);
+  }
+
+  async sweepRemoved(deleted: ReadonlySet<string>) {
+    await sweepMissionFolders(this.#dir, deleted);
   }
 
   filePath(artifact: Pick<Artifact, "id" | "missionId" | "name">) {

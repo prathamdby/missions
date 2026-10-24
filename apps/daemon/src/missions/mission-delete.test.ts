@@ -1,4 +1,14 @@
-import { readdir, readFile, rename, writeFile, mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import {
+  readdir,
+  readFile,
+  rename,
+  writeFile,
+  mkdir,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import path from "node:path";
 
 import type { DaemonEvent } from "@missions/protocol/events";
@@ -6,6 +16,9 @@ import type { PlanRevision } from "@missions/protocol/missions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Daemon } from "../daemon";
+import { ArtifactStore } from "../files/artifact-store";
+import { SharedFiles } from "../files/shared-files";
+import * as execution from "../lib/exec";
 import { ProcessRecordRepository } from "../processes/process-record-repository";
 import type { StopResult } from "../processes/process-supervisor";
 import { sh, testConfig } from "../test/fixtures";
@@ -221,13 +234,35 @@ const settledProcesses = (daemon: Daemon) =>
     .spyOn(daemon.supervisor, "inspectRecord")
     .mockResolvedValue({ stopped: true, survivors: [] });
 
+const ownedMission = async () => {
+  const ctx = await pausedMission(await bootDaemon(opened));
+  const workspace = await ctx.daemon.workspaces.bind(
+    ctx.missionId,
+    ctx.daemon.projects.get(ctx.projectId),
+    { baseBranch: "main", mode: "new_worktree" },
+    "owned-delete-worktree",
+    "Delete owned files"
+  );
+  ctx.daemon.missions.patch(ctx.missionId, (mission) => ({
+    ...mission,
+    workspace,
+  }));
+  return { ...ctx, workspace };
+};
+
+const removeOwned = (ctx: Awaited<ReturnType<typeof ownedMission>>) =>
+  ctx.daemon.missions.remove(
+    ctx.missionId,
+    control(ctx.daemon, ctx.missionId, "delete-owned-worktree")
+  );
+
 describe("mission deletion", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
   });
 
-  it("purges every mission-owned row in one step and keeps grants, other missions and files", async () => {
+  it("purges mission rows and files but keeps grants, other missions and the current checkout", async () => {
     const booted = await bootDaemon(opened);
     const ctx = await pausedMission(booted);
     const other = await pausedMission(booted, "2");
@@ -327,18 +362,243 @@ describe("mission deletion", () => {
       },
     });
     expect({
-      artifact: await readFile(artifactFile, "utf-8"),
+      artifact: existsSync(artifactFile),
       grants: ctx.daemon.store.listGrants().map((grant) => grant.id),
       otherRows: rowCounts(ctx.daemon, other.missionId, otherAgents),
-      shared: await readFile(sharedFile, "utf-8"),
+      shared: existsSync(sharedFile),
       workspace: await workspaceState(ctx.repo),
     }).toStrictEqual({
-      artifact: "notes",
+      artifact: false,
       grants: expect.arrayContaining(["grant-kept"]),
       otherRows: otherBefore,
-      shared: "done",
+      shared: false,
       workspace: workspaceBefore,
     });
+  });
+
+  it.each([
+    "merged",
+    "unmerged",
+    "remote",
+    "dirty",
+    "kept",
+    "missing",
+  ] as const)(
+    "removes a %s owned worktree and preserves commits when needed",
+    async (kind) => {
+      const ctx = await ownedMission();
+      const { workspace } = ctx;
+      if (kind === "unmerged" || kind === "remote" || kind === "merged") {
+        sh(workspace.path, [
+          "commit",
+          "--allow-empty",
+          "-qm",
+          "mission commit",
+        ]);
+      }
+      if (kind === "merged") {
+        sh(ctx.repo, ["merge", "--ff-only", workspace.branch ?? ""]);
+      }
+      if (kind === "remote") {
+        sh(ctx.repo, [
+          "update-ref",
+          "refs/remotes/origin/saved",
+          sh(workspace.path, ["rev-parse", "HEAD"]),
+        ]);
+      }
+      if (kind === "dirty") {
+        await writeFile(path.join(workspace.path, "dirty.txt"), "discard me");
+      }
+      if (kind === "kept") {
+        ctx.daemon.missions.patch(ctx.missionId, (mission) => ({
+          ...mission,
+          publish: { ...mission.publish, cleanup: "kept" },
+        }));
+      }
+      if (kind === "missing") {
+        await rm(workspace.path, { force: true, recursive: true });
+      }
+      const result = await removeOwned(ctx);
+      expect({
+        project: existsSync(path.join(ctx.repo, "README.md")),
+        status: result.status,
+        worktree: existsSync(workspace.path),
+      }).toStrictEqual({ project: true, status: "accepted", worktree: false });
+      expect(sh(ctx.repo, ["worktree", "list", "--porcelain"])).not.toContain(
+        workspace.path
+      );
+      const branches = sh(ctx.repo, [
+        "for-each-ref",
+        "--format=%(refname)",
+        `refs/heads/${workspace.branch}`,
+      ]);
+      expect(Boolean(branches)).toBe(kind === "unmerged");
+      expect(result.notice).toBe(
+        kind === "unmerged"
+          ? `Kept branch ${workspace.branch} because it has commits that are neither merged into the base branch nor in a local remote-tracking ref.`
+          : undefined
+      );
+      await expect(
+        ctx.daemon.missions.remove(ctx.missionId, {
+          expectedRevision: 0,
+          operationId: "delete-owned-worktree",
+        })
+      ).resolves.toStrictEqual({
+        ...result,
+        status: "duplicate",
+      });
+    }
+  );
+
+  it.each([true, false])(
+    "with the repository gone, removes only an identity-checked folder (valid=%s)",
+    async (valid) => {
+      const ctx = await ownedMission();
+      await rename(ctx.repo, `${ctx.repo}-gone`);
+      if (!valid) {
+        await writeFile(
+          path.join(ctx.workspace.path, ".git"),
+          "gitdir: /tmp/unrelated/worktrees/other\n"
+        );
+      }
+      const result = await outcome(() => removeOwned(ctx));
+      expect(result).toBe(
+        valid
+          ? "accepted"
+          : "conflict: The repository is gone and the worktree identity cannot be verified"
+      );
+      expect(existsSync(ctx.workspace.path)).toBe(!valid);
+      expect(
+        ctx.daemon.missions
+          .list()
+          .some((mission) => mission.id === ctx.missionId)
+      ).toBe(!valid);
+    }
+  );
+
+  it.each([1, null])(
+    "leaves the mission readable and retryable when git removal fails with %s",
+    async (code) => {
+      const ctx = await ownedMission();
+      const original = execution.git;
+      const git = vi
+        .spyOn(execution, "git")
+        .mockImplementation(async (cwd, args, options) =>
+          args[0] === "worktree" && args[1] === "remove"
+            ? {
+                code,
+                missing: false,
+                ok: false,
+                stderr: "removal failed",
+                stdout: "",
+              }
+            : await original(cwd, args, options)
+        );
+      await expect(removeOwned(ctx)).rejects.toMatchObject({
+        code: "conflict",
+        message: "removal failed",
+      });
+      expect(ctx.daemon.missions.get(ctx.missionId).workspace?.path).toBe(
+        ctx.workspace.path
+      );
+      expect(existsSync(ctx.workspace.path)).toBeTruthy();
+      git.mockRestore();
+      await expect(removeOwned(ctx)).resolves.toMatchObject({
+        status: "accepted",
+      });
+    }
+  );
+
+  it("retries after a purge failure even though the worktree and branch are already gone", async () => {
+    const ctx = await ownedMission();
+    vi.spyOn(ctx.daemon.journal, "recordCompleted").mockImplementationOnce(
+      () => {
+        throw new Error("disk full");
+      }
+    );
+    await expect(removeOwned(ctx)).rejects.toThrow("disk full");
+    expect(ctx.daemon.missions.get(ctx.missionId).id).toBe(ctx.missionId);
+    expect(existsSync(ctx.workspace.path)).toBeFalsy();
+    await expect(removeOwned(ctx)).resolves.toMatchObject({
+      status: "accepted",
+    });
+  });
+
+  it("never removes an existing worktree, even with a misleading owned flag", async () => {
+    const ctx = await ownedMission();
+    ctx.daemon.missions.patch(ctx.missionId, (mission) => ({
+      ...mission,
+      workspace: { ...ctx.workspace, mode: "existing_worktree" },
+    }));
+    await removeOwned(ctx);
+    expect(existsSync(ctx.workspace.path)).toBeTruthy();
+  });
+
+  it("keeps a worktree whose path has been replaced with a symlink", async () => {
+    const ctx = await ownedMission();
+    await rename(ctx.workspace.path, `${ctx.workspace.path}-moved`);
+    await symlink(`${ctx.workspace.path}-moved`, ctx.workspace.path);
+    await expect(removeOwned(ctx)).rejects.toMatchObject({ code: "conflict" });
+    expect(existsSync(ctx.workspace.path)).toBeTruthy();
+  });
+
+  it("logs file cleanup failures and sweeps only UUID folders with completed deletion receipts", async () => {
+    const ctx = await pausedMission(await bootDaemon(opened));
+    const roots = [
+      path.join(ctx.config.home, "shared"),
+      ctx.config.artifactsDir,
+    ];
+    const stray = randomUUID();
+    const failed = randomUUID();
+    const names = [ctx.missionId, stray, failed, "not-a-uuid"];
+    await Promise.all(
+      roots.flatMap((root) =>
+        names.map(async (name) => {
+          await mkdir(path.join(root, name), { recursive: true });
+          await writeFile(path.join(root, name, "kept.txt"), "content");
+        })
+      )
+    );
+    const at = new Date().toISOString();
+    ctx.daemon.store.putOperation({
+      createdAt: at,
+      detail: {},
+      id: "failed-delete-receipt",
+      kind: "mission.delete",
+      missionId: failed,
+      status: "failed",
+      updatedAt: at,
+    });
+    ctx.daemon.journal.recordCompleted({
+      id: "non-uuid-receipt",
+      kind: "mission.delete",
+      missionId: "not-a-uuid",
+    });
+    vi.spyOn(SharedFiles.prototype, "remove").mockRejectedValueOnce(
+      new Error("shared blocked")
+    );
+    vi.spyOn(ArtifactStore.prototype, "remove").mockRejectedValueOnce(
+      new Error("artifacts blocked")
+    );
+    const log = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await ctx.daemon.missions.remove(
+      ctx.missionId,
+      control(ctx.daemon, ctx.missionId, "delete-sweep-receipt")
+    );
+    expect(log.mock.calls.map(([line]) => line).join("")).toContain(
+      "cleanup failed"
+    );
+    expect(
+      roots.every((root) => existsSync(path.join(root, ctx.missionId)))
+    ).toBeTruthy();
+    await ctx.daemon.close();
+    await bootDaemon(opened, ctx.config);
+    for (const root of roots) {
+      expect(existsSync(path.join(root, ctx.missionId))).toBeFalsy();
+      expect(
+        names.slice(1).every((name) => existsSync(path.join(root, name)))
+      ).toBeTruthy();
+    }
   });
 
   it("rolls back a failure inside the transaction and leaves the mission intact", async () => {

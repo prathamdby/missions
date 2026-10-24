@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/icons";
 import { FieldLabel, Input } from "@/components/ui/input";
 import { ListOption, Listbox } from "@/components/ui/list-row";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { errorMessage } from "@/lib/api/api-error";
@@ -379,36 +380,38 @@ const RepoPicker = ({
         <OwnerPicker onChange={setOwner} owner={owner} owners={owners} />
       </form>
       <DialogSection className="min-h-0">
-        <div className="max-h-85 min-h-40 overflow-y-auto p-md">
-          <Listbox aria-label="Repositories">
-            {repos.isPending ? (
-              <div className="flex flex-col gap-md p-md">
-                <Skeleton className="w-1/2" />
-                <Skeleton className="w-2/3" />
-                <Skeleton className="w-1/3" />
-              </div>
-            ) : null}
-            {repos.isError ? (
-              <RepoListState>{errorMessage(repos.error)}</RepoListState>
-            ) : null}
-            {repos.isSuccess && visible.length === 0 ? (
-              <RepoListState>
-                No repositories match {query ? `“${query}”` : "this owner"}.
-              </RepoListState>
-            ) : null}
-            {visible.map((repo) => (
-              <RepoRow
-                added={isAdded(repo)}
-                key={repo.nameWithOwner}
-                now={now}
-                onClone={() => onClone(repo.nameWithOwner)}
-                onSelect={() => setChosen(repo.nameWithOwner)}
-                repo={repo}
-                selected={repo.nameWithOwner === target?.nameWithOwner}
-              />
-            ))}
-          </Listbox>
-        </div>
+        <ScrollArea asChild axis="y">
+          <div className="max-h-85 min-h-40 p-md">
+            <Listbox aria-label="Repositories">
+              {repos.isPending ? (
+                <div className="flex flex-col gap-md p-md">
+                  <Skeleton className="w-1/2" />
+                  <Skeleton className="w-2/3" />
+                  <Skeleton className="w-1/3" />
+                </div>
+              ) : null}
+              {repos.isError ? (
+                <RepoListState>{errorMessage(repos.error)}</RepoListState>
+              ) : null}
+              {repos.isSuccess && visible.length === 0 ? (
+                <RepoListState>
+                  No repositories match {query ? `“${query}”` : "this owner"}.
+                </RepoListState>
+              ) : null}
+              {visible.map((repo) => (
+                <RepoRow
+                  added={isAdded(repo)}
+                  key={repo.nameWithOwner}
+                  now={now}
+                  onClone={() => onClone(repo.nameWithOwner)}
+                  onSelect={() => setChosen(repo.nameWithOwner)}
+                  repo={repo}
+                  selected={repo.nameWithOwner === target?.nameWithOwner}
+                />
+              ))}
+            </Listbox>
+          </div>
+        </ScrollArea>
       </DialogSection>
       <DialogSection padding="field">
         <FieldLabel htmlFor={destinationId} size="xs">

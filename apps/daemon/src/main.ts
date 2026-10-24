@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 
 import { loadConfig } from "./config";
 import { createDaemon } from "./daemon";
+import { TitleGenerator } from "./missions/title-generator";
 
 // Loopback only: the daemon holds credentials and repository access.
 const HOST = "127.0.0.1";
@@ -13,6 +14,9 @@ const scripted =
     : null;
 const daemon = await createDaemon({
   config,
+  titleGenerator: scripted
+    ? null
+    : new TitleGenerator({ droidPath: config.droidPath }),
   ...(scripted && {
     createRuntime: (options) =>
       new scripted.ScriptedRuntime(

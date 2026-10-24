@@ -11,6 +11,7 @@ import { Dot } from "@/components/ui/dot";
 import { IconTile } from "@/components/ui/icon-tile";
 import { PullRequestIcon } from "@/components/ui/icons";
 import { ListCard, ListLabel, ListRow } from "@/components/ui/list-row";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/api-error";
 import { usePullRequestsQuery, useProjects } from "@/lib/api/queries";
@@ -140,48 +141,50 @@ export const PullRequestsView = () => {
       <PageHeader>
         <PageTitle>Pull requests</PageTitle>
       </PageHeader>
-      <div className="relative flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-lg pb-2xl md:px-3xl">
-        <div className="flex w-full max-w-chat flex-col gap-2xl pt-xl">
-          {loading && rows.length === 0 ? (
-            <div className="flex flex-col gap-md">
-              <Skeleton className="w-2/3" />
-              <Skeleton className="w-1/2" />
-              <Skeleton className="w-3/5" />
-            </div>
-          ) : null}
-          {error ? (
-            <Callout
-              appearance="filled"
-              role="alert"
-              title="Could not load pull requests"
-              tone="danger"
-            >
-              {error}
-            </Callout>
-          ) : null}
-          {!error && !loading && rows.length === 0 ? <EmptyState /> : null}
-          {open.length > 0 ? (
-            <section className="flex flex-col">
-              <ListLabel size="sidebar">Open · {open.length}</ListLabel>
-              <ListCard>
-                {open.map((row) => (
-                  <PullRequestItem key={row.missionId} now={now} row={row} />
-                ))}
-              </ListCard>
-            </section>
-          ) : null}
-          {done.length > 0 ? (
-            <section className="flex flex-col">
-              <ListLabel size="sidebar">Merged and closed</ListLabel>
-              <ListCard>
-                {done.map((row) => (
-                  <PullRequestItem key={row.missionId} now={now} row={row} />
-                ))}
-              </ListCard>
-            </section>
-          ) : null}
+      <ScrollArea asChild axis="y">
+        <div className="relative flex min-h-0 flex-1 flex-col items-center px-lg pb-2xl md:px-3xl">
+          <div className="flex w-full max-w-chat flex-col gap-2xl pt-xl">
+            {loading && rows.length === 0 ? (
+              <div className="flex flex-col gap-md">
+                <Skeleton className="w-2/3" />
+                <Skeleton className="w-1/2" />
+                <Skeleton className="w-3/5" />
+              </div>
+            ) : null}
+            {error ? (
+              <Callout
+                appearance="filled"
+                role="alert"
+                title="Could not load pull requests"
+                tone="danger"
+              >
+                {error}
+              </Callout>
+            ) : null}
+            {!error && !loading && rows.length === 0 ? <EmptyState /> : null}
+            {open.length > 0 ? (
+              <section className="flex flex-col">
+                <ListLabel size="sidebar">Open · {open.length}</ListLabel>
+                <ListCard>
+                  {open.map((row) => (
+                    <PullRequestItem key={row.missionId} now={now} row={row} />
+                  ))}
+                </ListCard>
+              </section>
+            ) : null}
+            {done.length > 0 ? (
+              <section className="flex flex-col">
+                <ListLabel size="sidebar">Merged and closed</ListLabel>
+                <ListCard>
+                  {done.map((row) => (
+                    <PullRequestItem key={row.missionId} now={now} row={row} />
+                  ))}
+                </ListCard>
+              </section>
+            ) : null}
+          </div>
         </div>
-      </div>
+      </ScrollArea>
     </div>
   );
 };

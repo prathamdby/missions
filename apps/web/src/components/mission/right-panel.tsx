@@ -7,6 +7,7 @@ import { DigestTab } from "@/components/mission/digest-tab";
 import { FilesTab } from "@/components/mission/files-tab";
 import type { PanelTab } from "@/components/mission/mission-context";
 import { OverviewTab } from "@/components/mission/overview-tab";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
@@ -53,41 +54,33 @@ export const RightPanel = ({
         </TabsTrigger>
       </TabsList>
     </div>
-    <TabsContent
-      className="overflow-y-auto overscroll-contain"
-      tabIndex={-1}
-      value="overview"
-    >
-      <Body gap="gutter">
-        <OverviewTab />
-      </Body>
-    </TabsContent>
-    <TabsContent
-      className="overflow-y-auto overscroll-contain"
-      tabIndex={-1}
-      value="digest"
-    >
-      <Body gap="section">
-        <DigestTab />
-      </Body>
-    </TabsContent>
-    <TabsContent
-      className="overflow-y-auto overscroll-contain"
-      tabIndex={-1}
-      value="files"
-    >
-      <Body gap="xl">
-        <FilesTab />
-      </Body>
-    </TabsContent>
-    <TabsContent
-      className="overflow-y-auto overscroll-contain"
-      tabIndex={-1}
-      value="changes"
-    >
-      <Body gap="lg">
-        <ChangesTab />
-      </Body>
-    </TabsContent>
+    <ScrollArea asChild axis="y" overscroll="contain">
+      <TabsContent value="overview">
+        <Body gap="gutter">
+          <OverviewTab />
+        </Body>
+      </TabsContent>
+    </ScrollArea>
+    <ScrollArea asChild axis="y" overscroll="contain">
+      <TabsContent value="digest">
+        <Body gap="section">
+          <DigestTab />
+        </Body>
+      </TabsContent>
+    </ScrollArea>
+    <ScrollArea asChild axis="y" overscroll="contain">
+      <TabsContent value="files">
+        <Body gap="xl">
+          <FilesTab />
+        </Body>
+      </TabsContent>
+    </ScrollArea>
+    <ScrollArea asChild axis="y" overscroll="contain">
+      <TabsContent value="changes">
+        <Body gap="lg">
+          <ChangesTab />
+        </Body>
+      </TabsContent>
+    </ScrollArea>
   </Tabs>
 );

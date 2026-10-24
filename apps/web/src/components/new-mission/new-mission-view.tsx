@@ -34,6 +34,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Hint } from "@/components/ui/tooltip";
 import { Wordmark } from "@/components/ui/wordmark";
@@ -242,16 +243,18 @@ const ChangedFiles = ({ files }: { files: readonly string[] }) => (
       <p className="px-md pt-md pb-xs text-xs leading-sm font-medium text-text-tertiary">
         Uncommitted in your checkout
       </p>
-      <ul className="flex max-h-60 flex-col overflow-y-auto px-md pb-md">
-        {files.map((file) => (
-          <li
-            className="truncate py-2xs font-mono text-2xs leading-xs text-text-secondary"
-            key={file}
-          >
-            {file}
-          </li>
-        ))}
-      </ul>
+      <ScrollArea asChild axis="y">
+        <ul className="flex max-h-60 flex-col px-md pb-md">
+          {files.map((file) => (
+            <li
+              className="truncate py-2xs font-mono text-2xs leading-xs text-text-secondary"
+              key={file}
+            >
+              {file}
+            </li>
+          ))}
+        </ul>
+      </ScrollArea>
     </PopoverContent>
   </Popover>
 );
@@ -371,80 +374,82 @@ export const NewMissionView = () => {
         <PageTitle>New mission</PageTitle>
       </PageHeader>
       <ConnectionBanner />
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className="flex flex-1 flex-col items-center justify-center gap-2xl px-xl pt-lg pb-lg md:gap-section md:px-3xl md:pt-0 md:pb-2xl">
-          <div className="flex flex-col items-center gap-card md:gap-gutter">
-            <Wordmark size="responsive" />
-            <Tagline form={form} />
+      <ScrollArea asChild axis="y">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2xl px-xl pt-lg pb-lg md:gap-section md:px-3xl md:pt-0 md:pb-2xl">
+            <div className="flex flex-col items-center gap-card md:gap-gutter">
+              <Wordmark size="responsive" />
+              <Tagline form={form} />
+            </div>
+            <ProjectArea form={form} />
           </div>
-          <ProjectArea form={form} />
-        </div>
-        <div className="flex shrink-0 flex-col items-center gap-lg px-lg py-xs md:px-3xl md:pt-0 md:pb-gutter">
-          <div className="flex w-full max-w-chat flex-col gap-lg">
-            <DirtyWarning form={form} />
-            {create.isError ? (
-              <Callout
-                appearance="filled"
-                role="alert"
-                title="Could not start the mission"
-                tone="danger"
-              >
-                {errorMessage(create.error)}
-              </Callout>
-            ) : null}
-            <form onSubmit={onSubmit}>
-              <ComposerBox inert={!hasProject}>
-                <Textarea
-                  aria-label="Mission goal"
-                  disabled={!hasProject}
-                  id={COMPOSER_ID}
-                  onChange={(event) => form.setGoal(event.target.value)}
-                  onKeyDown={onKeyDown}
-                  placeholder={
-                    hasProject
-                      ? "Describe the mission. What should be true when it’s done?"
-                      : "Add a project to start a mission"
-                  }
-                  rows={1}
-                  value={form.goal}
-                  variant="bare"
-                />
-                <ComposerToolbar>
-                  <Hint label={UNSUPPORTED}>
-                    <IconButton
-                      icon={<AttachIcon tone="secondary" />}
-                      label="Attach files"
-                      size="responsive"
-                    />
-                  </Hint>
-                  <Hint label={UNSUPPORTED}>
-                    <IconButton
-                      icon={<AtIcon tone="secondary" />}
-                      label="Mention a file"
-                      size="responsive"
-                    />
-                  </Hint>
-                  <ModelPicker
+          <div className="flex shrink-0 flex-col items-center gap-lg px-lg py-xs md:px-3xl md:pt-0 md:pb-gutter">
+            <div className="flex w-full max-w-chat flex-col gap-lg">
+              <DirtyWarning form={form} />
+              {create.isError ? (
+                <Callout
+                  appearance="filled"
+                  role="alert"
+                  title="Could not start the mission"
+                  tone="danger"
+                >
+                  {errorMessage(create.error)}
+                </Callout>
+              ) : null}
+              <form onSubmit={onSubmit}>
+                <ComposerBox inert={!hasProject}>
+                  <Textarea
+                    aria-label="Mission goal"
                     disabled={!hasProject}
-                    onChange={form.handleModelChange}
-                    value={form.models}
+                    id={COMPOSER_ID}
+                    onChange={(event) => form.setGoal(event.target.value)}
+                    onKeyDown={onKeyDown}
+                    placeholder={
+                      hasProject
+                        ? "Describe the mission. What should be true when it’s done?"
+                        : "Add a project to start a mission"
+                    }
+                    rows={1}
+                    value={form.goal}
+                    variant="bare"
                   />
-                  <span className="flex-1" />
-                  <IconButton
-                    disabled={!canSubmit}
-                    icon={<ArrowUpIcon />}
-                    label="Start mission"
-                    shape="round"
-                    size="responsive"
-                    type="submit"
-                    variant="submit"
-                  />
-                </ComposerToolbar>
-              </ComposerBox>
-            </form>
+                  <ComposerToolbar>
+                    <Hint label={UNSUPPORTED}>
+                      <IconButton
+                        icon={<AttachIcon tone="secondary" />}
+                        label="Attach files"
+                        size="responsive"
+                      />
+                    </Hint>
+                    <Hint label={UNSUPPORTED}>
+                      <IconButton
+                        icon={<AtIcon tone="secondary" />}
+                        label="Mention a file"
+                        size="responsive"
+                      />
+                    </Hint>
+                    <ModelPicker
+                      disabled={!hasProject}
+                      onChange={form.handleModelChange}
+                      value={form.models}
+                    />
+                    <span className="flex-1" />
+                    <IconButton
+                      disabled={!canSubmit}
+                      icon={<ArrowUpIcon />}
+                      label="Start mission"
+                      shape="round"
+                      size="responsive"
+                      type="submit"
+                      variant="submit"
+                    />
+                  </ComposerToolbar>
+                </ComposerBox>
+              </form>
+            </div>
           </div>
         </div>
-      </div>
+      </ScrollArea>
     </div>
   );
 };

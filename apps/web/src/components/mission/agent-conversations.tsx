@@ -6,6 +6,7 @@ import { ChatColumn } from "@/components/mission/chat-column";
 import { CheckIcon, CloseIcon, PauseIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WAITING, waitingOf } from "@/lib/mission/waiting";
 
@@ -76,25 +77,27 @@ export const AgentConversations = () => {
       onValueChange={showAgent}
       value={selected.id}
     >
-      <div className="flex h-13 shrink-0 items-center overflow-x-auto border-b border-border-subtle px-lg">
-        <TabsList aria-label="Agent conversations" variant="conversation">
-          {agents.map((agent) => (
-            <TabsTrigger variant="conversation" key={agent.id} value={agent.id}>
-              {agent.role === "orchestrator"
-                ? "Orchestrator"
-                : (live.assignments[agent.assignmentId ?? ""]?.title ??
-                  agentLabels[agent.id] ??
-                  agent.title)}
-              <AgentState agent={agent} />
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </div>
-      <TabsContent
-        className="flex min-h-0 flex-col"
-        tabIndex={-1}
-        value={selected.id}
-      >
+      <ScrollArea asChild axis="x">
+        <div className="flex h-13 shrink-0 items-center border-b border-border-subtle px-lg">
+          <TabsList aria-label="Agent conversations" variant="conversation">
+            {agents.map((agent) => (
+              <TabsTrigger
+                variant="conversation"
+                key={agent.id}
+                value={agent.id}
+              >
+                {agent.role === "orchestrator"
+                  ? "Orchestrator"
+                  : (live.assignments[agent.assignmentId ?? ""]?.title ??
+                    agentLabels[agent.id] ??
+                    agent.title)}
+                <AgentState agent={agent} />
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
+      </ScrollArea>
+      <TabsContent className="flex min-h-0 flex-col" value={selected.id}>
         <ChatColumn agentId={selected.id} key={selected.id} />
       </TabsContent>
     </Tabs>

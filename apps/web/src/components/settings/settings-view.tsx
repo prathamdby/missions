@@ -16,6 +16,7 @@ import { ChevronDownIcon, SidebarIcon } from "@/components/mission/icons";
 import { ConnectionBanner } from "@/components/shell/connection-banner";
 import { useShell } from "@/components/shell/shell-context";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/selection";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/api-error";
@@ -641,11 +642,13 @@ export const SettingsView = () => {
         </h1>
       </header>
       <ConnectionBanner />
-      <div className="relative min-h-0 flex-1 overflow-y-auto px-3xl pt-2xl pb-4xl max-md:px-lg">
-        <div className="mx-auto flex w-full max-w-settings flex-col gap-group">
-          <SettingsBody />
+      <ScrollArea asChild axis="y">
+        <div className="relative min-h-0 flex-1 px-3xl pt-2xl pb-4xl max-md:px-lg">
+          <div className="mx-auto flex w-full max-w-settings flex-col gap-group">
+            <SettingsBody />
+          </div>
         </div>
-      </div>
+      </ScrollArea>
     </div>
   );
 };
