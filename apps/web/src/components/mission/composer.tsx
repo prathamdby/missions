@@ -64,7 +64,7 @@ const actionPresentation = (action: ComposerAction, working: boolean) => {
   switch (action.kind) {
     case "pause": {
       return {
-        hint: "Pause all agents at a safe point",
+        hint: "Pause all agents",
         icon: <PauseIcon className="size-3.5" />,
         label: "Pause mission",
       };
@@ -74,7 +74,7 @@ const actionPresentation = (action: ComposerAction, working: boolean) => {
         hint:
           action.label === "Resume"
             ? "Resume the mission"
-            : "Resume from the last safe point",
+            : "Resume from last checkpoint",
         icon:
           action.label === "Resume" ? (
             <PlayIcon className="size-3.5" />

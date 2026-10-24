@@ -2,7 +2,6 @@
 
 import type { Mission } from "@missions/protocol/missions";
 import { useId, useState } from "react";
-import type { ReactNode } from "react";
 
 import {
   ChatCard,
@@ -28,10 +27,11 @@ import {
 } from "@/components/mission/question-card";
 import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { useMissionControl } from "@/components/mission/use-mission-control";
-import { Button } from "@/components/ui/button";
+import { Button, UnavailableButton } from "@/components/ui/button";
 import { ProgressBar } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/selection";
+import { Hint, HintTarget } from "@/components/ui/tooltip";
 import {
   canResume,
   formatDuration,
@@ -59,8 +59,7 @@ const TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
   minute: "2-digit",
 });
-const MODEL_LOCKED =
-  "Models are fixed once a mission starts. Change the default in Settings for new missions.";
+const MODEL_LOCKED = "Model unavailable";
 
 const ResumeButton = ({
   label,
@@ -81,21 +80,6 @@ const ResumeButton = ({
     </Button>
   );
 };
-
-/** A Paper action the daemon cannot perform yet: shown, but inert with a reason. */
-const UnavailableButton = ({
-  children,
-  reason,
-  variant = "secondary",
-}: {
-  children: ReactNode;
-  reason: string;
-  variant?: "ghost" | "primary" | "secondary";
-}) => (
-  <Button aria-disabled="true" title={reason} variant={variant}>
-    {children}
-  </Button>
-);
 
 const focusComposer = () =>
   document.querySelector<HTMLTextAreaElement>("[data-composer-input]")?.focus();
@@ -184,10 +168,7 @@ const PausedCard = ({ mission }: { mission: Mission }) => {
         {rateLimited ? <SwitchWorkersButton /> : null}
         <span className="flex-1" />
         {rateLimited ? (
-          <UnavailableButton
-            reason="Notifications are not supported yet."
-            variant="ghost"
-          >
+          <UnavailableButton reason="Not available yet" variant="ghost">
             Notify me when it resumes
           </UnavailableButton>
         ) : null}
@@ -310,7 +291,7 @@ const BlockedCard = ({ mission }: { mission: Mission }) => {
         ) : (
           <RetryBlockedButton />
         )}
-        <UnavailableButton reason="Opening a terminal from the browser is not supported yet.">
+        <UnavailableButton reason="Not available yet">
           <TerminalIcon className="size-3.5 text-text-secondary" />
           Open terminal in worktree
         </UnavailableButton>
@@ -396,14 +377,11 @@ const FailedCard = ({ mission }: { mission: Mission }) => {
         <UnavailableButton reason={MODEL_LOCKED}>
           Retry with another worker model
         </UnavailableButton>
-        <UnavailableButton reason="Replanning a failed mission is not supported yet. Start a follow-up mission instead.">
+        <UnavailableButton reason="Not available yet">
           Replan from here
         </UnavailableButton>
         <span className="flex-1" />
-        <UnavailableButton
-          reason="Agent logs are in the Droid session; the Digest tab summarizes the mission."
-          variant="ghost"
-        >
+        <UnavailableButton reason="Not available yet" variant="ghost">
           <FileTextIcon className="size-3.5 text-text-secondary" />
           View logs
         </UnavailableButton>
@@ -495,18 +473,20 @@ const MergeConflictCard = ({
       </div>
       <ChatCardFooter>
         <span className="flex-1" />
-        <Button
-          disabled={steer.isPending || (choice === "droids" && !canMessage)}
-          title={
-            !canMessage && choice === "droids"
-              ? "Resolve the conflict yourself, resume a stopped mission, or start a follow-up mission."
-              : undefined
-          }
-          onClick={() => (choice === "droids" ? resolve() : onDismiss())}
-          variant="primary"
+        <Hint
+          disabled={canMessage || choice !== "droids"}
+          label="Resolve conflict first"
         >
-          Continue
-        </Button>
+          <HintTarget inactive={!canMessage && choice === "droids"}>
+            <Button
+              disabled={steer.isPending || (choice === "droids" && !canMessage)}
+              onClick={() => (choice === "droids" ? resolve() : onDismiss())}
+              variant="primary"
+            >
+              Continue
+            </Button>
+          </HintTarget>
+        </Hint>
       </ChatCardFooter>
     </ChatCard>
   );

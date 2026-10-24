@@ -12,13 +12,22 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useMemo, useSyncExternalStore } from "react";
 
-import { ChevronDownIcon, SidebarIcon } from "@/components/mission/icons";
+import { SidebarIcon } from "@/components/mission/icons";
+import { ModelControls } from "@/components/missions/model-controls";
 import { ConnectionBanner } from "@/components/shell/connection-banner";
 import { useShell } from "@/components/shell/shell-context";
-import { Button } from "@/components/ui/button";
+import { Button, UnavailableButton } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/selection";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Hint, HintTarget } from "@/components/ui/tooltip";
 import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
 import {
@@ -29,21 +38,13 @@ import {
   useSettings,
 } from "@/lib/api/queries";
 import { queryKeys } from "@/lib/api/query-keys";
-import { effortLabel } from "@/lib/mission/pr";
+import { catalogUnavailable } from "@/lib/mission/model-settings";
 import { toast } from "@/lib/toast-store";
 import { cn } from "@/lib/utils";
 
 import { LocationDraft } from "./location-draft";
-import {
-  DEFAULT_EFFORT,
-  selectModel,
-  selectEffort,
-  selectableModels,
-} from "./model-rules";
 import { createSettingsCoordinator } from "./settings-cache";
 import type { SettingsCoordinator } from "./settings-coordinator";
-
-const NOT_YET = "The daemon does not support changing this yet.";
 
 const WORKSPACE_MODES: Record<
   DefaultWorkspaceMode,
@@ -135,54 +136,6 @@ const Row = ({
   </div>
 );
 
-/**
- * Paper's select: a styled face with a native select laid over it, so the
- * look matches the mockup and the control keeps native keyboard behavior.
- */
-const SelectBox = ({
-  children,
-  className,
-  disabled,
-  label,
-  onChange,
-  options,
-  testId,
-  value,
-}: {
-  children: ReactNode;
-  className?: string;
-  disabled?: boolean;
-  label: string;
-  onChange: (value: string) => void;
-  options: readonly { label: string; value: string }[];
-  testId?: string;
-  value: string;
-}) => (
-  <span
-    className={cn(
-      "relative flex h-7.5 shrink-0 items-center gap-sm rounded-sm bg-surface-overlay pr-md pl-control shadow-button transition-colors duration-fast focus-within:shadow-focus hover:bg-surface-active has-disabled:opacity-disabled",
-      className
-    )}
-  >
-    {children}
-    <ChevronDownIcon className="size-3 text-text-tertiary" />
-    <select
-      aria-label={label}
-      className="absolute inset-0 cursor-pointer appearance-none opacity-0 disabled:cursor-not-allowed"
-      data-testid={testId}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-      value={value}
-    >
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  </span>
-);
-
 const ModelRow = ({
   description,
   disabled,
@@ -190,6 +143,7 @@ const ModelRow = ({
   models,
   onChange,
   agentRole,
+  unavailable,
   value,
 }: {
   description: string;
@@ -198,63 +152,22 @@ const ModelRow = ({
   models: readonly ModelOption[];
   onChange: (value: AgentModelSettings) => void;
   agentRole: "orchestrator" | "worker";
+  unavailable: boolean;
   value: AgentModelSettings;
-}) => {
-  const current = models.find((model) => model.id === value.modelId);
-  const modelOptions = selectableModels(models, value);
-  const efforts = current?.supportedReasoningEfforts ?? [];
-  return (
-    <Row description={description} label={label}>
-      <SelectBox
-        className="w-32"
-        disabled={disabled}
-        label={`${label} model`}
-        onChange={(modelId) => onChange(selectModel(models, modelId))}
-        options={modelOptions.map((model) => ({
-          label: model.displayName,
-          value: model.id,
-        }))}
-        testId={`settings-${agentRole}-model`}
-        value={value.modelId}
-      >
-        <span className="min-w-0 flex-1 truncate font-mono text-xs leading-sm font-book text-text">
-          {current?.displayName ?? value.modelId}
-        </span>
-      </SelectBox>
-      <SelectBox
-        className="w-35"
-        disabled={disabled || efforts.length === 0}
-        label={`${label} thinking`}
-        onChange={(effort) => onChange(selectEffort(current, value, effort))}
-        options={[
-          { label: "Default", value: DEFAULT_EFFORT },
-          ...(value.reasoningEffort && !efforts.includes(value.reasoningEffort)
-            ? [
-                {
-                  label: effortLabel(value.reasoningEffort),
-                  value: value.reasoningEffort,
-                },
-              ]
-            : []),
-          ...efforts.map((effort) => ({
-            label: effortLabel(effort),
-            value: effort,
-          })),
-        ]}
-        testId={`settings-${agentRole}-effort`}
-        value={value.reasoningEffort ?? DEFAULT_EFFORT}
-      >
-        <span className="text-xs leading-sm font-book tracking-tight text-text-tertiary">
-          Thinking
-        </span>
-        <span className="min-w-0 flex-1 truncate text-xs leading-sm font-medium tracking-tight text-text">
-          {effortLabel(value.reasoningEffort)}
-        </span>
-      </SelectBox>
-    </Row>
-  );
-};
-
+}) => (
+  <Row description={description} label={label}>
+    <ModelControls
+      label={label}
+      models={models}
+      onChange={onChange}
+      pending={disabled}
+      settings={value}
+      showLabel={false}
+      testId={`settings-${agentRole}`}
+      unavailable={unavailable}
+    />
+  </Row>
+);
 const ValueBox = ({ children }: { children: ReactNode }) => (
   <span className="flex h-7.5 max-w-80 items-center rounded-sm bg-surface px-control ring-1 ring-border ring-inset">
     <span className="truncate font-mono text-xs leading-sm font-book text-text-secondary">
@@ -364,18 +277,6 @@ const StatusLine = ({
   </span>
 );
 
-const DisabledAction = ({
-  children,
-  title,
-}: {
-  children: ReactNode;
-  title: string;
-}) => (
-  <Button aria-disabled="true" title={title} variant="secondary">
-    {children}
-  </Button>
-);
-
 const Connections = () => {
   const queryClient = useQueryClient();
   const connection = useConnectionStatus();
@@ -408,9 +309,9 @@ const Connections = () => {
           label="Connected"
           tone="success"
         />
-        <DisabledAction title="Restart the daemon from the terminal where it runs.">
+        <UnavailableButton reason="Restart from terminal">
           Restart
-        </DisabledAction>
+        </UnavailableButton>
       </Row>
       <Row
         description="Uses the gh CLI login. Needed to clone, push, and open PRs."
@@ -442,9 +343,9 @@ const Connections = () => {
           }
           tone={droid.state === "ready" ? "success" : "danger"}
         />
-        <DisabledAction title="Set FACTORY_API_KEY in the daemon's environment, then restart it.">
+        <UnavailableButton reason="Set key, then restart">
           Replace
-        </DisabledAction>
+        </UnavailableButton>
       </Row>
     </Group>
   );
@@ -514,6 +415,7 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
           disabled={busy}
           label="Orchestrator"
           models={options}
+          unavailable={catalogUnavailable(models)}
           onChange={(orchestrator) => save({ orchestrator })}
           agentRole="orchestrator"
           value={data.orchestrator}
@@ -523,6 +425,7 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
           disabled={busy}
           label="Workers"
           models={options}
+          unavailable={catalogUnavailable(models)}
           onChange={(worker) => save({ worker })}
           agentRole="worker"
           value={data.worker}
@@ -536,25 +439,30 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
           description={WORKSPACE_MODES[data.defaultWorkspaceMode].description}
           label="Default workspace"
         >
-          <SelectBox
-            className="w-35"
+          <Select
             disabled={busy}
-            label="Default workspace"
-            onChange={(mode) => {
+            onValueChange={(mode) => {
               if (isWorkspaceMode(mode)) {
                 save({ defaultWorkspaceMode: mode });
               }
             }}
-            options={(["new_worktree", "current_checkout"] as const).map(
-              (mode) => ({ label: WORKSPACE_MODES[mode].label, value: mode })
-            )}
-            testId="settings-default-workspace"
             value={data.defaultWorkspaceMode}
           >
-            <span className="min-w-0 flex-1 truncate text-xs leading-sm font-medium tracking-tight text-text">
-              {WORKSPACE_MODES[data.defaultWorkspaceMode].label}
-            </span>
-          </SelectBox>
+            <SelectTrigger
+              appearance="settings"
+              aria-label="Default workspace"
+              data-testid="settings-default-workspace"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(["new_worktree", "current_checkout"] as const).map((mode) => (
+                <SelectItem key={mode} value={mode}>
+                  {WORKSPACE_MODES[mode].label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Row>
         <LocationRow
           disabled={busy}
@@ -565,21 +473,26 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
           description="New mission branches start with this."
           label="Branch prefix"
         >
-          <span aria-disabled="true" title={NOT_YET}>
-            <ValueBox>missions/</ValueBox>
-          </span>
+          <Hint label="Not available yet">
+            <HintTarget>
+              <ValueBox>missions/</ValueBox>
+            </HintTarget>
+          </Hint>
         </Row>
         <Row
           description="Copy untracked .env files from the project into each new worktree."
           label="Copy .env files"
         >
-          <Switch
-            appearance="settings"
-            aria-label="Copy .env files"
-            checked={false}
-            disabled
-            title={NOT_YET}
-          />
+          <Hint label="Not available yet">
+            <HintTarget>
+              <Switch
+                appearance="settings"
+                aria-label="Copy .env files"
+                checked={false}
+                disabled
+              />
+            </HintTarget>
+          </Hint>
         </Row>
         <Row
           description="Removes the worktree and local branch after the PR merges."

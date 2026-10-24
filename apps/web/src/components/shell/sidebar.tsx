@@ -18,11 +18,7 @@ import { ListLabel, ListRow } from "@/components/ui/list-row";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Hint } from "@/components/ui/tooltip";
 import { LogoMark } from "@/components/ui/wordmark";
 import { useMissions } from "@/lib/api/queries";
 import { isMissionActive, MISSION_STATUS, shortAge } from "@/lib/format";
@@ -191,18 +187,13 @@ export const Sidebar = ({ layout = "desktop" }: { layout?: SidebarLayout }) => {
             <span className="flex-1">Pull requests</span>
           </Link>
         </ListRow>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <ListRow aria-disabled="true" size={navSize}>
-              <ClockIcon />
-              <span className="flex-1">Automations</span>
-              <span className="sr-only">. {AUTOMATIONS_UNAVAILABLE}</span>
-            </ListRow>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            {AUTOMATIONS_UNAVAILABLE}
-          </TooltipContent>
-        </Tooltip>
+        <Hint label="Not available yet" side="right">
+          <ListRow aria-disabled="true" size={navSize}>
+            <ClockIcon />
+            <span className="flex-1">Automations</span>
+            <span className="sr-only">. {AUTOMATIONS_UNAVAILABLE}</span>
+          </ListRow>
+        </Hint>
       </div>
 
       <ScrollArea asChild axis="y">

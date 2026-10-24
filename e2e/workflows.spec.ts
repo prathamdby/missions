@@ -186,3 +186,26 @@ test("completed work commits and pushes only to a local bare remote", async ({
   await page.getByTestId("archive-mission").click();
   await expect(page.getByTestId("composer-input")).toBeDisabled();
 });
+
+test("Radix default workspace selection persists across reload", async ({
+  page,
+}) => {
+  await page.goto("/settings");
+  const workspace = page.getByRole("combobox", { name: "Default workspace" });
+  const initial = await workspace.textContent();
+  const next = initial?.includes("New worktree")
+    ? "Current checkout"
+    : "New worktree";
+  await workspace.click();
+  await page.getByRole("option", { exact: true, name: next }).click();
+  await expect(workspace).toContainText(next);
+  await page.reload();
+  await expect(workspace).toContainText(next);
+  await workspace.click();
+  await page
+    .getByRole("option", {
+      exact: true,
+      name: next === "New worktree" ? "Current checkout" : "New worktree",
+    })
+    .click();
+});

@@ -3,11 +3,12 @@ import type { VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 import type { ComponentProps, ReactNode } from "react";
 
+import { Hint } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 /*
  * `disabled` greys a button out. `aria-disabled` marks a mockup action this
- * app cannot do yet: it keeps Paper's look and stays hoverable so its `title`
+ * app cannot do yet: it keeps Paper's look and stays focusable so a Hint
  * can explain why.
  */
 export const buttonVariants = cva(
@@ -120,4 +121,23 @@ export const IconButton = ({
   >
     {icon}
   </Button>
+);
+
+/** A focusable, inert action with a short explanation. No click handler is accepted. */
+export const UnavailableButton = ({
+  children,
+  reason,
+  variant = "secondary",
+  size,
+}: {
+  children: ReactNode;
+  reason: string;
+  variant?: ButtonProps["variant"];
+  size?: ButtonProps["size"];
+}) => (
+  <Hint label={reason}>
+    <Button aria-disabled="true" size={size} variant={variant}>
+      {children}
+    </Button>
+  </Hint>
 );
