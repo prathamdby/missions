@@ -40,13 +40,20 @@ describe("mission routes", () => {
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
   });
 
-  it.each(["work", "plan"])(
-    "rejects user-requested %s execution mode on creation and messages",
-    async (executionMode) => {
+  it.each([
+    { executionMode: "work" },
+    { executionMode: "plan" },
+    { autonomy: "high" },
+    { defaultAutonomy: "high" },
+    { pendingExecutionMode: "plan" },
+    { autonomy: "high", executionMode: "plan" },
+  ])(
+    "rejects removed request fields %j on creation and messages",
+    async (legacy) => {
       const ctx = await startMission(await bootDaemon(opened));
       const create = await send(ctx, routes.missions(), {
         body: JSON.stringify({
-          executionMode,
+          ...legacy,
           goal: "Write notes",
           operationId: "removed-mode-create",
           orchestrator: MODEL,
@@ -62,7 +69,7 @@ describe("mission routes", () => {
       ]);
       const message = await send(ctx, routes.missionMessages(ctx.missionId), {
         body: JSON.stringify({
-          executionMode,
+          ...legacy,
           mode: "steer",
           operationId: "removed-mode-message",
           text: "Plan this",

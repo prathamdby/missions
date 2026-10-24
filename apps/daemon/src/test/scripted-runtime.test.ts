@@ -100,12 +100,12 @@ describe(ScriptedRuntime, () => {
     }
   );
 
-  it(
-    "enters Plan mode from a plain-language goal and completes after native approval",
+  it.each(["Plan it first.", "Scope it first.", "Review this first."])(
+    "enters Plan mode for '%s' and completes after native approval",
     { timeout: 20_000 },
-    async () => {
+    async (request) => {
       const { daemon, id, repo, initialMode } = await start(
-        "Write notes. Plan it first."
+        `Write notes. ${request}`
       );
       expect(initialMode).toBe("work");
       const proposed = await until(
@@ -113,11 +113,15 @@ describe(ScriptedRuntime, () => {
         (snap) => snap.plans.some((plan) => plan.actionable)
       );
       expect({
+        enteredPlan: proposed.transcript.some(
+          (item) => item.kind === "tool_call" && item.toolName === "enter_plan"
+        ),
         mode: proposed.mission.executionMode,
         notes: existsSync(path.join(repo, "NOTES.md")),
         plans: proposed.plans.map((plan) => [plan.status, plan.actionable]),
         status: proposed.mission.status,
       }).toStrictEqual({
+        enteredPlan: true,
         mode: "plan",
         notes: false,
         plans: [["proposed", true]],
