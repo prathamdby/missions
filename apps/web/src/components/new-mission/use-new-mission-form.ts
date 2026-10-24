@@ -138,6 +138,11 @@ export const useNewMissionForm = () => {
     messageDraft.snapshot,
     messageDraft.snapshot
   );
+  const attachments = useSyncExternalStore(
+    messageDraft.subscribe,
+    messageDraft.attachmentSnapshot,
+    messageDraft.attachmentSnapshot
+  );
   const setGoal = messageDraft.change.bind(messageDraft);
   const defaults = useDraftDefaults(evidence(settings));
   const [models, handleModelChange] = useModelChoices(defaults);
@@ -180,6 +185,15 @@ export const useNewMissionForm = () => {
     checkout,
     defaultBranch: resolveDefaultBranch(project, branches.data),
     ...review,
+    draft:
+      review.draft && messageDraft.uploadsReady()
+        ? {
+            ...review.draft,
+            ...(attachments.length
+              ? { attachmentIds: messageDraft.attachmentIds() }
+              : {}),
+          }
+        : null,
     goal,
     handleAcknowledgeDirty: () => setAcknowledged(review.dirtyKey),
     handleBranchChange: (value: string) =>

@@ -234,7 +234,15 @@ const QueueRow = ({
           {route ? `${route} · ` : ""}
           {stateText(item)}
         </span>
-        <span className="truncate type-caption text-text">{item.text}</span>
+        <span className="truncate type-caption text-text">
+          {item.text ||
+            item.attachments.map((attachment) => attachment.name).join(", ")}
+        </span>
+        {item.text && item.attachments.length ? (
+          <span className="truncate type-micro text-text-tertiary">
+            {item.attachments.map((attachment) => attachment.name).join(", ")}
+          </span>
+        ) : null}
       </div>
       {isRetryable(item) ? <RetryButton item={item} /> : null}
       {editable ? (

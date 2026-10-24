@@ -42,10 +42,13 @@ export const sameMessage = (
   item: QueueItem,
   intent: Pick<QueueItem, "agentId" | "mode" | "text"> & {
     missionId: string;
+    attachmentIds?: readonly string[];
   }
 ) =>
   item.missionId === intent.missionId &&
   item.agentId === intent.agentId &&
   item.text === intent.text &&
+  JSON.stringify(item.attachments.map((ref) => ref.id)) ===
+    JSON.stringify(intent.attachmentIds ?? []) &&
   item.mode === intent.mode &&
   item.replacesId === null;

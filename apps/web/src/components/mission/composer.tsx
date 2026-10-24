@@ -91,24 +91,27 @@ const actionPresentation = (action: ComposerAction, working: boolean) => {
  */
 const ComposerActionButton = ({
   onSend,
-  text,
+  hasDraft,
+  ready,
 }: {
+  ready: boolean;
   onSend: () => void;
-  text: string;
+  hasDraft: boolean;
 }) => {
   const { live } = useMission();
   const { status } = live.mission;
   const { control, pause, resume } = useMissionControl();
   const action = composerAction({
     agents: Object.values(live.agents),
-    draft: text,
+    hasDraft,
     pending: control,
     status,
   });
   const capabilities = missionCapabilities(status);
   const { hint, icon, label } = actionPresentation(action, capabilities.active);
   const inert =
-    action.kind === "progress" || (action.kind === "send" && !action.enabled);
+    action.kind === "progress" ||
+    (action.kind === "send" && (!action.enabled || !ready));
   const run = () => {
     if (action.kind === "send") {
       onSend();
@@ -150,6 +153,11 @@ export const MissionComposer = () => {
     draft.snapshot,
     draft.snapshot
   );
+  const attachments = useSyncExternalStore(
+    draft.subscribe,
+    draft.attachmentSnapshot,
+    draft.attachmentSnapshot
+  );
   const working = isMissionActive(mission.status);
   const capabilities = missionCapabilities(mission.status);
   const disabled = !capabilities.message;
@@ -183,7 +191,11 @@ export const MissionComposer = () => {
       <QueueTray />
       <ComposerField
         action={
-          <ComposerActionButton onSend={() => submit("steer")} text={text} />
+          <ComposerActionButton
+            onSend={() => submit("steer")}
+            ready={draft.uploadsReady()}
+            hasDraft={text.trim().length > 0 || attachments.length > 0}
+          />
         }
         disabled={mission.status === "archived"}
         draft={draft}

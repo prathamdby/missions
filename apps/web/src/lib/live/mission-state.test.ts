@@ -76,6 +76,7 @@ const agent = (status: Agent["status"]): Agent => ({
 
 const queueItem = (revision: number, state: QueueItem["state"]): QueueItem => ({
   agentId: "a-orch",
+  attachments: [],
   createdAt: AT,
   error: null,
   id: "q-1",

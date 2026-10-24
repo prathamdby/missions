@@ -9,13 +9,16 @@ import type { ComposerSuggestion } from "@/components/composer/composer-suggesti
 import { IconButton } from "@/components/ui/button";
 import { ComposerBox, ComposerToolbar } from "@/components/ui/composer-box";
 import { AtIcon, AttachIcon } from "@/components/ui/icons";
-import { Textarea } from "@/components/ui/input";
+import { FileInput, Textarea } from "@/components/ui/input";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { Hint } from "@/components/ui/tooltip";
 import { composerTrigger, insertSuggestion } from "@/lib/composer/trigger";
+import { useAttachments } from "@/lib/composer/use-attachments";
 import { useComposerSuggestions } from "@/lib/composer/use-suggestions";
 import type { ComposerScope } from "@/lib/composer/use-suggestions";
 import type { MessageDraft } from "@/lib/mission/message-draft";
+
+import { AttachmentChips } from "./attachment-chips";
 
 export const ComposerField = ({
   action,
@@ -47,7 +50,14 @@ export const ComposerField = ({
     draft.snapshot,
     draft.snapshot
   );
+  const attachments = useSyncExternalStore(
+    draft.subscribe,
+    draft.attachmentSnapshot,
+    draft.attachmentSnapshot
+  );
+  const upload = useAttachments(draft, disabled);
   const input = useRef<HTMLTextAreaElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const listId = useId();
   const [cursor, setCursor] = useState(text.length);
   const [dismissed, setDismissed] = useState("");
@@ -137,7 +147,28 @@ export const ComposerField = ({
       }}
     >
       <PopoverAnchor asChild>
-        <ComposerBox inert={disabled} size={size}>
+        <ComposerBox
+          inert={disabled}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={upload.handleDrop}
+          size={size}
+        >
+          <AttachmentChips
+            draft={draft}
+            files={attachments}
+            missionId={scope?.kind === "mission" ? scope.id : undefined}
+          />
+          {upload.error ? (
+            <p role="alert" className="text-xs text-danger">
+              {upload.error}
+            </p>
+          ) : null}
+          <FileInput
+            aria-label="Choose attachments"
+            multiple
+            onChange={upload.handleSelect}
+            ref={fileInput}
+          />
           <Textarea
             aria-activedescendant={
               open && items[activeIndex]
@@ -156,6 +187,7 @@ export const ComposerField = ({
               setDismissed("");
             }}
             onKeyDown={onKeyDown}
+            onPaste={upload.handlePaste}
             onSelect={(event) => setCursor(event.currentTarget.selectionStart)}
             placeholder={placeholder}
             ref={input}
@@ -164,9 +196,9 @@ export const ComposerField = ({
             variant="bare"
           />
           <ComposerToolbar>
-            <Hint label="Not available yet">
+            <Hint label="Attach files">
               <IconButton
-                aria-disabled="true"
+                onClick={() => fileInput.current?.click()}
                 icon={<AttachIcon tone="secondary" />}
                 label="Attach files"
                 size="responsive"

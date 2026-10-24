@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./attachments": "./src/attachments.ts",
     "./commands": "./src/commands.ts",
     "./composer": "./src/composer.ts",
     "./common": "./src/common.ts",

@@ -1,3 +1,7 @@
+import {
+  ATTACHMENT_NAME_HEADER,
+  AttachmentRefSchema,
+} from "@missions/protocol/attachments";
 import type {
   ChangeQueueModeRequest,
   CleanupRequest,
@@ -317,4 +321,13 @@ export const api = {
     }),
   updateSettings: (body: UpdateSettingsRequest) =>
     apiRequest(routes.settings(), SettingsSchema, { body, method: "PATCH" }),
+  uploadAttachment: (file: File) =>
+    apiRequest(routes.attachments(), AttachmentRefSchema, {
+      headers: {
+        [ATTACHMENT_NAME_HEADER]: encodeURIComponent(file.name),
+        "content-type": "application/octet-stream",
+      },
+      method: "POST",
+      rawBody: file,
+    }),
 };

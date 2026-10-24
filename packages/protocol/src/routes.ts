@@ -4,6 +4,8 @@ import { apiPath } from "./version";
 export const routes = {
   artifact: (missionId: string, artifactId: string) =>
     apiPath(`/missions/${missionId}/artifacts/${artifactId}`),
+  attachment: (id: string) => apiPath(`/attachments/${id}`),
+  attachments: () => apiPath("/attachments"),
   changes: (missionId: string) => apiPath(`/missions/${missionId}/changes`),
   cleanup: (missionId: string) => apiPath(`/missions/${missionId}/cleanup`),
   clone: () => apiPath("/projects/clone"),
@@ -21,6 +23,8 @@ export const routes = {
   mission: (missionId: string) => apiPath(`/missions/${missionId}`),
   missionArchive: (missionId: string) =>
     apiPath(`/missions/${missionId}/archive`),
+  missionAttachment: (missionId: string, attachmentId: string) =>
+    apiPath(`/missions/${missionId}/attachments/${attachmentId}`),
   missionComposerCatalog: (missionId: string) =>
     apiPath(`/missions/${missionId}/composer-catalog`),
   missionFileSearch: (missionId: string) =>

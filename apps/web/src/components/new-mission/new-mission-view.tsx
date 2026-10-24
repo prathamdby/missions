@@ -329,7 +329,7 @@ export const NewMissionView = () => {
       const { mission } = snapshot;
       markReceipt(goalRequestId(mission.id), "create-mission");
       upsertMissionSummary(client, mission);
-      form.setGoal("");
+      form.messageDraft.clear();
       router.push(`/missions/${mission.id}`);
     },
   });
@@ -390,7 +390,7 @@ export const NewMissionView = () => {
                       variant="submit"
                     />
                   }
-                  disabled={!hasProject}
+                  disabled={!hasProject || create.isPending}
                   draft={form.messageDraft}
                   id={COMPOSER_ID}
                   label="Mission goal"

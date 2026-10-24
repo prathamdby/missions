@@ -22,6 +22,7 @@ const entry = (
   replacedById: string | null = null
 ): QueueItem => ({
   agentId: "a",
+  attachments: [],
   createdAt: iso(NOW - 60_000 + (id.codePointAt(0) ?? 0)),
   error: null,
   id,
