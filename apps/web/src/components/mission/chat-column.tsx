@@ -219,8 +219,9 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div
-        className="min-h-0 flex-1 overflow-y-auto px-3xl max-md:px-lg"
+      <section
+        aria-label="Conversation"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3xl max-md:px-lg"
         onScroll={(event) => {
           const element = event.currentTarget;
           pinned.current =
@@ -261,7 +262,7 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
             </>
           )}
         </div>
-      </div>
+      </section>
       <div className="flex justify-center px-3xl pb-gutter max-md:px-md max-md:pb-md">
         {worker ? (
           <p className="py-lg text-xs leading-sm text-text-tertiary">

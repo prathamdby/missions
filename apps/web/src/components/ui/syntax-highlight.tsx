@@ -143,6 +143,37 @@ export const HighlightedCode = ({
   return nodes;
 };
 
+/**
+ * One line of Shiki tokens as token-colored spans, followed by any text the
+ * tokens leave uncovered (Shiki drops a CRLF line's trailing "\r"). Without
+ * tokens the line renders as plain text.
+ */
+export const HighlightedLine = ({
+  text,
+  tokens,
+}: {
+  text: string;
+  tokens?: readonly HighlightToken[] | null;
+}) => {
+  if (!tokens) {
+    return text;
+  }
+  const nodes: ReactNode[] = [];
+  let offset = 0;
+  for (const token of tokens) {
+    nodes.push(
+      <span className={tokenClass(token)} key={offset}>
+        {token.content}
+      </span>
+    );
+    offset += token.content.length;
+  }
+  if (offset < text.length) {
+    nodes.push(text.slice(offset));
+  }
+  return nodes;
+};
+
 interface Highlighted {
   code: string;
   result: HighlightResult;
@@ -154,8 +185,14 @@ const pending = new Map<string, Promise<HighlightResult>>();
 
 const cacheKey = (code: string, language: string) => `${language}\n${code}`;
 
-const supportsLanguage = (language: string) =>
+export const supportsLanguage = (language: string) =>
   language !== "" && codePlugin.supportsLanguage(language);
+
+/** A finished highlight from the cache, without starting one. */
+export const cachedHighlight = (
+  code: string,
+  language: string
+): HighlightResult | undefined => completed.get(cacheKey(code, language));
 
 /**
  * Highlights code with the token theme. Finished blocks are cached so a

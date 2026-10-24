@@ -140,7 +140,7 @@ export const PullRequestsView = () => {
       <PageHeader>
         <PageTitle>Pull requests</PageTitle>
       </PageHeader>
-      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-lg pb-2xl md:px-3xl">
+      <div className="relative flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-lg pb-2xl md:px-3xl">
         <div className="flex w-full max-w-chat flex-col gap-2xl pt-xl">
           {loading && rows.length === 0 ? (
             <div className="flex flex-col gap-md">

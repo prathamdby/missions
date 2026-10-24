@@ -90,7 +90,11 @@ export const AgentConversations = () => {
           ))}
         </TabsList>
       </div>
-      <TabsContent className="flex min-h-0 flex-col" value={selected.id}>
+      <TabsContent
+        className="flex min-h-0 flex-col"
+        tabIndex={-1}
+        value={selected.id}
+      >
         <ChatColumn agentId={selected.id} key={selected.id} />
       </TabsContent>
     </Tabs>

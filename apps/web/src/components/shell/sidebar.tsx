@@ -4,6 +4,7 @@ import type { MissionSummary } from "@missions/protocol/missions";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { MissionActions } from "@/components/shell/mission-actions";
 import { useShell } from "@/components/shell/shell-context";
 import type { SidebarLayout } from "@/components/shell/shell-context";
 import { UserMenu } from "@/components/shell/user-menu";
@@ -104,17 +105,23 @@ const MissionList = ({ layout }: { layout: SidebarLayout }) => {
         const href = `/missions/${mission.id}`;
         return (
           <li key={mission.id}>
-            <ListRow asChild size={touch ? "touch" : "sidebar"}>
-              <Link
-                aria-current={pathname === href ? "page" : undefined}
-                href={href}
+            <MissionActions href={href} summary={mission} touch={touch}>
+              <ListRow
+                asChild
+                className={touch ? "w-auto flex-1 shrink" : undefined}
+                size={touch ? "touch" : "sidebar"}
               >
-                <span className="line-clamp-1 min-w-0 flex-1">
-                  {mission.title}
-                </span>
-                <MissionRowStatus mission={mission} now={now} />
-              </Link>
-            </ListRow>
+                <Link
+                  aria-current={pathname === href ? "page" : undefined}
+                  href={href}
+                >
+                  <span className="line-clamp-1 min-w-0 flex-1">
+                    {mission.title}
+                  </span>
+                  <MissionRowStatus mission={mission} now={now} />
+                </Link>
+              </ListRow>
+            </MissionActions>
           </li>
         );
       })}
@@ -150,7 +157,6 @@ export const Sidebar = ({ layout = "desktop" }: { layout?: SidebarLayout }) => {
           Missions
         </span>
         <button
-          aria-keyshortcuts="Meta+K Control+K"
           aria-label="Search"
           className={cn(
             "flex shrink-0 cursor-pointer items-center justify-center rounded-sm text-text-secondary transition-colors duration-fast outline-none hover:bg-surface-overlay hover:text-text focus-visible:shadow-focus",
@@ -170,21 +176,9 @@ export const Sidebar = ({ layout = "desktop" }: { layout?: SidebarLayout }) => {
         )}
       >
         <ListRow asChild size={navSize}>
-          <Link
-            aria-current={pathname === "/" ? "page" : undefined}
-            aria-keyshortcuts="Meta+N Control+N"
-            href="/"
-          >
+          <Link aria-current={pathname === "/" ? "page" : undefined} href="/">
             <PlusIcon />
             <span className="flex-1">New mission</span>
-            {touch ? null : (
-              <span
-                aria-hidden="true"
-                className="font-mono text-2xs leading-xs font-book text-text-tertiary"
-              >
-                ⌘N
-              </span>
-            )}
           </Link>
         </ListRow>
         <ListRow asChild size={navSize}>
@@ -213,7 +207,7 @@ export const Sidebar = ({ layout = "desktop" }: { layout?: SidebarLayout }) => {
       <section
         aria-labelledby={`missions-heading-${layout}`}
         className={cn(
-          "-mx-xs flex min-h-0 flex-1 flex-col overflow-y-auto px-xs",
+          "relative -mx-xs flex min-h-0 flex-1 flex-col overflow-y-auto px-xs",
           touch ? "gap-2xs" : "mt-2xl gap-hairline"
         )}
       >

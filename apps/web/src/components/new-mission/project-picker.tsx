@@ -19,7 +19,6 @@ import {
   LinkIcon,
   SearchIcon,
 } from "@/components/ui/icons";
-import { Kbd } from "@/components/ui/kbd";
 import {
   ListLabel,
   ListOption,
@@ -80,7 +79,7 @@ const ProjectOption = ({
   </ListOption>
 );
 
-/** LTT: switch projects or start one of the add-project flows. ⌘P opens it. */
+/** LTT: switch projects or start one of the add-project flows. */
 export const ProjectPicker = ({
   missions,
   onChange,
@@ -150,7 +149,6 @@ export const ProjectPicker = ({
             placeholder="Search projects"
             value={search}
           />
-          <Kbd>⌘P</Kbd>
         </PopoverSearch>
         <div className="flex min-h-0 flex-col gap-hairline overflow-y-auto">
           <ListLabel>Recent</ListLabel>
@@ -181,9 +179,6 @@ export const ProjectPicker = ({
         <ListRow onClick={() => add("browse")}>
           <FolderAddIcon />
           <span className="flex-1">Open local folder…</span>
-          <span className="font-mono text-2xs leading-xs text-text-tertiary">
-            ⌘O
-          </span>
         </ListRow>
         <ListRow onClick={() => add("github")}>
           <GithubIcon />

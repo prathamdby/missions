@@ -24,6 +24,8 @@ export interface MissionStoreSnapshot {
   error: unknown;
   generation: number;
   live: MissionLiveState | null;
+  /** The mission was deleted; the session is over for good. */
+  removed: boolean;
   status: "error" | "loading" | "ready";
 }
 
@@ -37,6 +39,8 @@ export interface MissionStore {
     generation?: number
   ) => void;
   refresh: (generation?: number) => Promise<boolean>;
+  /** Ends the session for a deleted mission; it never reads or reconnects again. */
+  remove: () => void;
   start: () => void;
   stop: () => void;
   subscribe: (listener: () => void) => () => void;
@@ -54,15 +58,20 @@ export interface MissionStoreOptions {
     limit: number,
     signal: AbortSignal
   ) => Promise<{ items: TranscriptItem[]; nextCursor: string | null }>;
+  /** An authoritative answer that the mission does not exist: stop retrying. */
+  isMissing?: (error: unknown) => boolean;
   missionId: string;
   onEvents?: (events: readonly DaemonEvent[]) => void;
   onMission?: (mission: Mission) => void;
+  /** The mission was open and is now gone, for example deleted in another tab. */
+  onMissing?: () => void;
   onReconnect?: () => void;
   openStream?: OpenEventStream;
 }
 
 const LOG_LIMIT = 2000;
 const PAGE_SIZE = 100;
+const PROBE_ATTEMPT = 2;
 
 const localKey = (entity: LocalEntity) => `${entity.kind}:${entity.value.id}`;
 
@@ -210,9 +219,11 @@ export const createMissionStore = ({
   eventsUrl,
   fetchSnapshot,
   fetchTranscript,
+  isMissing = () => false,
   missionId,
   onEvents,
   onMission,
+  onMissing,
   onReconnect,
   openStream = openEventStream,
 }: MissionStoreOptions): MissionStore => {
@@ -220,6 +231,7 @@ export const createMissionStore = ({
     error: null,
     generation: 0,
     live: null,
+    removed: false,
     status: "loading",
   };
   const listeners = new Set<() => void>();
@@ -229,11 +241,13 @@ export const createMissionStore = ({
   let stream: EventStream | null = null;
   let controller: AbortController | null = null;
   let pageController: AbortController | null = null;
+  let probeController: AbortController | null = null;
   let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   let recoveryAttempt = 0;
   let needsRecovery = true;
   let restartAfterRecovery = false;
   let running = false;
+  let ended = false;
   const streamId = `mission:${missionId}`;
 
   const active = (generation: number) =>
@@ -275,6 +289,57 @@ export const createMissionStore = ({
     if (recoveryTimer !== null) {
       clearTimeout(recoveryTimer);
       recoveryTimer = null;
+    }
+  };
+
+  const halt = () => {
+    running = false;
+    controller?.abort();
+    controller = null;
+    pageController?.abort();
+    pageController = null;
+    probeController?.abort();
+    probeController = null;
+    clearRecovery();
+    stream?.close();
+    stream = null;
+    removeStream(streamId);
+  };
+
+  /** Advancing the generation also rejects every late read and callback. */
+  const end = (patch: Partial<MissionStoreSnapshot>) => {
+    ended = true;
+    halt();
+    set({ generation: state.generation + 1, ...patch });
+  };
+
+  /** Authoritative not_found: never retry; an open mission was deleted. */
+  const missing = (error: unknown) => {
+    const wasOpen = state.live !== null;
+    needsRecovery = false;
+    end({ error, status: "error" });
+    if (wasOpen) {
+      onMissing?.();
+    }
+  };
+
+  /** Asks whether a stream that keeps failing belongs to a deleted mission. */
+  const probe = async (generation: number) => {
+    if (probeController) {
+      return;
+    }
+    const current = new AbortController();
+    probeController = current;
+    try {
+      await fetchSnapshot(missionId, current.signal);
+    } catch (error) {
+      if (active(generation) && !current.signal.aborted && isMissing(error)) {
+        missing(error);
+      }
+    } finally {
+      if (probeController === current) {
+        probeController = null;
+      }
     }
   };
 
@@ -370,6 +435,10 @@ export const createMissionStore = ({
       if (!currentRead()) {
         return false;
       }
+      if (isMissing(error)) {
+        missing(error);
+        return false;
+      }
       needsRecovery = true;
       set({ error, status: state.live ? "ready" : "error" });
       return false;
@@ -461,6 +530,15 @@ export const createMissionStore = ({
         }
       },
       onStatus: (status) => {
+        // A subscription to a deleted mission fails every time; after a
+        // second failure the snapshot read answers authoritatively.
+        if (
+          active(generation) &&
+          status.phase === "retrying" &&
+          status.attempt === PROBE_ATTEMPT
+        ) {
+          void probe(generation);
+        }
         if (active(generation)) {
           reportStream(streamId, {
             retryNow: () => stream?.retryNow(),
@@ -562,8 +640,13 @@ export const createMissionStore = ({
       }
     },
     refresh: load,
+    remove: () => {
+      if (!state.removed) {
+        end({ removed: true });
+      }
+    },
     start: () => {
-      if (running) {
+      if (running || ended) {
         return;
       }
       running = true;
@@ -571,17 +654,7 @@ export const createMissionStore = ({
       set({ generation });
       void begin(generation);
     },
-    stop: () => {
-      running = false;
-      controller?.abort();
-      controller = null;
-      pageController?.abort();
-      pageController = null;
-      clearRecovery();
-      stream?.close();
-      stream = null;
-      removeStream(streamId);
-    },
+    stop: halt,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {

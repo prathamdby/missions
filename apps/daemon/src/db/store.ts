@@ -373,6 +373,39 @@ export class Store {
       : null;
   }
 
+  /** Missions named by recorded operations of one kind. */
+  missionIdsWithOperation(kind: string): string[] {
+    return this.db
+      .selectDistinct({ missionId: operations.missionId })
+      .from(operations)
+      .where(eq(operations.kind, kind))
+      .all()
+      .flatMap(({ missionId }) => (missionId === null ? [] : [missionId]));
+  }
+
+  /**
+   * Deletes every row the mission owns, including its operation history.
+   * Event streams and process records have their own owners; grants are
+   * project-wide and stay. Callers own the transaction.
+   */
+  purgeMission(missionId: string) {
+    for (const table of [
+      plans,
+      todos,
+      assignments,
+      questions,
+      permissions,
+      queueItems,
+      artifacts,
+    ]) {
+      this.db.delete(table).where(eq(table.missionId, missionId)).run();
+    }
+    this.db.delete(transcript).where(eq(transcript.missionId, missionId)).run();
+    this.db.delete(operations).where(eq(operations.missionId, missionId)).run();
+    this.db.delete(agents).where(eq(agents.missionId, missionId)).run();
+    this.db.delete(missions).where(eq(missions.id, missionId)).run();
+  }
+
   listOperations(statuses: readonly Operation["status"][]): Operation[] {
     return this.db
       .select()

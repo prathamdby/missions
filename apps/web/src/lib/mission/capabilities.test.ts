@@ -41,6 +41,17 @@ describe("Mission capabilities", () => {
       pause: true,
       publish: false,
     });
+    expect(
+      MissionStatusSchema.options.filter(
+        (status) => missionCapabilities(status).delete
+      )
+    ).toStrictEqual([
+      "paused",
+      "interrupted",
+      "completed",
+      "failed",
+      "archived",
+    ]);
     expect(missionCapabilities("archived")).toMatchObject({
       archive: false,
       message: false,

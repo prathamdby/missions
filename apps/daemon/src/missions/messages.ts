@@ -42,6 +42,15 @@ export const ARCHIVABLE: ReadonlySet<MissionStatus> = new Set([
   "failed",
 ]);
 
+/** Stopped with no agent execution left: not active, pausing or stop_failed. */
+export const DELETABLE: ReadonlySet<MissionStatus> = new Set([
+  "paused",
+  "interrupted",
+  "completed",
+  "failed",
+  "archived",
+]);
+
 export const MAX_PENDING_ASSIGNMENTS = 20;
 /** Undelivered agent messages one recipient may have before senders must wait. */
 export const MAX_OUTSTANDING_MESSAGES = 20;

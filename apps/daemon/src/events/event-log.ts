@@ -3,6 +3,7 @@ import { and, asc, eq, gt, lt, max, min } from "drizzle-orm";
 
 import { events } from "../db/schema";
 import type { Store } from "../db/store";
+import { notFound } from "../lib/app-error";
 
 type Listener = (event: DaemonEvent) => void;
 export type Emit = (missionId: string | null, body: EventBody) => DaemonEvent;
@@ -27,6 +28,10 @@ export class EventLog {
   readonly #now: () => Date;
   readonly #retain: number;
   readonly #listeners = new Set<Listener>();
+  /** Mission streams that were removed; nothing may append to them again. */
+  readonly #removed = new Set<string>();
+  /** Removals made by the open transaction; a rollback restores them. */
+  readonly #removing: string[] = [];
   #pending: DaemonEvent[] = [];
   #depth = 0;
 
@@ -37,6 +42,9 @@ export class EventLog {
   }
 
   readonly #append: Emit = (missionId, body) => {
+    if (missionId !== null && this.#removed.has(missionId)) {
+      throw notFound("Mission");
+    }
     const stream = streamOf(missionId);
     const [row] = this.#store.db
       .select({ value: max(events.seq) })
@@ -68,17 +76,44 @@ export class EventLog {
 
   commit<T>(fn: (emit: Emit) => T): T {
     const mark = this.#pending.length;
+    const removalMark = this.#removing.length;
     this.#depth += 1;
     try {
       return this.#store.transaction(() => fn(this.#append));
     } catch (error) {
       this.#pending.length = mark;
+      for (const missionId of this.#removing.splice(removalMark)) {
+        this.#removed.delete(missionId);
+      }
       throw error;
     } finally {
       this.#depth -= 1;
       if (this.#depth === 0) {
+        this.#removing.length = 0;
         this.#flush();
       }
+    }
+  }
+
+  /**
+   * Deletes a mission's stream inside the caller's commit. Later appends to it
+   * are refused, so a removed mission can never gain events again.
+   */
+  removeStream(missionId: string) {
+    if (this.#depth === 0) {
+      throw new Error("A stream can only be removed inside a commit");
+    }
+    this.#store.db.delete(events).where(eq(events.stream, missionId)).run();
+    if (!this.#removed.has(missionId)) {
+      this.#removed.add(missionId);
+      this.#removing.push(missionId);
+    }
+  }
+
+  /** Restores removal fences recorded before a restart. */
+  retireStreams(missionIds: Iterable<string>) {
+    for (const missionId of missionIds) {
+      this.#removed.add(missionId);
     }
   }
 
@@ -90,6 +125,10 @@ export class EventLog {
     const ready = this.#pending;
     this.#pending = [];
     for (const event of ready) {
+      // Rows appended earlier in a transaction that removed their stream are gone.
+      if (event.missionId !== null && this.#removed.has(event.missionId)) {
+        continue;
+      }
       for (const listener of this.#listeners) {
         listener(event);
       }

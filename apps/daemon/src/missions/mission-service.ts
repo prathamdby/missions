@@ -6,6 +6,7 @@ import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type {
   AnswerQuestionRequest,
   ChangeQueueModeRequest,
+  CommandAccepted,
   CreateMissionRequest,
   DecidePermissionRequest,
   DecidePlanRequest,
@@ -102,6 +103,7 @@ import {
   agentMessageText,
   assignmentMessage,
   continuationMessage,
+  DELETABLE,
   FENCED,
   ARCHIVABLE,
   handoffMessage,
@@ -244,6 +246,7 @@ const ENDED_STATUSES = new Set<Mission["status"]>([
 ]);
 
 const isDefiniteFailure = (error: unknown) => error instanceof AppError;
+const MISSION_DELETE = "mission.delete";
 
 const isExitSpecMode = (use: PermissionToolUse) =>
   use.confirmationType === "exit_spec_mode" ||
@@ -319,6 +322,11 @@ export class MissionService {
   readonly #deliveries = new Map<string, { again: boolean }>();
   /** Missions whose main agent asked for Plan mode and must yield first. */
   readonly #planEntries = new Map<string, string | null>();
+  /** Deletions in progress; their missions admit no new mutations. */
+  readonly #deleting = new Map<
+    string,
+    { operationId: string; task: Promise<CommandAccepted> }
+  >();
   #gitObserver: GitObserver | null = null;
 
   constructor(options: MissionServiceOptions) {
@@ -339,6 +347,9 @@ export class MissionService {
       ((runtimeOptions) => new AgentRuntime(runtimeOptions));
     this.#now = options.now ?? (() => new Date());
     this.#timing = options.timing ?? new TimingLog();
+    this.#log.retireStreams(
+      this.#store.missionIdsWithOperation(MISSION_DELETE)
+    );
     this.leases = new WriteLeaseRegistry((workspace, holder) =>
       this.#onLeaseChange(workspace, holder)
     );
@@ -694,6 +705,7 @@ export class MissionService {
 
   #workspaceForOperation(missionId: string) {
     this.#requireOpen();
+    this.#admit(missionId);
     const { workspace } = this.get(missionId);
     if (!workspace) {
       throw conflict("The mission has no workspace");
@@ -759,6 +771,7 @@ export class MissionService {
     return await this.#own(
       this.#workspaceGate.run(workspace.path, async (canonical) => {
         this.#requireOpen();
+        this.#admit(missionId);
         if (!ARCHIVABLE.has(this.get(missionId).status)) {
           throw conflict("Stop the mission before publishing");
         }
@@ -778,6 +791,7 @@ export class MissionService {
     this.#requireCleanupRecovery(missionId, operationId);
     return await this.#own(
       this.#workspaceGate.runRecovery(workspace.path, async (canonical) => {
+        this.#admit(missionId);
         await this.#requireWorkspaceQuiescent(canonical);
         // A queued recovery must not replay after another holder settled its intent.
         this.#requireCleanupRecovery(missionId, operationId);
@@ -1867,6 +1881,7 @@ export class MissionService {
     questionId: string,
     input: AnswerQuestionRequest
   ): Question {
+    this.#admit(missionId);
     const request = AnswerQuestionRequestSchema.parse(input);
     const question = this.#store.questions.get(questionId);
     const pending = this.#questions.get(questionId);
@@ -1926,6 +1941,7 @@ export class MissionService {
     requestId: string,
     request: DecidePermissionRequest
   ): PermissionRequest {
+    this.#admit(missionId);
     const stored = this.#store.permissions.get(requestId);
     if (!stored || stored.missionId !== missionId) {
       throw notFound("Approval");
@@ -1948,6 +1964,7 @@ export class MissionService {
    * Without a live binding nothing is approved, whatever the stored status.
    */
   decidePlan(missionId: string, request: DecidePlanRequest): PlanRevision {
+    this.#admit(missionId);
     const mission = this.get(missionId);
     if (FENCED.has(mission.status)) {
       throw conflict("Resume the mission before deciding on the plan");
@@ -3113,6 +3130,7 @@ export class MissionService {
    * while its startup is still in progress.
    */
   #acceptUserMessage(missionId: string, request: SubmitMessageRequest) {
+    this.#admit(missionId);
     const mission = this.get(missionId);
     const agentId = request.agentId ?? this.#orchestrator(missionId).id;
     const intent = {
@@ -3217,6 +3235,7 @@ export class MissionService {
     itemId: string,
     request: ChangeQueueModeRequest
   ) {
+    this.#admit(missionId);
     return await this.#whileBusy(itemId, async () => {
       const item = this.#queueItem(missionId, itemId, request.expectedRevision);
       if (item.state === "accepted") {
@@ -3250,6 +3269,7 @@ export class MissionService {
     itemId: string,
     expectedRevision: number
   ) {
+    this.#admit(missionId);
     const item = this.#queueItem(missionId, itemId, expectedRevision);
     if (TERMINAL_QUEUE.has(item.state)) {
       return item;
@@ -3292,6 +3312,7 @@ export class MissionService {
     itemId: string,
     request: RetryQueueItemRequest
   ): QueueItem {
+    this.#admit(missionId);
     const previous = this.#store.queue.get(request.operationId);
     if (previous) {
       if (previous.missionId !== missionId || previous.retryOf !== itemId) {
@@ -3373,6 +3394,7 @@ export class MissionService {
     itemId: string,
     request: EditQueueItemRequest
   ): Promise<EditQueueItemResponse> {
+    this.#admit(missionId);
     const previous = this.#store.queue.get(request.operationId);
     if (previous) {
       if (
@@ -3558,6 +3580,7 @@ export class MissionService {
     if (this.#closing) {
       throw conflict("The daemon is stopping");
     }
+    this.#admit(missionId);
     const current = this.get(missionId);
     if (current.revision !== request.expectedRevision) {
       throw stale("The mission changed; refresh and try again");
@@ -3681,6 +3704,7 @@ export class MissionService {
     missionId: string,
     request: MissionControlRequest
   ): Promise<Mission> {
+    this.#admit(missionId);
     const { result } = await this.#journal.run(
       { id: request.operationId, kind: "mission.pause", missionId },
       async () => {
@@ -3709,6 +3733,7 @@ export class MissionService {
     missionId: string,
     request: MissionControlRequest
   ): Promise<Mission> {
+    this.#admit(missionId);
     const { result } = await this.#journal.run(
       { id: request.operationId, kind: "mission.archive", missionId },
       async () => {
@@ -3829,6 +3854,7 @@ export class MissionService {
     missionId: string,
     request: MissionControlRequest
   ): Promise<Mission> {
+    this.#admit(missionId);
     const { result } = await this.#journal.run(
       { id: request.operationId, kind: "mission.resume", missionId },
       async () => {
@@ -3840,6 +3866,7 @@ export class MissionService {
           if (this.#closing) {
             throw conflict("The daemon is stopping");
           }
+          this.#admit(missionId);
           const current = this.get(missionId);
           if (current.revision !== request.expectedRevision) {
             throw stale("The mission changed; refresh and try again");
@@ -3956,6 +3983,177 @@ export class MissionService {
     for (const record of records) {
       this.#processRecords.delete(record.agentId);
     }
+  }
+
+  // ------------------------------------------------------------ deletion
+
+  #admit(missionId: string) {
+    if (this.#deleting.has(missionId)) {
+      throw conflict("This mission is being deleted");
+    }
+  }
+
+  /**
+   * Forgets a stopped mission: its records, history and event stream go in
+   * one transaction. The worktree, branch, artifact files and shared files
+   * stay on disk. Nothing is stopped here; only stopped missions qualify.
+   */
+  remove(
+    missionId: string,
+    request: MissionControlRequest
+  ): Promise<CommandAccepted> {
+    const duplicate: CommandAccepted = {
+      operationId: request.operationId,
+      status: "duplicate",
+    };
+    try {
+      this.#requireOpen();
+      if (
+        this.#journal.replay({
+          id: request.operationId,
+          kind: MISSION_DELETE,
+          missionId,
+        })
+      ) {
+        return Promise.resolve(duplicate);
+      }
+      const running = this.#deleting.get(missionId);
+      if (running) {
+        if (running.operationId !== request.operationId) {
+          throw conflict("This mission is already being deleted");
+        }
+        return running.task.then(() => duplicate);
+      }
+      const mission = this.#requireDeletable(
+        missionId,
+        request.expectedRevision
+      );
+      const task = this.#own(
+        this.#remove(mission, request).finally(() => {
+          this.#deleting.delete(missionId);
+        })
+      );
+      this.#deleting.set(missionId, {
+        operationId: request.operationId,
+        task,
+      });
+      return task;
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  #requireDeletable(missionId: string, expectedRevision: number) {
+    this.#requireOpen();
+    const mission = this.get(missionId);
+    if (mission.revision !== expectedRevision) {
+      throw stale("The mission changed; refresh and try again");
+    }
+    if (mission.status === "stop_failed") {
+      throw conflict(
+        "Some agent processes did not stop. Resume the mission to stop them before deleting it"
+      );
+    }
+    if (!DELETABLE.has(mission.status)) {
+      throw conflict(
+        `A ${mission.status} mission cannot be deleted. Pause it first`
+      );
+    }
+    if (this.#journal.unresolved(missionId).length > 0) {
+      throw conflict(
+        "An action on this mission has an unresolved outcome. Reconcile it before deleting"
+      );
+    }
+    const queueBusy = [...this.#queueBusy].some(
+      (itemId) => this.#store.queue.get(itemId)?.missionId === missionId
+    );
+    if (this.#modelUpdates.has(missionId) || queueBusy) {
+      throw conflict(
+        "Another change to this mission is still in progress. Try again when it finishes"
+      );
+    }
+    const executing = [...this.#live.values()].some(
+      (live) => live.missionId === missionId
+    );
+    if (executing || this.broker.pending(missionId).length > 0) {
+      throw conflict(
+        "Agent execution has not finished stopping. Try again shortly"
+      );
+    }
+    return mission;
+  }
+
+  async #remove(
+    mission: Mission,
+    request: MissionControlRequest
+  ): Promise<CommandAccepted> {
+    const settle = async () => {
+      this.#requireDeletable(mission.id, request.expectedRevision);
+      await this.#requireProcessesGone(mission.id);
+      return this.#commitRemoval(mission.id, request);
+    };
+    // The trusted stored binding serializes with admission even after the
+    // directory was removed outside the app.
+    return mission.workspace
+      ? await this.#workspaceGate.runRecovery(mission.workspace.path, settle)
+      : await settle();
+  }
+
+  /** Observes recorded launches without signalling: deletion never stops anything. */
+  async #requireProcessesGone(missionId: string) {
+    const records = this.#processRecords.list(
+      this.#store.listAgents(missionId).map((agent) => agent.id)
+    );
+    const results = await Promise.all(
+      records.map((record) => this.#supervisor.inspectRecord(record))
+    );
+    if (results.some((result) => !result.stopped)) {
+      const survivors = results.flatMap((result) => result.survivors);
+      throw conflict(
+        survivors.length > 0
+          ? `Agent processes are still running: ${survivors.join(", ")}. Resume the mission to stop them`
+          : "Agent processes could not be confirmed stopped"
+      );
+    }
+  }
+
+  /** No await between the final checks and the purge, receipt and removal event. */
+  #commitRemoval(
+    missionId: string,
+    request: MissionControlRequest
+  ): CommandAccepted {
+    const owned = this.#log.commit((emit) => {
+      this.#requireDeletable(missionId, request.expectedRevision);
+      const agentIds = this.#store.listAgents(missionId).map(({ id }) => id);
+      const planIds = this.#store.plans.list(missionId).map(({ id }) => id);
+      const questionIds = this.#store.questions
+        .list(missionId)
+        .map(({ id }) => id);
+      for (const agentId of agentIds) {
+        this.#processRecords.delete(agentId);
+      }
+      this.#store.purgeMission(missionId);
+      this.#log.removeStream(missionId);
+      this.#journal.recordCompleted({
+        id: request.operationId,
+        kind: MISSION_DELETE,
+        missionId,
+      });
+      emit(null, { data: { missionId }, type: "mission.removed" });
+      return { agentIds, planIds, questionIds };
+    });
+    this.#planEntries.delete(missionId);
+    for (const planId of owned.planIds) {
+      this.#planBindings.delete(planId);
+    }
+    for (const questionId of owned.questionIds) {
+      this.#questions.delete(questionId);
+    }
+    for (const agentId of owned.agentIds) {
+      this.leases.forget(agentId);
+    }
+    this.#sharedFiles.forget(missionId);
+    return { operationId: request.operationId, status: "accepted" };
   }
 
   // ------------------------------------------------------------ recovery

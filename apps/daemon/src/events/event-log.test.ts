@@ -67,4 +67,45 @@ describe(EventLog, () => {
     expect(log.pruneAll()).toBe(1);
     expect(log.bounds("m1").oldest).toBe(992);
   });
+
+  it("removes a stream only on commit and fences it against later appends", () => {
+    const log = setup();
+    const seen: (string | null)[] = [];
+    log.subscribe((event) => seen.push(event.missionId));
+    log.publish("m1", notice("kept"));
+    expect(() => log.removeStream("m1")).toThrow("inside a commit");
+    expect(() =>
+      log.commit(() => {
+        log.removeStream("m1");
+        throw new Error("rollback");
+      })
+    ).toThrow("rollback");
+    expect(log.replay("m1", 0)).toHaveLength(1);
+    log.publish("m1", notice("still open"));
+    log.commit((emit) => {
+      emit("m1", notice("dropped with the stream"));
+      log.removeStream("m1");
+      emit(null, notice("global"));
+    });
+    expect({ bounds: log.bounds("m1"), seen }).toStrictEqual({
+      bounds: { latest: 0, oldest: 0 },
+      seen: ["m1", "m1", null],
+    });
+    const restarted = setup();
+    restarted.retireStreams(["m2"]);
+    const fenced = [
+      () => log.publish("m1", notice("late")),
+      () => restarted.publish("m2", notice("late")),
+    ].map((append) => {
+      try {
+        return append().seq;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+    expect([
+      ...fenced,
+      restarted.publish("m3", notice("other")).seq,
+    ]).toStrictEqual(["Mission not found", "Mission not found", 1]);
+  });
 });
