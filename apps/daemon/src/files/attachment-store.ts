@@ -183,12 +183,15 @@ export class AttachmentStore {
     missionId?: string
   ): Promise<{ ref: AttachmentRef; data: Buffer }> {
     return await this.#mutate(async () => {
-      let base = this.#base(id, missionId);
-      if (missionId && !(await exists(`${base}.json`))) {
-        base = this.#base(id);
-      }
+      const base = this.#base(id, missionId);
       try {
         const ref = await AttachmentStore.#metadata(base);
+        if (
+          !missionId &&
+          this.#now().getTime() - Date.parse(ref.createdAt) >= PENDING_TTL
+        ) {
+          throw notFound("Attachment");
+        }
         const data = await readFile(base);
         if (ref.id !== id || data.length !== ref.size) {
           throw badRequest("Invalid attachment data");

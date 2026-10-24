@@ -128,6 +128,26 @@ describe("mission creation retries", () => {
     ).toStrictEqual(["operation-1", "operation-2", "operation-3"]);
   });
 
+  it("reconciles the original attachment claim before accepting an edited attempt", async () => {
+    const { creation, remote } = setup();
+    const original = { ...draft(), attachmentIds: ["attachment"] };
+    const first = creation.submit(original);
+    remote.commit(0, true);
+    await expect(first).rejects.toThrow("response lost");
+    expect(creation.uncertainDraft).toStrictEqual(original);
+    const retry = creation.submit({
+      ...original,
+      goal: "Edited after response loss",
+    });
+    expect(remote.requests[1]?.request).toStrictEqual(
+      remote.requests[0]?.request
+    );
+    remote.commit(1);
+    await retry;
+    expect(remote.created.size).toBe(1);
+    expect(creation.uncertainDraft).toBeNull();
+  });
+
   it("settles exact concurrent keys and snapshots nested models before the draft can change", async () => {
     const { creation, remote } = setup();
     const value = draft();

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -28,8 +29,9 @@ export class ProbeSessions {
       throw new Error("SDK discovery is closed");
     }
     const agentId = `sdk-probe-${randomUUID()}`;
+    const binDir = path.join(os.tmpdir(), `missions-${agentId}`);
     const supervisor = new ProcessSupervisor({
-      binDir: path.join(os.tmpdir(), `missions-${agentId}`),
+      binDir,
       droidPath: this.#droidPath,
     });
     let client: DroidClient | null = null;
@@ -50,6 +52,7 @@ export class ProbeSessions {
         }
       } finally {
         await cooperative;
+        await rm(binDir, { force: true, recursive: true });
       }
     };
     const deadline = <R>(operation: Promise<R>) =>
@@ -61,7 +64,13 @@ export class ProbeSessions {
       );
     this.#active.add(dispose);
     try {
-      const launcher = await deadline(supervisor.ensureLauncher());
+      const launcher = await deadline(
+        supervisor.ensureLauncher().finally(async () => {
+          if (closing) {
+            await rm(binDir, { force: true, recursive: true });
+          }
+        })
+      );
       if (closing || this.#cancel.signal.aborted) {
         throw new Error("SDK discovery was cancelled");
       }

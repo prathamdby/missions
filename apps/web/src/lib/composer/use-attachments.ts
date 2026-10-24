@@ -23,7 +23,7 @@ export const useAttachments = (draft: MessageDraft, disabled: boolean) => {
     setError(null);
     for (const file of files) {
       const key = crypto.randomUUID();
-      if (!draft.beginAttachment(key, file.name)) {
+      if (!draft.beginAttachment(key, file)) {
         setError("Attach at most 10 files");
         break;
       }

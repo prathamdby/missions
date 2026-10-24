@@ -335,12 +335,15 @@ export const NewMissionView = () => {
   });
 
   const hasProject = form.project !== null;
-  const canSubmit = form.draft !== null && !create.isPending;
+  const { uncertainDraft } = creation;
+  const submitDraft = uncertainDraft ?? form.draft;
+  const canSubmit =
+    form.draft !== null && !create.isPending && uncertainDraft === null;
 
   const submit = () => {
-    if (form.draft && !create.isPending) {
+    if (submitDraft && !create.isPending) {
       markSubmit("create-mission");
-      create.mutate(form.draft);
+      create.mutate(submitDraft);
     }
   };
 
@@ -369,12 +372,23 @@ export const NewMissionView = () => {
               <DirtyWarning form={form} />
               {create.isError ? (
                 <Callout
+                  actions={
+                    uncertainDraft ? (
+                      <Button onClick={submit}>Retry mission creation</Button>
+                    ) : undefined
+                  }
                   appearance="filled"
                   role="alert"
                   title="Could not start the mission"
                   tone="danger"
                 >
                   {errorMessage(create.error)}
+                  {uncertainDraft ? (
+                    <p>
+                      Retry to recover the original mission before making
+                      changes.
+                    </p>
+                  ) : null}
                 </Callout>
               ) : null}
               <form onSubmit={onSubmit}>
@@ -390,7 +404,9 @@ export const NewMissionView = () => {
                       variant="submit"
                     />
                   }
-                  disabled={!hasProject || create.isPending}
+                  disabled={
+                    !hasProject || create.isPending || uncertainDraft !== null
+                  }
                   draft={form.messageDraft}
                   id={COMPOSER_ID}
                   label="Mission goal"
@@ -407,7 +423,9 @@ export const NewMissionView = () => {
                   }
                 >
                   <ModelPicker
-                    disabled={!hasProject}
+                    disabled={
+                      !hasProject || create.isPending || uncertainDraft !== null
+                    }
                     onChange={form.handleModelChange}
                     value={form.models}
                   />

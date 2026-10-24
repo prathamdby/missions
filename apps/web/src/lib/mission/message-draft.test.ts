@@ -1,6 +1,10 @@
+import { MAX_ATTACHMENTS } from "@missions/protocol/attachments";
 import { describe, expect, it } from "vitest";
 
 import { MessageDraft } from "./message-draft";
+
+const file = (name: string) =>
+  new File(["notes"], name, { type: "text/plain" });
 
 const draft = () => {
   let next = 0;
@@ -82,7 +86,7 @@ describe("attachment draft ownership", () => {
   it("blocks unfinished uploads and snapshots ready attachments on send", () => {
     const controller = draft();
     controller.change("Read this");
-    controller.beginAttachment("upload", "notes.txt");
+    controller.beginAttachment("upload", file("notes.txt"));
     expect(controller.take("steer")).toBeNull();
     controller.finishAttachment("upload", attachment);
     const delivery = controller.take("steer");
@@ -97,14 +101,14 @@ describe("attachment draft ownership", () => {
 
   it("restores files with the same occurrence without erasing a newer attached draft", () => {
     const controller = draft();
-    controller.beginAttachment("first", "notes.txt");
+    controller.beginAttachment("first", file("notes.txt"));
     controller.finishAttachment("first", attachment);
     const first = controller.take("queue");
     if (!first) {
       throw new Error("Missing delivery");
     }
     controller.change("new");
-    controller.beginAttachment("second", "other.txt");
+    controller.beginAttachment("second", file("other.txt"));
     controller.finishAttachment("second", {
       ...attachment,
       id: "97868586-f932-46dd-91bc-1f44f532d238",
@@ -118,15 +122,32 @@ describe("attachment draft ownership", () => {
 
   it("ignores late upload completion after removal and blocks failed files", () => {
     const controller = draft();
-    controller.beginAttachment("gone", "notes.txt");
+    controller.beginAttachment("gone", file("notes.txt"));
     controller.removeAttachment("gone");
     controller.finishAttachment("gone", attachment);
     expect(controller.attachmentSnapshot()).toStrictEqual([]);
     controller.change("text");
-    controller.beginAttachment("failed", "notes.txt");
+    controller.beginAttachment("failed", file("notes.txt"));
     controller.failAttachment("failed", "offline");
     expect(controller.take("steer")).toBeNull();
     controller.removeAttachment("failed");
     expect(controller.take("steer")?.input.text).toBe("text");
+  });
+
+  it("refuses an eleventh file and admits a replacement after removal", () => {
+    const controller = draft();
+    const admitted = Array.from({ length: MAX_ATTACHMENTS }, (_, index) =>
+      controller.beginAttachment(`file-${index}`, file(`${index}.txt`))
+    );
+    expect(admitted).toStrictEqual(
+      Array.from({ length: MAX_ATTACHMENTS }, () => true)
+    );
+    expect(controller.beginAttachment("extra", file("extra.txt"))).toBeFalsy();
+    expect(controller.take("steer")).toBeNull();
+    controller.removeAttachment("file-0");
+    expect(
+      controller.beginAttachment("replacement", file("replacement.txt"))
+    ).toBeTruthy();
+    expect(controller.take("steer")).toBeNull();
   });
 });

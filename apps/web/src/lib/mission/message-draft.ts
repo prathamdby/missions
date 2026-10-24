@@ -5,6 +5,7 @@ import type { DeliveryMode } from "@missions/protocol/common";
 export interface DraftAttachment {
   key: string;
   name: string;
+  source: File;
   status: "uploading" | "ready" | "failed";
   ref: AttachmentRef | null;
   error: string | null;
@@ -42,13 +43,20 @@ export class MessageDraft {
     this.emit();
   }
 
-  beginAttachment(key: string, name: string): boolean {
+  beginAttachment(key: string, source: File): boolean {
     if (this.files.length >= MAX_ATTACHMENTS) {
       return false;
     }
     this.files = [
       ...this.files,
-      { error: null, key, name, ref: null, status: "uploading" },
+      {
+        error: null,
+        key,
+        name: source.name,
+        ref: null,
+        source,
+        status: "uploading",
+      },
     ];
     this.emit();
     return true;

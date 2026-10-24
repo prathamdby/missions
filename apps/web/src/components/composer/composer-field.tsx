@@ -110,13 +110,13 @@ export const ComposerField = ({
         });
         return;
       }
-      if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault();
+      if (!event.shiftKey && (event.key === "Enter" || event.key === "Tab")) {
         const item = items[activeIndex];
         if (item) {
+          event.preventDefault();
           choose(item);
+          return;
         }
-        return;
       }
     }
     if (event.key === "Enter" && !event.shiftKey) {
@@ -153,11 +153,7 @@ export const ComposerField = ({
           onDrop={upload.handleDrop}
           size={size}
         >
-          <AttachmentChips
-            draft={draft}
-            files={attachments}
-            missionId={scope?.kind === "mission" ? scope.id : undefined}
-          />
+          <AttachmentChips draft={draft} files={attachments} />
           {upload.error ? (
             <p role="alert" className="text-xs text-danger">
               {upload.error}

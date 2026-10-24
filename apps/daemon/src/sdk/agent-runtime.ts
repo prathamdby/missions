@@ -200,6 +200,13 @@ const senderOf = (raw: unknown): RuntimeSender | null => {
   return null;
 };
 
+const isEmptyMessage = (message: RuntimeMessage) =>
+  message.text === "" &&
+  message.thinking === "" &&
+  message.toolUses.length === 0 &&
+  message.toolResults.length === 0 &&
+  !(message.role === "user" && message.requestId !== null);
+
 export const normalizeMessage = (
   raw: unknown,
   requestId: string | null
@@ -247,12 +254,7 @@ export const normalizeMessage = (
   }
   message.text = texts.join("\n");
   message.thinking = thoughts.join("\n");
-  const empty =
-    message.text === "" &&
-    message.thinking === "" &&
-    message.toolUses.length === 0 &&
-    message.toolResults.length === 0;
-  return empty ? null : message;
+  return isEmptyMessage(message) ? null : message;
 };
 
 const optionalString = (value: unknown) =>
