@@ -21,11 +21,7 @@ import { COMPOSER_ID } from "@/components/shell/global-shortcuts";
 import { PageHeader, PageTitle } from "@/components/shell/page-header";
 import { Button, IconButton } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import {
-  ComposerBox,
-  ComposerLegend,
-  ComposerToolbar,
-} from "@/components/ui/composer-box";
+import { ComposerBox, ComposerToolbar } from "@/components/ui/composer-box";
 import { Dot } from "@/components/ui/dot";
 import {
   ArrowUpIcon,
@@ -459,11 +455,6 @@ export const NewMissionView = () => {
               </ComposerBox>
             </form>
           </div>
-          <ComposerLegend>
-            {form.executionMode === "plan"
-              ? "Nothing changes until you approve the plan."
-              : "Agents act within the autonomy level you pick."}
-          </ComposerLegend>
         </div>
       </div>
     </div>

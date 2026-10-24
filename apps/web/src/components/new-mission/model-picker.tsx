@@ -16,13 +16,6 @@ import { catalogUnavailable } from "@/lib/mission/model-settings";
 
 import type { ModelChoices } from "./mission-draft";
 
-const SCOPE = {
-  orchestrator:
-    "Only this mission. Starts with your Settings default until you pick another.",
-  worker:
-    "Only this mission. Every Worker it starts uses this unless you change it later.",
-} as const;
-
 /** Composer chip that picks the Orchestrator and Worker models a mission starts with. */
 export const ModelPicker = ({
   disabled = false,
@@ -61,7 +54,7 @@ export const ModelPicker = ({
       <PopoverContent aria-label="Mission models" side="top" size="lg">
         <div className="flex flex-col gap-xs px-md pb-md">
           <p className="pt-sm pb-xs text-xs leading-sm font-medium tracking-tight text-text-tertiary">
-            Models · this mission only
+            Models
           </p>
           {value ? (
             <>
@@ -69,7 +62,6 @@ export const ModelPicker = ({
                 label="Orchestrator"
                 models={models}
                 onChange={(next) => onChange("orchestrator", next)}
-                scope={SCOPE.orchestrator}
                 settings={value.orchestrator}
                 testId="new-orchestrator-model-row"
                 unavailable={unavailable}
@@ -78,7 +70,6 @@ export const ModelPicker = ({
                 label="Workers"
                 models={models}
                 onChange={(next) => onChange("worker", next)}
-                scope={SCOPE.worker}
                 settings={value.worker}
                 testId="new-worker-model-row"
                 unavailable={unavailable}
