@@ -62,3 +62,55 @@ test("both composers insert file mentions without sending on picker Enter", asyn
       .getByText("Read @settings-view.tsx")
   ).toHaveCount(0);
 });
+
+test("slash suggestions insert literal commands in both composers", async ({
+  page,
+  request,
+}) => {
+  await useScriptedModels(request);
+  const project = await addProject(request, gitRepo("composer-slash"));
+  await page.route("**/composer-catalog", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      json: {
+        commands: [
+          {
+            argumentHint: "<path>",
+            description: "Inspect a file",
+            kind: "command",
+            name: "inspect",
+          },
+          { description: "Review changes", kind: "skill", name: "review" },
+        ],
+        source: "droid",
+      },
+    })
+  );
+  await page.goto("/");
+  await page.getByRole("button", { exact: true, name: "Project" }).click();
+  await page.getByRole("option").filter({ hasText: "composer-slash" }).click();
+  const goal = page.getByRole("textbox", { name: "Mission goal" });
+  await goal.fill("/rev");
+  await expect(page.getByRole("option", { name: /\/review/u })).toBeVisible();
+  await goal.press("Enter");
+  await expect(goal).toHaveValue("/review ");
+  await expect(page).toHaveURL("/");
+  const mission = await createMission(
+    request,
+    project.id,
+    "Fix flaky retry tests"
+  );
+  await page.goto(`/missions/${mission.id}`);
+  await expect(page.getByTestId("question-card")).toBeVisible({
+    timeout: 30_000,
+  });
+  const composer = page.getByTestId("composer-input");
+  await composer.fill("/ins");
+  await expect(page.getByRole("option", { name: /\/inspect/u })).toContainText(
+    "<path>"
+  );
+  await composer.press("Tab");
+  await expect(composer).toHaveValue("/inspect ");
+  await composer.fill("/inspect README.md");
+  await expect(page.getByRole("option", { name: /\/inspect/u })).toHaveCount(0);
+});

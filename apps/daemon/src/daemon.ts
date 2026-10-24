@@ -27,6 +27,7 @@ import type { MissionTitleGenerator } from "./missions/title-generator";
 import { ProcessRecordRepository } from "./processes/process-record-repository";
 import { ProcessSupervisor } from "./processes/process-supervisor";
 import { ProjectService } from "./projects/project-service";
+import { ComposerCatalog } from "./sdk/composer-catalog";
 import { ensureToken } from "./security/token";
 import { ModelCatalog } from "./settings/models";
 import type { ModelLoader } from "./settings/models";
@@ -135,7 +136,11 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
     const artifacts = new ArtifactStore(config.artifactsDir);
     const sharedFiles = new SharedFiles(path.join(config.home, "shared"));
     const models = new ModelCatalog(config.droidPath, options.loadModels);
-    owners.push(() => models.close());
+    const composerCatalog = new ComposerCatalog(config.droidPath);
+    owners.push(
+      () => composerCatalog.close(),
+      () => models.close()
+    );
     const titleGenerator = options.titleGenerator ?? null;
     if (titleGenerator) {
       owners.push(() => titleGenerator.close());
@@ -191,7 +196,13 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
           version,
         });
         registerProjectRoutes(hono, projects);
-        registerComposerRoutes(hono, missions, projects, new FileSearch());
+        registerComposerRoutes(
+          hono,
+          missions,
+          projects,
+          new FileSearch(),
+          composerCatalog
+        );
         registerPullRequestRoutes(hono, store);
         registerMissionRoutes(hono, missions);
         registerFileRoutes(hono, missions, artifacts, sharedFiles);

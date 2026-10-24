@@ -21,6 +21,8 @@ export const routes = {
   mission: (missionId: string) => apiPath(`/missions/${missionId}`),
   missionArchive: (missionId: string) =>
     apiPath(`/missions/${missionId}/archive`),
+  missionComposerCatalog: (missionId: string) =>
+    apiPath(`/missions/${missionId}/composer-catalog`),
   missionFileSearch: (missionId: string) =>
     apiPath(`/missions/${missionId}/file-search`),
   missionMessages: (missionId: string) =>
@@ -42,6 +44,8 @@ export const routes = {
     apiPath(`/projects/${projectId}/branches`),
   projectCheckout: (projectId: string) =>
     apiPath(`/projects/${projectId}/checkout`),
+  projectComposerCatalog: (projectId: string) =>
+    apiPath(`/projects/${projectId}/composer-catalog`),
   projectFileSearch: (projectId: string) =>
     apiPath(`/projects/${projectId}/file-search`),
   projectWorktrees: (projectId: string) =>

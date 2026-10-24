@@ -73,6 +73,7 @@ import type {
   RuntimeStartResult,
   SubmitOptions,
 } from "../sdk/agent-runtime";
+import type { ComposerRuntime } from "../sdk/composer-catalog";
 import type { NativeQueueEntry, NativeQueueTracker } from "../sdk/native-queue";
 import { nativeTodos } from "../sdk/native-todos";
 import { PLAN_GUIDANCE, PLAN_GUIDANCE_VERSION } from "../sdk/plan-guidance";
@@ -141,7 +142,7 @@ import {
 import type { NewTranscriptItem } from "./transcript";
 
 /** The subset of `AgentRuntime` the service drives; tests substitute a scripted runtime. */
-export interface RuntimeHandle {
+export interface RuntimeHandle extends ComposerRuntime {
   readonly queue: NativeQueueTracker;
   readonly sessionId: string | null;
   readonly model: AgentModelSettings | null;
@@ -439,6 +440,26 @@ export class MissionService {
     return mission;
   }
 
+  /** Discovery never starts an agent. Reuse only an already-ready Orchestrator. */
+  composerRuntime(cwd: string): ComposerRuntime | null {
+    const owner = [...this.#live.values()].find(
+      (live) =>
+        live.workspace === cwd &&
+        live.phase === "ready" &&
+        this.#store.getAgent(live.agentId)?.role === "orchestrator" &&
+        this.#isCurrent(live.agentId, live) !== null
+    );
+    if (!owner) {
+      return null;
+    }
+    const { agentId, runtime } = owner;
+    return {
+      listCommands: () =>
+        this.#execute(agentId, runtime, () => runtime.listCommands()),
+      listSkills: () =>
+        this.#execute(agentId, runtime, () => runtime.listSkills()),
+    };
+  }
   list(projectId?: string) {
     return this.#store.listMissions(projectId);
   }

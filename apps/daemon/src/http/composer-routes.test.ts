@@ -1,7 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { FileMatchListSchema } from "@missions/protocol/composer";
+import {
+  ComposerCatalogSchema,
+  FileMatchListSchema,
+} from "@missions/protocol/composer";
 import { routes } from "@missions/protocol/routes";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -45,5 +48,44 @@ describe("composer routes", () => {
         status: 200,
       }))
     );
+  });
+
+  it("shares a ready orchestrator catalog across mission and project routes", async () => {
+    const ctx = await startMission(await bootDaemon(opened));
+    ctx.orchestrator.skills.push({
+      description: "Review changes",
+      name: "review",
+    });
+    ctx.orchestrator.commands.push({
+      description: "Inspect changes",
+      name: "inspect",
+    });
+    const headers = {
+      authorization: `Bearer ${ctx.daemon.token}`,
+      host: `127.0.0.1:${ctx.config.port}`,
+    };
+    const replies = await Promise.all([
+      ctx.daemon.app.request(routes.missionComposerCatalog(ctx.missionId), {
+        headers,
+      }),
+      ctx.daemon.app.request(routes.projectComposerCatalog(ctx.projectId), {
+        headers,
+      }),
+    ]);
+    const bodies = await Promise.all(
+      replies.map(async (response) =>
+        ComposerCatalogSchema.parse(await response.json())
+      )
+    );
+    expect(bodies).toStrictEqual(
+      Array.from({ length: 2 }, () => ({
+        commands: [
+          { description: "Inspect changes", kind: "command", name: "inspect" },
+          { description: "Review changes", kind: "skill", name: "review" },
+        ],
+        source: "droid",
+      }))
+    );
+    expect(ctx.daemon.missions.composerRuntime("/unowned")).toBeNull();
   });
 });

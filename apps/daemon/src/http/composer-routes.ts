@@ -1,4 +1,7 @@
-import { FileMatchListSchema } from "@missions/protocol/composer";
+import {
+  ComposerCatalogSchema,
+  FileMatchListSchema,
+} from "@missions/protocol/composer";
 import { routes } from "@missions/protocol/routes";
 import type { Context, Hono } from "hono";
 
@@ -6,6 +9,7 @@ import type { FileSearch } from "../files/file-search";
 import { badRequest, notFound } from "../lib/app-error";
 import type { MissionService } from "../missions/mission-service";
 import type { ProjectService } from "../projects/project-service";
+import type { ComposerCatalog } from "../sdk/composer-catalog";
 import { param, reply } from "./json";
 
 const query = (c: Context) => {
@@ -20,8 +24,31 @@ export const registerComposerRoutes = (
   app: Hono,
   missions: MissionService,
   projects: ProjectService,
-  files: FileSearch
+  files: FileSearch,
+  catalog: ComposerCatalog
 ) => {
+  app.get(routes.missionComposerCatalog(":missionId"), async (c) => {
+    const { workspace } = missions.get(param(c, "missionId"));
+    if (!workspace) {
+      throw notFound("Mission folder");
+    }
+    return reply(
+      c,
+      ComposerCatalogSchema,
+      await catalog.list(
+        workspace.path,
+        missions.composerRuntime(workspace.path)
+      )
+    );
+  });
+  app.get(routes.projectComposerCatalog(":projectId"), async (c) => {
+    const project = projects.get(param(c, "projectId"));
+    return reply(
+      c,
+      ComposerCatalogSchema,
+      await catalog.list(project.path, missions.composerRuntime(project.path))
+    );
+  });
   app.get(routes.missionFileSearch(":missionId"), async (c) => {
     const { workspace } = missions.get(param(c, "missionId"));
     if (!workspace) {
