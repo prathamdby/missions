@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 import type { Project } from "@missions/protocol/projects";
@@ -53,8 +53,8 @@ const VALID_BRANCH = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*@\{)[\w./-]+(?<![./])$/u;
 
 /**
  * Chooses and validates the one directory every agent in a mission shares.
- * Never stashes, resets, or discards user changes; only app-owned clean
- * worktrees are ever removed.
+ * Never stashes or resets user checkouts. Explicit mission deletion can
+ * force-remove an identity-checked, app-owned worktree.
  */
 export class WorkspaceService {
   readonly #journal: OperationJournal;
@@ -406,4 +406,168 @@ export const cleanupBinding = async (
     inspected.head,
     options.mergedHead
   );
+};
+
+const requireGit = async (cwd: string, args: string[]) => {
+  const result = await git(cwd, args);
+  if (!result.ok) {
+    throw conflict(result.stderr || "Git failed or its outcome is unknown");
+  }
+  return result.stdout;
+};
+
+/** A missing repository is not permission to remove an unrelated directory. */
+const removeOrphanedWorktree = async (binding: WorkspaceBinding) => {
+  const gitFile = path.join(binding.path, ".git");
+  const info = await lstat(gitFile).catch(() => null);
+  const content = info?.isFile() ? await readFile(gitFile, "utf-8") : "";
+  const prefix = "gitdir: ";
+  const target = content.startsWith(prefix)
+    ? path.resolve(binding.path, content.slice(prefix.length).trim())
+    : "";
+  const relative = path.relative(
+    path.join(binding.repoRoot, "worktrees"),
+    target
+  );
+  if (
+    !target ||
+    !relative ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative)
+  ) {
+    throw conflict(
+      "The repository is gone and the worktree identity cannot be verified"
+    );
+  }
+  await rm(binding.path, { force: true, recursive: true });
+};
+
+const removeMissionBranch = async (
+  binding: WorkspaceBinding
+): Promise<string | null> => {
+  if (!binding.branch) {
+    return null;
+  }
+  const ref = `refs/heads/${binding.branch}`;
+  const head = await git(binding.repoRoot, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    "--end-of-options",
+    ref,
+  ]);
+  if (head.code === 1) {
+    return null;
+  }
+  if (!head.ok) {
+    throw conflict(head.stderr || "Could not read the mission branch");
+  }
+  const remote = await requireGit(binding.repoRoot, [
+    "for-each-ref",
+    `--contains=${head.stdout}`,
+    "--format=%(refname)",
+    "refs/remotes/",
+  ]);
+  let merged = false;
+  if (binding.baseRef) {
+    const base = await git(binding.repoRoot, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "--end-of-options",
+      `${binding.baseRef}^{commit}`,
+    ]);
+    if (base.ok) {
+      const ancestor = await git(binding.repoRoot, [
+        "merge-base",
+        "--is-ancestor",
+        head.stdout,
+        base.stdout,
+      ]);
+      if (ancestor.code !== 0 && ancestor.code !== 1) {
+        throw conflict(
+          ancestor.stderr || "Could not verify the branch's commits"
+        );
+      }
+      merged = ancestor.ok;
+    } else if (base.code !== 1) {
+      throw conflict(base.stderr || "Could not read the base branch");
+    }
+  }
+  const trees = repo.parseWorktrees(
+    await requireGit(binding.repoRoot, ["worktree", "list", "--porcelain"])
+  );
+  if (trees.some((tree) => tree.branch === binding.branch)) {
+    return `Kept branch ${binding.branch} because it is checked out elsewhere.`;
+  }
+  if (!(merged || remote)) {
+    return `Kept branch ${binding.branch} because it has commits that are neither merged into the base branch nor in a local remote-tracking ref.`;
+  }
+  await requireGit(binding.repoRoot, ["update-ref", "-d", ref, head.stdout]);
+  return null;
+};
+
+/** Explicit delete, unlike publish cleanup, removes dirty and previously kept worktrees. */
+export const removeMissionWorkspace = async (
+  binding: WorkspaceBinding
+): Promise<string | null> => {
+  if (!(binding.owned && binding.mode === "new_worktree")) {
+    return null;
+  }
+  const info = await lstat(binding.path).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+  );
+  if (
+    info &&
+    (!info.isDirectory() ||
+      (await repo.canonical(binding.path)) !== binding.path)
+  ) {
+    throw conflict("The mission folder is not the original worktree directory");
+  }
+  if (!existsSync(binding.repoRoot)) {
+    if (info) {
+      await removeOrphanedWorktree(binding);
+    }
+    return null;
+  }
+  if (info) {
+    const problems = await verifyBinding(binding);
+    if (problems.length > 0) {
+      throw conflict(problems.join("; "));
+    }
+    const trees = repo.parseWorktrees(
+      await requireGit(binding.repoRoot, ["worktree", "list", "--porcelain"])
+    );
+    const main = trees.find((tree) => tree.isMain);
+    const owned = trees.find((tree) => tree.path === binding.path);
+    if (
+      !main ||
+      !owned ||
+      owned.isMain ||
+      (await repo.commonDir(main.path)) !== binding.repoRoot
+    ) {
+      throw conflict(
+        "Refusing to remove an unverified worktree or the main checkout"
+      );
+    }
+    const latest = await verifyBinding(binding);
+    if (latest.length > 0) {
+      throw conflict(latest.join("; "));
+    }
+    await requireGit(binding.repoRoot, [
+      "worktree",
+      "remove",
+      "--force",
+      "--",
+      binding.path,
+    ]);
+  } else {
+    await requireGit(binding.repoRoot, ["worktree", "prune"]);
+  }
+  return await removeMissionBranch(binding);
 };

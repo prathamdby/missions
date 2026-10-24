@@ -1,3 +1,4 @@
+import type { CreateMissionRequest } from "@missions/protocol/commands";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 
 import type { DaemonConfig } from "../config";
@@ -5,6 +6,7 @@ import { createDaemon } from "../daemon";
 import type { Daemon } from "../daemon";
 import { AppError } from "../lib/app-error";
 import { pollUntil } from "../lib/async";
+import type { MissionTitleGenerator } from "../missions/title-generator";
 import type { ModelLoader } from "../settings/models";
 import { FakeRuntime } from "./fake-runtime";
 import { gitRepo, testConfig } from "./fixtures";
@@ -30,7 +32,8 @@ export interface Booted {
 export const bootDaemon = async (
   opened: Daemon[],
   config?: DaemonConfig,
-  loadModels: ModelLoader = () => Promise.resolve(RAW_MODELS)
+  loadModels: ModelLoader = () => Promise.resolve(RAW_MODELS),
+  titleGenerator: MissionTitleGenerator | null = null
 ): Promise<Booted> => {
   const resolved = config ?? (await testConfig());
   const runtimes: FakeRuntime[] = [];
@@ -42,6 +45,7 @@ export const bootDaemon = async (
       return runtime;
     },
     loadModels,
+    titleGenerator,
     version: "test",
   });
   opened.push(daemon);
@@ -52,7 +56,11 @@ export const waitFor = async <T>(read: () => T, done: (value: T) => boolean) =>
   await pollUntil(() => Promise.resolve(read()), done, Date.now() + 3000, 10);
 
 /** A mission in the current checkout of a fresh repository whose Orchestrator received the goal. */
-export const startMission = async (booted: Booted, suffix = "1") => {
+export const startMission = async (
+  booted: Booted,
+  suffix = "1",
+  options: Pick<CreateMissionRequest, "title"> = {}
+) => {
   const repo = await gitRepo();
   const added = await booted.daemon.projects.addLocal({
     operationId: `add-project-${suffix}`,
@@ -68,6 +76,7 @@ export const startMission = async (booted: Booted, suffix = "1") => {
     projectId: added.project.id,
     worker: MODEL,
     workspace: { mode: "current_checkout" },
+    ...options,
   });
   const missionId = snapshot.mission.id;
   const orchestrator = await waitFor(

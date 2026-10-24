@@ -348,9 +348,11 @@ const DeleteDialog = ({
       }
       await reportMutationError(error, review, "Could not delete");
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       toast({
-        description: "Its worktree, branch, and files are still on disk.",
+        description:
+          result.notice ??
+          "Its conversation, history, and Missions-owned files were removed.",
         title: "Mission deleted",
         tone: "success",
       });
@@ -366,9 +368,25 @@ const DeleteDialog = ({
       <DialogHeader>
         <DialogTitle>Delete “{mission.title}”?</DialogTitle>
         <DialogDescription>
-          Missions forgets its conversation, plans, and history. The worktree,
-          branch, and every file it changed stay on disk, so nothing in your
-          project is deleted.
+          This removes its conversation, plans, history, shared files, and
+          artifacts.
+          {mission.workspace?.owned &&
+          mission.workspace.mode === "new_worktree" ? (
+            <>
+              {" "}
+              The owned worktree at{" "}
+              <span className="select-text">{mission.workspace.path}</span> is
+              force-removed, including uncommitted changes.
+              {mission.publish.cleanup === "kept"
+                ? " This also removes the worktree you kept after merge."
+                : ""}
+              {mission.workspace.branch
+                ? ` Branch ${mission.workspace.branch} is deleted unless that would lose commits.`
+                : ""}
+            </>
+          ) : (
+            " Your checkout and its files stay on disk."
+          )}
         </DialogDescription>
       </DialogHeader>
       <DialogFooter>

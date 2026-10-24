@@ -3,10 +3,11 @@ import type { VariantProps } from "class-variance-authority";
 import type { ComponentProps, ReactNode } from "react";
 
 import { CopyButton } from "@/components/ui/copy-button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 const preVariants = cva(
-  "overflow-auto px-lg py-md font-mono text-xs leading-md text-syntax-text",
+  "px-lg py-md font-mono text-xs leading-md text-syntax-text select-text",
   {
     defaultVariants: { height: "md", wrap: false },
     variants: {
@@ -44,7 +45,7 @@ export const CodeBlock = ({
   tone = "default",
   wrap,
 }: CodeBlockProps) => (
-  <div className="group/code relative min-w-0 overflow-hidden rounded-md bg-bg shadow-[inset_0_0_0_1px_var(--color-border)]">
+  <div className="group/code relative min-w-0 overflow-hidden rounded-md bg-bg shadow-[inset_0_0_0_1px_var(--color-border)] select-none">
     {title || meta ? (
       <div className="flex h-9 items-center gap-md border-b border-border-subtle pr-sm pl-lg">
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-secondary">
@@ -54,14 +55,16 @@ export const CodeBlock = ({
         {copy ? <CopyButton value={code} /> : null}
       </div>
     ) : null}
-    <pre
-      className={cn(
-        preVariants({ height, wrap }),
-        tone === "error" ? "text-terminal-red" : ""
-      )}
-    >
-      <code>{highlighted ?? code}</code>
-    </pre>
+    <ScrollArea asChild axis="both">
+      <pre
+        className={cn(
+          preVariants({ height, wrap }),
+          tone === "error" ? "text-terminal-red" : ""
+        )}
+      >
+        <code>{highlighted ?? code}</code>
+      </pre>
+    </ScrollArea>
     {copy && !(title || meta) ? (
       <div className="absolute top-xs right-xs opacity-0 transition-opacity duration-fast group-focus-within/code:opacity-100 group-hover/code:opacity-100">
         <CopyButton value={code} />
@@ -72,9 +75,10 @@ export const CodeBlock = ({
 
 /** Raw command output on the page background (NZJ, OBV). */
 export const TerminalLog = ({ className, ...props }: ComponentProps<"div">) => (
-  <div
+  <ScrollArea
+    axis="x"
     className={cn(
-      "flex min-w-0 flex-col gap-2xs overflow-x-auto rounded-sm bg-bg px-lg py-control shadow-[inset_0_0_0_1px_var(--color-border-subtle)]",
+      "flex min-w-0 flex-col gap-2xs rounded-sm bg-bg px-lg py-control shadow-[inset_0_0_0_1px_var(--color-border-subtle)] select-text",
       className
     )}
     {...props}
@@ -120,7 +124,7 @@ export const CommandPreview = ({
     )}
   >
     {icon}
-    <span className="min-w-0 truncate font-mono text-2xs leading-xs font-book">
+    <span className="min-w-0 truncate font-mono text-2xs leading-xs font-book select-text">
       {command}
     </span>
   </div>
@@ -146,7 +150,7 @@ export const CommandField = ({
     >
       $
     </span>
-    <code className="min-w-0 flex-1 truncate text-left font-mono text-xs leading-sm text-text">
+    <code className="min-w-0 flex-1 truncate text-left font-mono text-xs leading-sm text-text select-text">
       {command}
     </code>
     <CopyButton label={`Copy ${command}`} size="md" value={command} />
@@ -156,7 +160,7 @@ export const CommandField = ({
 export const InlineCode = ({ className, ...props }: ComponentProps<"code">) => (
   <code
     className={cn(
-      "rounded-xs bg-surface-overlay px-xs py-2xs font-mono text-xs text-syntax-text",
+      "rounded-xs bg-surface-overlay px-xs py-2xs font-mono text-xs text-syntax-text select-text",
       className
     )}
     {...props}

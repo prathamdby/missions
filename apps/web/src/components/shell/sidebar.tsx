@@ -15,6 +15,7 @@ import {
   SearchIcon,
 } from "@/components/ui/icons";
 import { ListLabel, ListRow } from "@/components/ui/list-row";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -204,21 +205,23 @@ export const Sidebar = ({ layout = "desktop" }: { layout?: SidebarLayout }) => {
         </Tooltip>
       </div>
 
-      <section
-        aria-labelledby={`missions-heading-${layout}`}
-        className={cn(
-          "relative -mx-xs flex min-h-0 flex-1 flex-col overflow-y-auto px-xs",
-          touch ? "gap-2xs" : "mt-2xl gap-hairline"
-        )}
-      >
-        <ListLabel
-          id={`missions-heading-${layout}`}
-          size={touch ? "touch" : "sidebar"}
+      <ScrollArea asChild axis="y">
+        <section
+          aria-labelledby={`missions-heading-${layout}`}
+          className={cn(
+            "relative -mx-xs flex min-h-0 flex-1 flex-col px-xs",
+            touch ? "gap-2xs" : "mt-2xl gap-hairline"
+          )}
         >
-          Missions
-        </ListLabel>
-        <MissionList layout={layout} />
-      </section>
+          <ListLabel
+            id={`missions-heading-${layout}`}
+            size={touch ? "touch" : "sidebar"}
+          >
+            Missions
+          </ListLabel>
+          <MissionList layout={layout} />
+        </section>
+      </ScrollArea>
 
       <UserMenu layout={layout} />
     </nav>

@@ -94,7 +94,10 @@ import type {
 import type { ModelCatalog } from "../settings/models";
 import type { SettingsService } from "../settings/settings-service";
 import { WorkspaceOperationGate } from "../workspaces/workspace-operation-gate";
-import { verifyBinding } from "../workspaces/workspace-service";
+import {
+  removeMissionWorkspace,
+  verifyBinding,
+} from "../workspaces/workspace-service";
 import type { WorkspaceService } from "../workspaces/workspace-service";
 import { WriteLeaseRegistry } from "../workspaces/write-lease";
 import {
@@ -125,6 +128,7 @@ import {
   nextSequence,
   sameMessage,
 } from "./outbox";
+import type { MissionTitleGenerator } from "./title-generator";
 import {
   agentMessageItem,
   DeltaCoalescer,
@@ -183,6 +187,7 @@ export interface MissionServiceOptions {
   now?: () => Date;
   /** Content-free stage timings; disabled unless sinks are configured. */
   timing?: TimingLog;
+  titleGenerator?: MissionTitleGenerator | null;
 }
 
 /** Re-reads repository state after an agent-driven Git or PR action. */
@@ -295,6 +300,8 @@ export class MissionService {
   readonly #workspaces: WorkspaceService;
   readonly #settings: SettingsService;
   readonly #models: ModelCatalog;
+  readonly #titleGenerator: MissionTitleGenerator | null;
+  readonly #pendingTitles = new Set<string>();
   readonly #modelUpdates = new Set<string>();
   readonly #supervisor: ProcessSupervisor;
   readonly #processRecords: ProcessRecordRepository;
@@ -336,6 +343,7 @@ export class MissionService {
     this.#workspaces = options.workspaces;
     this.#settings = options.settings;
     this.#models = options.models;
+    this.#titleGenerator = options.titleGenerator ?? null;
     this.#supervisor = options.supervisor;
     this.#processRecords =
       options.processRecords ?? new ProcessRecordRepository(options.store);
@@ -828,7 +836,7 @@ export class MissionService {
   async #create(input: CreateMissionRequest): Promise<MissionSnapshot> {
     const request = CreateMissionRequestSchema.parse(input);
     const project = this.#projects.get(request.projectId);
-    const { result } = await this.#journal.run(
+    const { result, duplicate } = await this.#journal.run(
       {
         detail: { projectId: project.id },
         id: request.operationId,
@@ -901,7 +909,39 @@ export class MissionService {
       missionId,
     });
     this.#own(this.#launch(missionId));
-    return this.snapshot(missionId);
+    const snapshot = this.snapshot(missionId);
+    if (!duplicate && request.title === undefined && this.#titleGenerator) {
+      this.#pendingTitles.add(missionId);
+      this.#own(this.#autoTitle(missionId, snapshot.mission.title));
+    }
+    return snapshot;
+  }
+
+  async #autoTitle(missionId: string, placeholder: string) {
+    try {
+      const mission = this.get(missionId);
+      const project = this.#projects.get(mission.projectId);
+      const title = await this.#titleGenerator?.generate({
+        goal: mission.goal,
+        projectName: project.name,
+      });
+      const current = this.#store.getMission(missionId);
+      if (
+        !title ||
+        !this.#pendingTitles.has(missionId) ||
+        this.#closing ||
+        this.#deleting.has(missionId) ||
+        !current ||
+        current.title !== placeholder
+      ) {
+        return;
+      }
+      this.#mutateMission(missionId, (value) => ({ ...value, title }));
+    } catch {
+      // A title failure must not fail creation or resurrect a deleted mission.
+    } finally {
+      this.#pendingTitles.delete(missionId);
+    }
   }
 
   #newAgent(
@@ -3545,6 +3585,9 @@ export class MissionService {
         ...(request.orchestrator ? { orchestrator: request.orchestrator } : {}),
         ...(request.worker ? { worker: request.worker } : {}),
       }));
+      if (request.title !== undefined) {
+        this.#pendingTitles.delete(missionId);
+      }
       if (request.orchestrator && !owner) {
         this.#patchAgent(agent.id, { model: saved.orchestrator });
       }
@@ -3893,9 +3936,8 @@ export class MissionService {
   }
 
   /**
-   * Forgets a stopped mission: its records, history and event stream go in
-   * one transaction. The worktree, branch, artifact files and shared files
-   * stay on disk. Nothing is stopped here; only stopped missions qualify.
+   * Removes an owned workspace before purging a stopped mission. Other
+   * checkouts are untouched. Nothing is stopped here.
    */
   remove(
     missionId: string,
@@ -3907,21 +3949,23 @@ export class MissionService {
     };
     try {
       this.#requireOpen();
-      if (
-        this.#journal.replay({
-          id: request.operationId,
-          kind: MISSION_DELETE,
-          missionId,
-        })
-      ) {
-        return Promise.resolve(duplicate);
-      }
       const running = this.#deleting.get(missionId);
       if (running) {
         if (running.operationId !== request.operationId) {
           throw conflict("This mission is already being deleted");
         }
-        return running.task.then(() => duplicate);
+        return running.task.then((result) => ({
+          ...result,
+          status: "duplicate",
+        }));
+      }
+      const replay = this.#journal.replay<{ notice: string } | null>({
+        id: request.operationId,
+        kind: MISSION_DELETE,
+        missionId,
+      });
+      if (replay) {
+        return Promise.resolve({ ...duplicate, ...replay.result });
       }
       const mission = this.#requireDeletable(
         missionId,
@@ -3986,10 +4030,21 @@ export class MissionService {
     mission: Mission,
     request: MissionControlRequest
   ): Promise<CommandAccepted> {
-    const settle = async () => {
+    const settle = async (canonical?: string) => {
       this.#requireDeletable(mission.id, request.expectedRevision);
       await this.#requireProcessesGone(mission.id);
-      return this.#commitRemoval(mission.id, request);
+      if (
+        canonical &&
+        mission.workspace?.owned &&
+        mission.workspace.mode === "new_worktree"
+      ) {
+        await this.#requireWorkspaceQuiescent(canonical);
+      }
+      const notice = mission.workspace
+        ? await removeMissionWorkspace(mission.workspace)
+        : null;
+      const result = this.#commitRemoval(mission.id, request, notice);
+      return await this.#removeFiles(mission.id, result);
     };
     // The trusted stored binding serializes with admission even after the
     // directory was removed outside the app.
@@ -4019,7 +4074,8 @@ export class MissionService {
   /** No await between the final checks and the purge, receipt and removal event. */
   #commitRemoval(
     missionId: string,
-    request: MissionControlRequest
+    request: MissionControlRequest,
+    notice: string | null
   ): CommandAccepted {
     const owned = this.#log.commit((emit) => {
       this.#requireDeletable(missionId, request.expectedRevision);
@@ -4033,14 +4089,18 @@ export class MissionService {
       }
       this.#store.purgeMission(missionId);
       this.#log.removeStream(missionId);
-      this.#journal.recordCompleted({
-        id: request.operationId,
-        kind: MISSION_DELETE,
-        missionId,
-      });
+      this.#journal.recordCompleted(
+        {
+          id: request.operationId,
+          kind: MISSION_DELETE,
+          missionId,
+        },
+        notice ? { notice } : null
+      );
       emit(null, { data: { missionId }, type: "mission.removed" });
       return { agentIds, planIds, questionIds };
     });
+    this.#pendingTitles.delete(missionId);
     this.#planEntries.delete(missionId);
     for (const planId of owned.planIds) {
       this.#planBindings.delete(planId);
@@ -4051,14 +4111,76 @@ export class MissionService {
     for (const agentId of owned.agentIds) {
       this.leases.forget(agentId);
     }
-    this.#sharedFiles.forget(missionId);
-    return { operationId: request.operationId, status: "accepted" };
+    return {
+      operationId: request.operationId,
+      status: "accepted",
+      ...(notice ? { notice } : {}),
+    };
+  }
+
+  async #removeFiles(
+    missionId: string,
+    result: CommandAccepted
+  ): Promise<CommandAccepted> {
+    const results = await Promise.allSettled([
+      this.#sharedFiles.remove(missionId),
+      this.#artifacts.remove(missionId),
+    ]);
+    const failures = results.flatMap((outcome) =>
+      outcome.status === "rejected" ? [errorMessage(outcome.reason)] : []
+    );
+    if (failures.length === 0) {
+      return result;
+    }
+    const cleanupNotice =
+      "Some Missions-owned files could not be removed. Cleanup will be retried when the daemon restarts.";
+    const notice = result.notice
+      ? `${result.notice} ${cleanupNotice}`
+      : cleanupNotice;
+    this.#log.commit((emit) => {
+      const receipt = this.#journal.get(result.operationId, {
+        kind: MISSION_DELETE,
+        missionId,
+      });
+      if (!receipt) {
+        throw new Error("Missing mission deletion receipt");
+      }
+      this.#store.putOperation(
+        { ...receipt.operation, updatedAt: this.#iso() },
+        { notice }
+      );
+      emit(null, {
+        data: {
+          notice: {
+            code: "environment",
+            level: "warning",
+            message: `Mission ${missionId} file cleanup failed: ${failures.join("; ")}`,
+            retryAfterMs: null,
+          },
+        },
+        type: "notice",
+      });
+    });
+    return { ...result, notice };
   }
 
   // ------------------------------------------------------------ recovery
 
   /** Startup: nothing resumes on its own. Orphans are stopped and missions wait for Resume. */
   async recover() {
+    const deleted = new Set(
+      this.#store
+        .listOperations(["succeeded", "reconciled"])
+        .filter(
+          (operation) =>
+            operation.kind === MISSION_DELETE && operation.missionId
+        )
+        .map((operation) => operation.missionId ?? "")
+    );
+    await Promise.all([
+      this.#sharedFiles.sweepRemoved(deleted),
+      this.#artifacts.sweepRemoved(deleted),
+    ]);
     const records = this.#processRecords.list();
     const stopped = await Promise.all(
       records.map(async (record) => ({
