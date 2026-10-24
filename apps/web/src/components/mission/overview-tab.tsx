@@ -411,7 +411,6 @@ const Agents = () => {
           ?.decidedAt ?? null,
       planning:
         live.mission.executionMode === "plan" ||
-        live.mission.pendingExecutionMode === "plan" ||
         live.mission.status === "exploring",
     }
   );

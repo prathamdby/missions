@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext } from "@playwright/test";
 
 const ORIGIN = "http://127.0.0.1:4418";
 const API = "/api/daemon/v2";
@@ -70,11 +70,10 @@ export const createMission = async (
   projectId: string,
   goal = "Write a NOTES.md file summarizing the project",
   // Most flows exercise plan approval; Work mode is covered explicitly.
-  executionMode: "work" | "plan" = "plan"
+  { plan = true }: { plan?: boolean } = {}
 ) => {
   const snapshot = await call(request, "POST", "/missions", {
-    executionMode,
-    goal,
+    goal: plan ? `${goal} Plan it first.` : goal,
     operationId: operationId("mission"),
     orchestrator: MODEL,
     projectId,
@@ -90,17 +89,6 @@ export const useScriptedModels = async (request: APIRequestContext) =>
     orchestrator: MODEL,
     worker: MODEL,
   });
-
-/** Picks Work or Plan in the composer's mode chip before sending. */
-export const chooseExecutionMode = async (
-  page: Page,
-  mode: "Work" | "Plan"
-) => {
-  await page.getByTestId("execution-mode").click();
-  await page
-    .getByRole("menuitemradio", { name: new RegExp(`^${mode}`, "u") })
-    .click();
-};
 
 export const missionSnapshot = async (
   request: APIRequestContext,

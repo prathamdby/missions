@@ -22,7 +22,6 @@ const mission: Mission = {
   id: "m",
   lastError: null,
   orchestrator: { modelId: "model", reasoningEffort: null },
-  pendingExecutionMode: null,
   projectId: "p",
   publish: {
     cleanup: "none",
@@ -44,7 +43,6 @@ const queue: QueueItem = {
   agentId: "agent",
   createdAt: AT,
   error: null,
-  executionMode: null,
   id: "q",
   missionId: "m",
   mode: "steer",

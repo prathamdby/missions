@@ -53,16 +53,15 @@ describe(MessageDraft, () => {
     expect(controller.take("steer")).toStrictEqual(one);
   });
 
-  it("carries a mode change and treats a different mode as a new occurrence", () => {
+  it("treats changed delivery placement as a new occurrence", () => {
     const controller = draft();
     controller.change("plan this");
-    const plan = controller.take("steer", "plan");
+    const plan = controller.take("queue");
     if (!plan) {
       throw new Error("Missing test delivery");
     }
     expect(plan.input).toStrictEqual({
-      executionMode: "plan",
-      mode: "steer",
+      mode: "queue",
       text: "plan this",
     });
     controller.restore(plan);

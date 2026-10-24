@@ -127,7 +127,10 @@ describe(openDatabase, () => {
       first,
       memory: backupBeforeMigration(new Database(":memory:"), ":memory:"),
       mode: mode.toString(8).slice(-3),
-      normalized: [mission?.executionMode, mission?.pendingExecutionMode],
+      normalized: [
+        mission?.executionMode,
+        Object.hasOwn(mission ?? {}, "pendingExecutionMode"),
+      ],
       upToDate,
     }).toStrictEqual({
       again: first,
@@ -135,7 +138,7 @@ describe(openDatabase, () => {
       first: `${file}.pre-migration-1.bak`,
       memory: null,
       mode: "600",
-      normalized: ["work", null],
+      normalized: ["work", false],
       upToDate: null,
     });
   });

@@ -8,6 +8,7 @@ import type { Daemon } from "../daemon";
 import {
   bootDaemon,
   control,
+  MODEL,
   pausedMission,
   startMission,
 } from "../test/mission-harness";
@@ -34,10 +35,47 @@ const failureOf = async (response: Response) => {
   return [response.status, body.error.code];
 };
 
-describe("DELETE mission(id)", () => {
+describe("mission routes", () => {
   afterEach(async () => {
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
   });
+
+  it.each(["work", "plan"])(
+    "rejects user-requested %s execution mode on creation and messages",
+    async (executionMode) => {
+      const ctx = await startMission(await bootDaemon(opened));
+      const create = await send(ctx, routes.missions(), {
+        body: JSON.stringify({
+          executionMode,
+          goal: "Write notes",
+          operationId: "removed-mode-create",
+          orchestrator: MODEL,
+          projectId: ctx.projectId,
+          worker: MODEL,
+          workspace: { mode: "current_checkout" },
+        }),
+        method: "POST",
+      });
+      await expect(failureOf(create)).resolves.toStrictEqual([
+        400,
+        "bad_request",
+      ]);
+      const message = await send(ctx, routes.missionMessages(ctx.missionId), {
+        body: JSON.stringify({
+          executionMode,
+          mode: "steer",
+          operationId: "removed-mode-message",
+          text: "Plan this",
+        }),
+        method: "POST",
+      });
+      await expect(failureOf(message)).resolves.toStrictEqual([
+        400,
+        "bad_request",
+      ]);
+      expect(ctx.daemon.missions.get(ctx.missionId).executionMode).toBe("work");
+    }
+  );
 
   it("validates the MissionControlRequest body before acting", async () => {
     const ctx = await pausedMission(await bootDaemon(opened));

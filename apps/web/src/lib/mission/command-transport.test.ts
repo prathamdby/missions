@@ -16,7 +16,6 @@ const mission: Mission = {
   id: "mission-model",
   lastError: null,
   orchestrator: { modelId: "original", reasoningEffort: "high" },
-  pendingExecutionMode: null,
   projectId: "project",
   publish: {
     cleanup: "none",

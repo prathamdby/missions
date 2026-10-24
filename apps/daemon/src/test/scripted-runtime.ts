@@ -18,6 +18,7 @@ import { NativeQueueTracker } from "../sdk/native-queue";
 import {
   EXPLORE_TOOLS,
   INSTALL_RUN,
+  PLAN_REQUEST,
   QUESTIONS,
   RICH_PLAN,
   RICH_TODOS,
@@ -68,6 +69,7 @@ export class ScriptedRuntime implements RuntimeHandle {
   #seq = 0;
   #planRevision = 0;
   #scenario: Scenario = "default";
+  #initialText = "";
   #mode: "auto" | "spec" = "auto";
   /** Model-only context, such as planning guidance; never starts a turn. */
   readonly #contexts: string[] = [];
@@ -409,6 +411,7 @@ export class ScriptedRuntime implements RuntimeHandle {
       return;
     }
     if (this.#turns === 0) {
+      this.#initialText = text;
       this.#scenario = scenarioOf(text);
     }
     if (this.#turns === 0 && this.#scenario !== "default") {
@@ -497,6 +500,11 @@ export class ScriptedRuntime implements RuntimeHandle {
   async #planOrWork() {
     if (this.#mode === "spec") {
       await this.#propose("Plan");
+      return;
+    }
+    if (PLAN_REQUEST.test(this.#initialText)) {
+      await this.#roleTool("enter_plan", {});
+      this.#say("I'll plan this first.");
       return;
     }
     await (this.#scenario === "default"

@@ -24,7 +24,7 @@ Missions coordinate agents working toward a goal in a local project.
 
 **Work mode**: The default execution mode, in which agents act directly under the fixed High permission policy.
 
-**Plan mode**: An optional, read-only execution mode for every agent, in which the Orchestrator plans and asks the user to approve the plan.
+**Plan mode**: A read-only execution mode for every agent, entered only when the Orchestrator calls `missions.enter_plan` in response to plain-language planning requests or its judgment. The Orchestrator presents a plan for approval; approval returns the mission to Work mode.
 
 **Plan**: The proposed work presented in Plan mode, subject to approval or revision.
 
