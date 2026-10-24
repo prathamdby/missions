@@ -17,6 +17,7 @@ import {
   createMission,
   gitRepo,
   missionSnapshot,
+  useScriptedModels,
 } from "./fixtures";
 
 const API = "/api/daemon/v2";
@@ -40,6 +41,34 @@ const CATALOG: ModelOption[] = [
     supportedReasoningEfforts: [],
   },
 ];
+
+test("new mission model pickers show Models without scope hints", async ({
+  page,
+  request,
+}) => {
+  await addProject(request, gitRepo("model-copy"));
+  await useScriptedModels(request);
+  await page.goto("/");
+  await page.getByTestId("model-picker").click();
+  const picker = page.getByRole("dialog", { name: "Mission models" });
+  await expect(picker.getByText("Models", { exact: true })).toBeVisible();
+  await expect(picker).not.toContainText("this mission only");
+  const model = picker.getByRole("combobox", {
+    exact: true,
+    name: "Orchestrator model",
+  });
+  const thinking = picker.getByRole("combobox", {
+    exact: true,
+    name: "Orchestrator thinking",
+  });
+  await expect(model).toHaveAccessibleDescription("");
+  await expect(thinking).toHaveAccessibleDescription("");
+  await model.hover();
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await thinking.hover();
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await expect(page.locator('[data-slot="composer-legend"]')).toHaveCount(0);
+});
 
 const startedMission = async (request: APIRequestContext, name: string) => {
   const project = await addProject(request, gitRepo(name));

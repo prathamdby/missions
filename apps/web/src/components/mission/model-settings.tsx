@@ -22,9 +22,9 @@ import type { ModelRole } from "@/lib/mission/model-settings";
 
 const SCOPE = {
   orchestrator:
-    "Only this mission. Applies to the Orchestrator's next turn without interrupting its current work.",
+    "Applies to the Orchestrator's next turn without interrupting its current work.",
   worker:
-    "Only this mission. Applies to future Workers; existing Workers keep their current settings.",
+    "Applies to future Workers; existing Workers keep their current settings.",
 } as const;
 
 const ModelRow = ({
