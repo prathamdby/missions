@@ -14,10 +14,11 @@ import type {
 type Stored<T> = Partial<T> & Record<string, unknown>;
 
 export const normalizeMission = (data: unknown): Mission => {
-  const stored = data as Stored<Mission>;
+  const stored = { ...(data as Stored<Mission>) };
+  delete stored.autonomy;
+  delete stored.pendingExecutionMode;
   return {
     executionMode: "work",
-    pendingExecutionMode: null,
     ...stored,
     endedAt: stored.endedAt ?? null,
   } as Mission;
@@ -44,16 +45,18 @@ export const normalizePlan = (data: unknown): PlanRevision =>
     ...(data as Stored<PlanRevision>),
   }) as PlanRevision;
 
-export const normalizeQueueItem = (data: unknown): QueueItem =>
-  ({
-    executionMode: null,
+export const normalizeQueueItem = (data: unknown): QueueItem => {
+  const stored = { ...(data as Stored<QueueItem>) };
+  delete stored.executionMode;
+  return {
     origin: "user",
     purpose: "message",
     retryOf: null,
     sender: null,
     sequence: 0,
-    ...(data as Stored<QueueItem>),
-  }) as QueueItem;
+    ...stored,
+  } as QueueItem;
+};
 
 /** Old system messages keep their text; sender identity is never inferred from it. */
 export const normalizeTranscriptItem = (data: unknown): TranscriptItem =>

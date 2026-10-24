@@ -21,7 +21,6 @@ export const defaultSettings = (
   const modelId = env.MISSIONS_DEFAULT_MODEL ?? "gpt-6-sol";
   return {
     cleanupAfterMerge: false,
-    defaultAutonomy: "medium",
     defaultWorkspaceMode: "new_worktree",
     maxConcurrentWorkers: 2,
     orchestrator: { modelId, reasoningEffort: null },

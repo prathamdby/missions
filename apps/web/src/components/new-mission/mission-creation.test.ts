@@ -8,7 +8,6 @@ import { MissionCreation } from "./mission-creation";
 import type { MissionDraft } from "./mission-draft";
 
 const draft = (): MissionDraft => ({
-  autonomy: "medium",
   goal: "Ship this outcome",
   orchestrator: { modelId: "planner", reasoningEffort: "high" },
   projectId: "project",
@@ -23,7 +22,6 @@ const snapshot = (id: string): MissionSnapshot => ({
   cursor: 0,
   mission: {
     ...draft(),
-    autonomy: "medium",
     createdAt: "2026-01-01T00:00:00Z",
     endedAt: null,
     epoch: 0,
@@ -31,7 +29,6 @@ const snapshot = (id: string): MissionSnapshot => ({
     id,
     lastError: null,
     orchestrator: { modelId: "planner", reasoningEffort: "high" },
-    pendingExecutionMode: null,
     publish: {
       cleanup: "none",
       cleanupReason: null,

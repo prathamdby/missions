@@ -17,7 +17,6 @@ export const AT = "2026-01-01T00:00:00.000Z";
 export const MISSION_ID = "m-1";
 
 export const mission = (revision = 1): Mission => ({
-  autonomy: "medium",
   createdAt: AT,
   endedAt: null,
   epoch: 0,
@@ -26,7 +25,6 @@ export const mission = (revision = 1): Mission => ({
   id: MISSION_ID,
   lastError: null,
   orchestrator: { modelId: "opus", reasoningEffort: "high" },
-  pendingExecutionMode: null,
   projectId: "p-1",
   publish: {
     cleanup: "none",
@@ -118,7 +116,6 @@ export const queueItem = (
   agentId: "a-1",
   createdAt: AT,
   error: null,
-  executionMode: null,
   id: "queue-1",
   missionId: MISSION_ID,
   mode: "queue",

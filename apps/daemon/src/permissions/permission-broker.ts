@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import type { Autonomy, Role } from "@missions/protocol/common";
+import type { Role } from "@missions/protocol/common";
 import type {
   Grant,
   PermissionDecision,
@@ -41,7 +41,6 @@ export interface AgentContext {
   projectId: string;
   role: Role;
   workspacePath: string;
-  autonomy: Autonomy;
   epoch: number;
   /** Plan mode: every agent in the mission is read-only until approval. */
   planMode: boolean;
@@ -232,34 +231,19 @@ export const flattenToolUses = (uses: PermissionToolUse[]) =>
     }));
   });
 
-const AUTO_IMPACT: Record<Autonomy, ReadonlySet<Impact>> = {
-  high: new Set(["low", "medium", "high"]),
-  low: new Set(["low"]),
-  medium: new Set(["low", "medium"]),
-  off: new Set(),
-};
-
-/**
- * Whether the user's autonomy level approves this use without asking. Local
- * Git mutations follow their impact like other commands; publishing (push,
- * PRs, unrecognized git/gh forms) proceeds only at High.
- */
-export const autoApproves = (autonomy: Autonomy, use: ClassifiedUse) => {
+/** Fixed High policy; workspace-external edits and unknown tools still ask. */
+export const autoApproves = (use: ClassifiedUse) => {
   switch (use.category) {
-    case "read":
-    case "role_tool": {
-      return true;
-    }
     case "edit": {
-      return autonomy !== "off" && use.impact !== "high";
+      return use.impact !== "high";
     }
+    case "read":
     case "execute":
     case "vcs":
-    case "mcp": {
-      return AUTO_IMPACT[autonomy].has(use.impact);
-    }
+    case "mcp":
+    case "role_tool":
     case "publish": {
-      return autonomy === "high";
+      return true;
     }
     default: {
       return false;
@@ -325,8 +309,7 @@ interface Pending {
 /**
  * One policy point for SDK permission requests. Mandatory gates (Pause fence,
  * read-only assignments, Plan mode, repository coordination) run before
- * grants and autonomy so neither "Always allow" nor High autonomy can bypass
- * them. Publishing never gets an "Always allow" grant.
+ * grants and automatic approval so neither can bypass them.
  */
 export class PermissionBroker {
   readonly #options: PermissionBrokerOptions;
@@ -373,24 +356,14 @@ export class PermissionBroker {
       return { approved: false, reason: denied };
     }
     const writable = uses.some(isWritable);
-    const needsPublishApproval = uses.some((use) => use.category === "publish");
     const covered = uses.every(
-      (use) =>
-        autoApproves(context.autonomy, use) ||
-        (use.category !== "publish" && this.#grantMatches(context, use))
+      (use) => autoApproves(use) || this.#grantMatches(context, use)
     );
-    let via: "policy" | "grant" | "user" = uses.every((use) =>
-      autoApproves(context.autonomy, use)
-    )
+    let via: "policy" | "grant" | "user" = uses.every(autoApproves)
       ? "policy"
       : "grant";
     if (!covered) {
-      const decision = await this.#askUser(
-        agentId,
-        context,
-        uses,
-        !needsPublishApproval
-      );
+      const decision = await this.#askUser(agentId, context, uses);
       if (decision === null || decision === "deny") {
         return { approved: false, reason: "Denied" };
       }
@@ -428,21 +401,16 @@ export class PermissionBroker {
     }
   }
 
-  #askUser(
-    agentId: string,
-    context: AgentContext,
-    uses: ClassifiedUse[],
-    allowAlways: boolean
-  ) {
+  #askUser(agentId: string, context: AgentContext, uses: ClassifiedUse[]) {
     const request: PermissionRequest = {
       agentId,
-      allowAlways,
+      allowAlways: true,
       createdAt: this.#now(),
       decidedAt: null,
       decision: null,
       epoch: context.epoch,
       id: randomUUID(),
-      kind: allowAlways ? "tool" : "publish",
+      kind: "tool",
       missionId: context.missionId,
       reason: null,
       status: "pending",
@@ -487,7 +455,7 @@ export class PermissionBroker {
         );
       }
       for (const use of entry.uses) {
-        if (autoApproves(entry.context.autonomy, use)) {
+        if (autoApproves(use)) {
           continue;
         }
         this.#options.store.addGrant({

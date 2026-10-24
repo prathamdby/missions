@@ -71,7 +71,6 @@ const mockDraft = async (page: Page) => {
     },
     "/settings": {
       cleanupAfterMerge: false,
-      defaultAutonomy: "medium",
       defaultWorkspaceMode: "new_worktree",
       maxConcurrentWorkers: 2,
       orchestrator: { modelId: "scripted", reasoningEffort: null },

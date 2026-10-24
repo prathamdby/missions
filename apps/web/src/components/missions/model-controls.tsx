@@ -32,12 +32,12 @@ const useSavingSelect = (pending: boolean) => {
 
 /** Scope copy first, then whatever the live catalog says about the choice. */
 const selectionDescription = (
-  scope: string,
+  scope: string | undefined,
   model: ModelOption | undefined,
   settings: AgentModelSettings,
   unavailable: boolean
 ) => {
-  const notes: string[] = [scope];
+  const notes: string[] = scope ? [scope] : [];
   if (model?.supportedReasoningEfforts.length === 0) {
     notes.push("This model does not expose thinking levels.");
   } else if (
@@ -89,7 +89,7 @@ const ThinkingPicker = ({
       open={open}
       value={settings.reasoningEffort ?? DEFAULT_EFFORT}
     >
-      <Hint disabled={open || pending} label={description}>
+      <Hint disabled={!description || open || pending} label={description}>
         <SelectTrigger
           appearance="thinking"
           aria-describedby={descriptionId}
@@ -146,7 +146,7 @@ export const ModelControls = ({
   models: readonly ModelOption[];
   onChange: (next: AgentModelSettings) => void;
   pending?: boolean;
-  scope: string;
+  scope?: string;
   settings: AgentModelSettings;
   testId: string;
   unavailable: boolean;
@@ -195,7 +195,7 @@ export const ModelControls = ({
         onValueChange={changeModel}
         value={settings.modelId}
       >
-        <Hint disabled={open || pending} label={description}>
+        <Hint disabled={!description || open || pending} label={description}>
           <SelectTrigger
             appearance="model"
             aria-describedby={descriptionId}

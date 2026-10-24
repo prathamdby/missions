@@ -94,8 +94,7 @@ const waitFor = async <T>(read: () => T, done: (value: T) => boolean) =>
   await pollUntil(() => Promise.resolve(read()), done, Date.now() + 3000, 10);
 
 interface MissionOptions {
-  autonomy?: "off" | "low" | "medium" | "high";
-  executionMode?: "work" | "plan";
+  goal?: string;
 }
 
 const createMission = async (
@@ -113,9 +112,7 @@ const createMission = async (
     throw new Error("project not added");
   }
   const snapshot = await booted.daemon.missions.create({
-    autonomy: options.autonomy ?? "high",
-    executionMode: options.executionMode,
-    goal: "Add a greeting file",
+    goal: options.goal ?? "Add a greeting file",
     operationId: `create-mission-${suffix}`,
     orchestrator: MODEL,
     projectId: added.project.id,
@@ -142,10 +139,26 @@ const startMission = async (
   if (!orchestrator) {
     throw new Error("orchestrator not started");
   }
+  if (options.goal?.endsWith("Plan it first.")) {
+    orchestrator.consume(`${created.missionId}:goal`);
+    await orchestrator.tool("enter_plan", {});
+    orchestrator.emit({
+      reason: "end_turn",
+      turnId: null,
+      type: "turn_completed",
+    });
+    await waitFor(
+      () =>
+        orchestrator.submitted.some((item) =>
+          item.text.includes("Plan mode is now active")
+        ),
+      Boolean
+    );
+  }
   return { ...created, orchestrator };
 };
 
-/** A Droid permission no autonomy level approves, so the user must decide. */
+/** An unrecognized Droid permission the policy does not approve, so the user must decide. */
 const UNCLASSIFIED: PermissionToolUse = {
   confirmationType: "custom",
   details: { type: "custom" },
@@ -875,7 +888,9 @@ describe("mission service", () => {
   });
 
   it("blocks writes in Plan mode until the live plan revision is approved", async () => {
-    const ctx = await startMission(undefined, { executionMode: "plan" });
+    const ctx = await startMission(undefined, {
+      goal: "Add a greeting file. Plan it first.",
+    });
     const { daemon, missionId, orchestrator, repo } = ctx;
     const before = await orchestrator.options.onPermission({
       agentId: orchestrator.options.agentId,
@@ -1007,121 +1022,101 @@ describe("mission service", () => {
     });
   });
 
-  it("keeps accepted messages through pause and delivers them once, in order, after resume", async () => {
-    const ctx = await startMission();
-    const { daemon, missionId, orchestrator } = ctx;
-    orchestrator.consume(`${missionId}:goal`);
-    await orchestrator.options.onPermission({
-      agentId: orchestrator.options.agentId,
-      toolUses: [createEdit(`${ctx.repo}/a.txt`)],
+  it("delivers plain messages in order during Plan mode without changing it", async () => {
+    const { daemon, missionId, orchestrator } = await startMission(undefined, {
+      goal: "Add a greeting file. Plan it first.",
     });
-    const submit = (operationId: string, plan = false) =>
-      daemon.missions.submitMessage(missionId, {
-        executionMode: plan ? "plan" : undefined,
-        mode: "steer",
-        operationId,
-        text: operationId,
-      });
-    await submit("plan-msg", true);
-    const after = await submit("after-msg");
-    const dropped = await submit("drop-msg");
-    await yieldImmediate();
-    const edit = vi.spyOn(orchestrator, "edit");
-    const remove = vi.spyOn(orchestrator, "remove");
-    const edited = await daemon.missions.editQueueItem(missionId, after.id, {
-      expectedRevision: after.revision,
-      operationId: "after-edit",
-      text: "after-edit",
+    const decision = proposePlan(orchestrator);
+    const first = await daemon.missions.submitMessage(missionId, {
+      mode: "steer",
+      operationId: "plan-reply-first",
+      text: "Keep the public behavior",
     });
-    await daemon.missions.removeQueueItem(
-      missionId,
-      dropped.id,
-      dropped.revision
-    );
-    const held = ["plan-msg", "after-msg", "after-edit", "drop-msg"].map(
-      (id) => daemon.store.queue.get(id)?.state
-    );
-    expect({
-      edited,
-      held,
-      nativeCalls: edit.mock.calls.length + remove.mock.calls.length,
-      pending: daemon.missions.get(missionId).pendingExecutionMode,
-    }).toStrictEqual({
-      edited: { outcome: "replaced", replacementId: "after-edit" },
-      held: ["accepted", "removed", "accepted", "removed"],
-      nativeCalls: 0,
-      pending: "plan",
+    const second = await daemon.missions.submitMessage(missionId, {
+      mode: "queue",
+      operationId: "plan-reply-second",
+      text: "Include tests",
     });
-    const paused = await daemon.missions.pause(missionId, {
-      expectedRevision: daemon.missions.get(missionId).revision,
-      operationId: "outbox-pause",
-    });
-    expect(daemon.store.queue.get("plan-msg")?.state).toBe("accepted");
-    await daemon.missions.resume(missionId, {
-      expectedRevision: paused.revision,
-      operationId: "outbox-resume",
-    });
-    const restarted = await waitFor(
-      () => ctx.runtimes[1],
-      (runtime) =>
-        runtime?.submitted.some((entry) => entry.id === "after-edit") ?? false
-    );
+    await nativelyQueued(daemon, second.id);
     expect({
       mode: daemon.missions.get(missionId).executionMode,
-      native: restarted?.interactionModes,
-      order: restarted?.submitted.map((entry) =>
-        entry.id.startsWith("sys:") ? "sys" : entry.id
-      ),
+      native: orchestrator.interactionModes,
+      order: orchestrator.submitted
+        .filter((item) => [first.id, second.id].includes(item.id))
+        .map((item) => [item.id, item.mode, item.text]),
+      plan: daemon.missions.snapshot(missionId).plans[0]?.actionable,
     }).toStrictEqual({
       mode: "plan",
       native: ["spec"],
-      order: ["sys", "plan-msg", "after-edit"],
+      order: [
+        [first.id, "steer", first.text],
+        [second.id, "queue", second.text],
+      ],
+      plan: true,
     });
+    daemon.missions.decidePlan(missionId, { approve: true, planRevision: 1 });
+    await expect(decision).resolves.toBeTruthy();
+    expect(daemon.missions.get(missionId).executionMode).toBe("work");
   });
 
-  it("keeps a failed native mode switch pending and retries it before delivery", async () => {
-    const ctx = await startMission();
-    const { daemon, missionId, orchestrator } = ctx;
-    orchestrator.consume(`${missionId}:goal`);
-    let failing = true;
-    orchestrator.failInteractionMode = () => failing;
-    await daemon.missions.submitMessage(missionId, {
-      executionMode: "plan",
-      mode: "steer",
-      operationId: "switch-msg",
-      text: "Plan this",
-    });
-    await waitFor(
-      () => daemon.log.replay(missionId, 0),
-      (events) =>
-        events.some(
-          (event) =>
-            event.type === "notice" &&
-            event.data.notice.message.includes("Could not switch")
-        )
-    );
-    const held = daemon.missions.get(missionId);
-    const heldState = daemon.store.queue.get("switch-msg")?.state;
-    failing = false;
-    await daemon.missions.submitMessage(missionId, {
-      mode: "steer",
-      operationId: "switch-next",
-      text: "Next",
-    });
-    await nativelyQueued(daemon, "switch-msg");
-    expect({
-      after: daemon.missions.get(missionId).executionMode,
-      held: [held.executionMode, held.pendingExecutionMode, heldState],
-      native: orchestrator.interactionModes,
-    }).toStrictEqual({
-      after: "plan",
-      held: ["work", "plan", "accepted"],
-      native: ["spec"],
-    });
-  });
+  it.each([false, true])(
+    "ignores legacy mode fields in duplicate message identity, journal=%s",
+    async (journaled) => {
+      const { daemon, missionId, orchestrator } = await startMission();
+      orchestrator.consume(`${missionId}:goal`);
+      const goal = daemon.store.queue.get(`${missionId}:goal`);
+      if (!goal) {
+        throw new Error("Missing goal receipt");
+      }
+      const legacy = {
+        ...goal,
+        executionMode: "plan",
+        id: "legacy-mode-message",
+        text: "Keep the public behavior",
+      };
+      daemon.store.queue.put(legacy);
+      if (journaled) {
+        daemon.journal.recordCompleted(
+          {
+            detail: {
+              agentId: legacy.agentId,
+              executionMode: "plan",
+              mode: legacy.mode,
+              text: legacy.text,
+            },
+            id: legacy.id,
+            kind: "mission.message",
+            missionId,
+          },
+          legacy
+        );
+      }
+      const request = {
+        mode: legacy.mode,
+        operationId: legacy.id,
+        text: legacy.text,
+      };
+      const duplicate = await daemon.missions.submitMessage(missionId, request);
+      expect(duplicate).toMatchObject({ id: legacy.id, state: "sent" });
+      expect(duplicate).not.toHaveProperty("executionMode");
+      expect(orchestrator.submitted.map((item) => item.id)).toStrictEqual([
+        `${missionId}:goal`,
+      ]);
+      await expect(
+        daemon.missions.submitMessage(missionId, {
+          ...request,
+          text: "Changed",
+        })
+      ).rejects.toThrow(
+        "This operation ID was already used for another message"
+      );
+    }
+  );
 
   it("clears live plan approvals left by a crashed daemon", async () => {
-    const ctx = await startMission(undefined, { executionMode: "plan" });
+    const ctx = await startMission(undefined, {
+      goal: "Add a greeting file. Plan it first.",
+    });
     const { daemon, missionId, orchestrator } = ctx;
     proposePlan(orchestrator);
     const [live] = daemon.missions.snapshot(missionId).plans;
@@ -1138,7 +1133,9 @@ describe("mission service", () => {
   });
 
   it("ends a plan approval with its native request and asks for a fresh one after resume", async () => {
-    const ctx = await startMission(undefined, { executionMode: "plan" });
+    const ctx = await startMission(undefined, {
+      goal: "Add a greeting file. Plan it first.",
+    });
     const { daemon, missionId, orchestrator } = ctx;
     const decision = proposePlan(orchestrator);
     const paused = await daemon.missions.pause(missionId, {
@@ -1607,7 +1604,9 @@ describe("mission service", () => {
   });
 
   it("uses only the latest plan and enforces read-only worker assignments", async () => {
-    const ctx = await startMission(undefined, { executionMode: "plan" });
+    const ctx = await startMission(undefined, {
+      goal: "Add a greeting file. Plan it first.",
+    });
     await ctx.orchestrator.tool("dispatch_worker", {
       instructions: "Analyze only",
       needsWrite: false,

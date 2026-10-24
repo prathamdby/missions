@@ -32,7 +32,8 @@ const waitStatus = async (
 ) =>
   await pollUntil(
     () => Promise.resolve(daemon.missions.get(missionId)),
-    (mission) => statuses.includes(mission.status),
+    (mission) =>
+      statuses.includes(mission.status) || mission.lastError !== null,
     Date.now() + STEP_MS,
     500
   );
@@ -58,8 +59,7 @@ describe("live mission", () => {
         throw new Error("project not added");
       }
       const created = await daemon.missions.create({
-        autonomy: "high",
-        goal: "Append a line containing exactly `world` to README.md. Keep the plan to one step and do the edit yourself without dispatching Workers. Do not run any commands.",
+        goal: "Append a line containing exactly `world` to README.md. Plan the change before touching anything. Keep the plan to one step and do the edit yourself without dispatching Workers. Do not run any commands.",
         operationId: "live-mission-1",
         orchestrator: MODEL,
         projectId: added.project.id,
@@ -72,6 +72,7 @@ describe("live mission", () => {
         "failed",
         "interrupted",
       ]);
+      expect(proposed.lastError).toBeNull();
       expect(proposed.status).toBe("awaiting_approval");
       await expect(
         readFile(path.join(repo, "README.md"), "utf-8")

@@ -748,8 +748,8 @@ export class AgentRuntime {
       blockOnMcpLoad,
     } = this.options;
     const response = await client.initializeSession({
-      // SDK sessions always ask: the broker applies the user's autonomy, so
-      // High cannot skip plan/publish gates through prompt-skipping.
+      // Keep SDK autonomyLevel off: only the broker enforces the fixed High
+      // policy. SDK high would bypass it, breaking Plan mode and Pause.
       autonomyLevel: "off" as never,
       cwd,
       machineId: "default",

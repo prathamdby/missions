@@ -40,7 +40,6 @@ const boot = async (retainEventsPerStream?: number) => {
     throw new Error("project not added");
   }
   const snapshot = await daemon.missions.create({
-    autonomy: "high",
     goal: "Benchmark",
     operationId: "bench-mission",
     orchestrator: MODEL,

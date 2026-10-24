@@ -25,7 +25,6 @@ const setup = async () => {
     journal: new OperationJournal(store, new EventLog(store)),
     settings: () => ({
       cleanupAfterMerge: false,
-      defaultAutonomy: "medium",
       defaultWorkspaceMode: "new_worktree",
       maxConcurrentWorkers: 2,
       orchestrator: { modelId: "m", reasoningEffort: null },

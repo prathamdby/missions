@@ -5,6 +5,8 @@
  */
 export type Scenario = "blocked" | "default" | "explore" | "rate_limit";
 
+export const PLAN_REQUEST = /\b(?:plan|scope|review) (?:it |this )?first\b/iu;
+
 const RATE_LIMIT = /rate limit/iu;
 const BLOCKED = /\bblocked\b/iu;
 const EXPLORE = /\bflak(?:y|es)\b/iu;

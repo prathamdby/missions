@@ -70,13 +70,9 @@ test("settings persist across reload and recover after a failed save", async ({
   page,
 }) => {
   await page.goto("/settings");
-  const low = page.getByTestId("settings-autonomy-low");
-  await expect(low).toBeEnabled();
-  const initial = await page
-    .locator('input[name="default-autonomy"]:checked')
-    .inputValue();
-  const next = initial === "low" ? "medium" : "low";
-  const radio = page.getByTestId(`settings-autonomy-${next}`);
+  const cleanup = page.getByTestId("settings-cleanup-after-merge");
+  await expect(cleanup).toBeEnabled();
+  const initial = await cleanup.isChecked();
   await page.route("**/api/daemon/v2/settings", async (route) => {
     if (route.request().method() !== "PATCH") {
       await route.continue();
@@ -90,23 +86,18 @@ test("settings persist across reload and recover after a failed save", async ({
       status: 503,
     });
   });
-  await page.locator("label").filter({ has: radio }).click();
+  await cleanup.click();
   await expect(
     page.getByText("Could not save the setting", { exact: true })
   ).toBeVisible();
-  await expect(page.getByTestId(`settings-autonomy-${initial}`)).toBeChecked();
+  await expect(cleanup).toBeChecked({ checked: initial });
   await page.unroute("**/api/daemon/v2/settings");
-  await page.locator("label").filter({ has: radio }).click();
-  await expect(radio).toBeChecked();
+  await cleanup.click();
+  await expect(cleanup).toBeChecked({ checked: !initial });
   await page.reload();
-  await expect(radio).toBeChecked();
-  await page
-    .locator("label")
-    .filter({
-      has: page.getByTestId(`settings-autonomy-${initial}`),
-    })
-    .click();
-  await expect(page.getByTestId(`settings-autonomy-${initial}`)).toBeChecked();
+  await expect(cleanup).toBeChecked({ checked: !initial });
+  await cleanup.click();
+  await expect(cleanup).toBeChecked({ checked: initial });
 });
 
 test("queued messages can be edited, switched and removed while an agent waits", async ({
@@ -118,7 +109,6 @@ test("queued messages can be edited, switched and removed while an agent waits",
   const mission = await createMission(
     request,
     project.id,
-    "medium",
     "Fix flaky retry tests"
   );
   await page.goto(`/missions/${mission.id}`);

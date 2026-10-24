@@ -2,7 +2,6 @@ import { expect, test } from "@playwright/test";
 
 import {
   addProject,
-  chooseExecutionMode,
   createMission,
   gitRepo,
   missionSnapshot,
@@ -21,7 +20,6 @@ test("a Work mission goes from goal to completion without a plan gate", async ({
   await page.goto("/");
   await page.getByRole("button", { exact: true, name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
-  await expect(page.getByTestId("execution-mode")).toContainText("Work");
   await page
     .getByRole("textbox", { name: "Mission goal" })
     .fill("Write a NOTES.md file summarizing the project");
@@ -42,10 +40,9 @@ test("a Plan mission goes from goal to plan approval to completion", async ({
   await page.goto("/");
   await page.getByRole("button", { exact: true, name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
-  await chooseExecutionMode(page, "Plan");
   await page
     .getByRole("textbox", { name: "Mission goal" })
-    .fill("Write a NOTES.md file summarizing the project");
+    .fill("Write a NOTES.md file summarizing the project. Plan it first.");
   await page.getByRole("button", { name: "Start mission" }).click();
   await expect(page).toHaveURL(/\/missions\//u);
 
@@ -59,22 +56,6 @@ test("a Plan mission goes from goal to plan approval to completion", async ({
     mission: { status: string };
   };
   expect(snapshot.mission.status).toBe("completed");
-});
-
-test("autonomy off asks before the Worker writes", async ({
-  page,
-  request,
-}) => {
-  const project = await addProject(request, gitRepo("permission"));
-  const mission = await createMission(request, project.id, "off");
-  await page.goto(`/missions/${mission.id}`);
-  await page.getByTestId("plan-approve").click({ timeout: 30_000 });
-  const allow = page.getByTestId("permission-allow-once");
-  await expect(allow).toBeVisible({ timeout: 30_000 });
-  await allow.click();
-  await expect(page.getByTestId("mission-complete")).toBeVisible({
-    timeout: 30_000,
-  });
 });
 
 test("sending changes back revises the plan", async ({ page, request }) => {

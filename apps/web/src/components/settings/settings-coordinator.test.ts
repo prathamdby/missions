@@ -15,7 +15,6 @@ import { SettingsCoordinator } from "./settings-coordinator";
 
 const initial: Settings = {
   cleanupAfterMerge: false,
-  defaultAutonomy: "medium",
   defaultWorkspaceMode: "new_worktree",
   maxConcurrentWorkers: 2,
   orchestrator: { modelId: "planner", reasoningEffort: "high" },
@@ -55,9 +54,9 @@ const persist = () => Promise.reject<boolean>(new Error("unexpected"));
 describe("settings workflows", () => {
   it("locks synchronously and serializes same-tick controls so responses cannot overwrite newer settings", async () => {
     const { commits, coordinator, remote } = setup();
-    const first = coordinator.save({ defaultAutonomy: "high" });
+    const first = coordinator.save({ maxConcurrentWorkers: 3 });
     const second = coordinator.save({ cleanupAfterMerge: true });
-    const third = coordinator.save({ defaultAutonomy: "low" });
+    const third = coordinator.save({ maxConcurrentWorkers: 1 });
     expect({
       pending: coordinator.getSnapshot(),
       requests: remote.requests.length,
@@ -70,15 +69,15 @@ describe("settings workflows", () => {
     remote.requests[2]?.result.resolve(undefined);
     const savedThird = await third;
     expect({
-      autonomy: commits.map((entry) => entry.defaultAutonomy),
       cleanup: commits.at(-1)?.cleanupAfterMerge,
       pending: coordinator.getSnapshot(),
       saved: [savedFirst, savedSecond, savedThird],
+      workers: commits.map((entry) => entry.maxConcurrentWorkers),
     }).toStrictEqual({
-      autonomy: ["high", "high", "low"],
       cleanup: true,
       pending: false,
       saved: [true, true, true],
+      workers: [3, 3, 1],
     });
   });
 

@@ -4,10 +4,10 @@
  * personal skill directory) and is supplied once per session and version, on
  * entry to Plan mode, as LLM-only context that does not start a model loop.
  */
-export const PLAN_GUIDANCE_VERSION = "autoplan-2026-10.1";
+export const PLAN_GUIDANCE_VERSION = "autoplan-2026-10.2";
 
 export const PLAN_GUIDANCE = `[Missions planning guidance ${PLAN_GUIDANCE_VERSION}]
-You are now in Plan mode. Plan mode is analysis only: every agent in this mission is read-only until the user approves your plan. Read, search and run read-only commands freely; you may dispatch read-only Worker research with missions.dispatch_worker (needsWrite=false). Do not edit files, run commands with side effects, commit, push or publish. When the plan is ready, present it by calling ExitSpecMode with the full plan Markdown (and a short title). The user approves or requests changes in the app; approval returns you to Work mode. If changes are requested, revise and call ExitSpecMode again.
+You are now in Plan mode. Plan mode is analysis only: every agent in this mission is read-only until the user approves your plan. Read, search and run read-only commands freely; you may dispatch read-only Worker research with missions.dispatch_worker (needsWrite=false). Do not edit files, run commands with side effects, commit, push or publish. When the plan is ready, present it by calling ExitSpecMode with the full plan Markdown (and a short title). The user approves or requests changes in the app; approval returns you to Work mode. If changes are requested, revise and call ExitSpecMode again. If the user asks to skip or stop planning, immediately present a minimal plan with ExitSpecMode, without further research or questions, so one approval returns the mission to Work mode.
 
 Triage first
 - Defaults: the mission workspace, standard depth. Quick or sketch requests use only Shape and Risks with the always-on lenses. Thorough, risky or migration work uses deep depth, which wins over quick. A named area scopes the evidence.

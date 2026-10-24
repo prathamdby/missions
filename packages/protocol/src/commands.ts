@@ -1,9 +1,7 @@
 import { z } from "zod";
 
 import {
-  AutonomySchema,
   DeliveryModeSchema,
-  ExecutionModeSchema,
   IdSchema,
   OperationIdSchema,
   RevisionSchema,
@@ -16,9 +14,6 @@ import {
 import { WorkspaceRequestSchema } from "./workspaces";
 
 export const CreateMissionRequestSchema = z.strictObject({
-  autonomy: AutonomySchema.optional(),
-  /** Work (default) acts directly; Plan starts read-only planning. */
-  executionMode: ExecutionModeSchema.optional(),
   goal: z.string().trim().min(1).max(20_000),
   operationId: OperationIdSchema,
   orchestrator: AgentModelSettingsSchema.optional(),
@@ -30,7 +25,6 @@ export const CreateMissionRequestSchema = z.strictObject({
 export type CreateMissionRequest = z.input<typeof CreateMissionRequestSchema>;
 
 export const UpdateMissionRequestSchema = z.strictObject({
-  autonomy: AutonomySchema.optional(),
   expectedRevision: RevisionSchema,
   orchestrator: AgentModelSettingsSchema.optional(),
   title: z.string().trim().min(1).max(200).optional(),
@@ -41,11 +35,6 @@ export type UpdateMissionRequest = z.infer<typeof UpdateMissionRequestSchema>;
 export const SubmitMessageRequestSchema = z.strictObject({
   /** Defaults to the Orchestrator. */
   agentId: IdSchema.optional(),
-  /**
-   * Requests a mode for the main agent's work on this message. The transition
-   * applies after earlier admitted work; omitted keeps the current mode.
-   */
-  executionMode: ExecutionModeSchema.optional(),
   mode: DeliveryModeSchema,
   operationId: OperationIdSchema,
   text: z.string().trim().min(1).max(100_000),
