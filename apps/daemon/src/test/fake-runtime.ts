@@ -9,6 +9,7 @@ import type {
   RuntimeStartResult,
   SubmitOptions,
 } from "../sdk/agent-runtime";
+import type { ComposerSkill, SdkCommand } from "../sdk/composer-catalog";
 import { NativeQueueTracker } from "../sdk/native-queue";
 
 /** Scripted stand-in for a Droid session: records submissions and lets tests drive events. */
@@ -45,6 +46,15 @@ export class FakeRuntime implements RuntimeHandle {
     this.queue = new NativeQueueTracker((entry) =>
       options.onEvent({ entry, type: "queue" })
     );
+  }
+
+  readonly skills: ComposerSkill[] = [];
+  readonly commands: SdkCommand[] = [];
+  listSkills() {
+    return Promise.resolve(this.skills);
+  }
+  listCommands() {
+    return Promise.resolve(this.commands);
   }
 
   updateModel(choice: AgentModelSettings): Promise<AgentModelSettings> {
@@ -110,7 +120,12 @@ export class FakeRuntime implements RuntimeHandle {
     return Promise.resolve("removed" as const);
   }
 
-  edit(id: string, replacementId: string, text: string) {
+  edit(
+    id: string,
+    replacementId: string,
+    text: string,
+    options: SubmitOptions = {}
+  ) {
     return this.remove(id).then(async (outcome) => {
       if (outcome !== "removed") {
         return outcome === "already_sent"
@@ -120,7 +135,8 @@ export class FakeRuntime implements RuntimeHandle {
       await this.submit(
         replacementId,
         text,
-        this.queue.get(id)?.mode ?? "queue"
+        this.queue.get(id)?.mode ?? "queue",
+        options
       );
       return "replaced" as const;
     });

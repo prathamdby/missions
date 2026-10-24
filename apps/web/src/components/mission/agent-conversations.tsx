@@ -24,10 +24,7 @@ const AgentState = ({ agent }: { agent: Agent }) => {
   const waiting = waitingOf(agent);
   if (waiting && SELF_WAITS.has(waiting)) {
     return (
-      <span
-        className="flex items-center gap-tight text-2xs leading-xs text-text-tertiary"
-        title={WAITING[waiting].long}
-      >
+      <span className="flex items-center gap-tight text-2xs leading-xs text-text-tertiary">
         <DotLoader label={WAITING[waiting].long} tone="accent" />
         {WAITING[waiting].short}
       </span>

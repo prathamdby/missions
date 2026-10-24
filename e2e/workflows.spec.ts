@@ -128,6 +128,9 @@ test("queued messages can be edited, switched and removed while an agent waits",
     .fill("Keep public behavior and add tests");
   await queue.getByRole("button", { exact: true, name: "Save" }).click();
   await expect(
+    queue.getByRole("textbox", { name: "Edit queued message" })
+  ).toHaveCount(0);
+  await expect(
     queue.getByText("Keep public behavior and add tests", { exact: true })
   ).toBeVisible();
   await queue
@@ -186,3 +189,49 @@ test("completed work commits and pushes only to a local bare remote", async ({
   await page.getByTestId("archive-mission").click();
   await expect(page.getByTestId("composer-input")).toBeDisabled();
 });
+
+test("Radix default workspace selection persists across reload", async ({
+  page,
+}) => {
+  await page.goto("/settings");
+  const workspace = page.getByRole("combobox", { name: "Default workspace" });
+  const initial = await workspace.textContent();
+  const next = initial?.includes("New worktree")
+    ? "Current checkout"
+    : "New worktree";
+  await workspace.click();
+  await page.getByRole("option", { exact: true, name: next }).click();
+  await expect(workspace).toContainText(next);
+  await page.reload();
+  await expect(workspace).toContainText(next);
+  await workspace.click();
+  await page
+    .getByRole("option", {
+      exact: true,
+      name: next === "New worktree" ? "Current checkout" : "New worktree",
+    })
+    .click();
+});
+
+test("the disabled settings switch has a keyboard hint", async ({ page }) => {
+  await page.goto("/settings");
+  const copy = page.getByRole("switch", {
+    exact: true,
+    name: "Copy .env files",
+  });
+  await expect(copy).toBeDisabled();
+  await copy.locator("..").focus();
+  await expect(page.getByRole("tooltip")).toHaveText("Not available yet");
+});
+
+for (const { name, reason } of [
+  { name: "Restart", reason: "Restart from terminal" },
+  { name: "Replace", reason: "Set key, then restart" },
+  { name: "missions/", reason: "Not available yet" },
+]) {
+  test(`settings ${name} has a terse hover hint`, async ({ page }) => {
+    await page.goto("/settings");
+    await page.getByRole("button", { exact: true, name }).hover();
+    await expect(page.getByRole("tooltip")).toHaveText(reason);
+  });
+}

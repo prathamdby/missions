@@ -41,6 +41,7 @@ const mission: Mission = {
 };
 const queue: QueueItem = {
   agentId: "agent",
+  attachments: [],
   createdAt: AT,
   error: null,
   id: "q",

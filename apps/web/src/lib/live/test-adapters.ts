@@ -114,6 +114,7 @@ export const queueItem = (
   state: QueueItem["state"]
 ): QueueItem => ({
   agentId: "a-1",
+  attachments: [],
   createdAt: AT,
   error: null,
   id: "queue-1",

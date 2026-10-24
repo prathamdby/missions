@@ -4,13 +4,9 @@ import type {
 } from "@missions/protocol/settings";
 import { describe, expect, it } from "vitest";
 
+import { settingsForModel } from "@/lib/mission/model-settings";
+
 import { LocationDraft } from "./location-draft";
-import {
-  DEFAULT_EFFORT,
-  selectableModels,
-  selectEffort,
-  selectModel,
-} from "./model-rules";
 import { SettingsCoordinator } from "./settings-coordinator";
 
 const initial: Settings = {
@@ -171,34 +167,27 @@ describe("settings workflows", () => {
     });
   });
 
-  it("model defaults validate effort support without dropping unknown selected values", () => {
+  it("model defaults validate effort support and preserve supported preferences", () => {
     const model = {
       defaultReasoningEffort: "high" as const,
       displayName: "Next",
       id: "next",
       supportedReasoningEfforts: ["high" as const, "low" as const],
     };
-    const models = [model];
     const unknown = { modelId: "unavailable", reasoningEffort: "max" as const };
-    expect(
-      selectableModels(models, unknown).map((entry) => entry.id)
-    ).toStrictEqual(["unavailable", "next"]);
-    expect(selectModel(models, "next")).toStrictEqual({
+    expect(settingsForModel(model, unknown)).toStrictEqual({
       modelId: "next",
       reasoningEffort: "high",
     });
     expect(
-      selectModel([{ ...model, supportedReasoningEfforts: [] }], "next")
+      settingsForModel(model, { ...unknown, reasoningEffort: "low" })
+    ).toStrictEqual({
+      modelId: "next",
+      reasoningEffort: "low",
+    });
+    expect(
+      settingsForModel({ ...model, supportedReasoningEfforts: [] }, unknown)
         .reasoningEffort
     ).toBeNull();
-    expect([
-      selectEffort(undefined, unknown, "missing"),
-      selectEffort(model, unknown, "low"),
-      selectEffort(model, unknown, DEFAULT_EFFORT),
-    ]).toStrictEqual([
-      unknown,
-      { modelId: "unavailable", reasoningEffort: "low" },
-      { modelId: "unavailable", reasoningEffort: null },
-    ]);
   });
 });

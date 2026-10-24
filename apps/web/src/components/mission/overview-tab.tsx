@@ -303,10 +303,7 @@ const AgentStatusCell = ({ row }: { row: AgentRow }) => {
   }
   if (row.waiting) {
     return (
-      <span
-        className="flex min-w-16 shrink-0 justify-end text-right font-mono text-2xs leading-xs whitespace-nowrap text-text-tertiary"
-        title={WAITING[row.waiting].long}
-      >
+      <span className="flex min-w-16 shrink-0 justify-end text-right font-mono text-2xs leading-xs whitespace-nowrap text-text-tertiary">
         {WAITING[row.waiting].short}
       </span>
     );

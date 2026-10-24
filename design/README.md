@@ -48,3 +48,7 @@ Do not disable a rule to make code pass. Add a token, a component variant, or a 
 
 - `fixture-app/` is linted with the real web config and theme. Each `src/cases/invalid` file must fail for exactly the rule named in its `// expect:` header. Each `src/cases/valid` file must pass everything. Its config file name keeps `ultracite check` from discovering it, and the root config ignores the directory.
 - `css/` holds valid and invalid stylesheets for the CSS contract.
+
+## Diagrams
+
+Pele 1.10.0 is pinned, with an exact `minimumReleaseAgeExclude` entry because the integration was checked against this release's lazy mount API, published on October 24, 2026. The exception does not permit other versions. Its MIT package has no runtime dependencies. `aliases.pele` contains only color-token references and generates the scoped `.pele` variables. Fonts inherit from the host. Links, images, icons, and zoom are disabled, and parsed SVG is filtered before importing it into the document.

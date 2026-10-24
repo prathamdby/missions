@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 export const Select = SelectPrimitive.Root;
 export const SelectValue = SelectPrimitive.Value;
 
-type SelectAppearance = "default" | "model" | "thinking";
+type SelectAppearance = "default" | "model" | "thinking" | "settings";
 interface Appearance {
   appearance?: SelectAppearance;
 }
@@ -50,6 +50,8 @@ export const SelectTrigger = ({
         appearance === "default"
           ? "inline-flex h-7 min-w-0 cursor-pointer items-center justify-between gap-sm rounded-sm bg-surface-overlay px-md text-sm text-text shadow-[inset_0_0_0_1px_var(--color-border)] transition-colors duration-fast hover:bg-surface-active focus-visible:shadow-focus disabled:text-text-disabled data-[placeholder]:text-text-tertiary [&>span]:truncate"
           : "flex h-7 shrink-0 cursor-pointer items-center gap-sm rounded-sm bg-surface-raised px-control text-text shadow-button transition-colors duration-fast outline-none hover:bg-surface-overlay focus-visible:shadow-focus disabled:cursor-not-allowed data-[state=open]:bg-surface-active data-[state=open]:shadow-button-active [&>span]:min-w-0 [&>span]:truncate",
+        appearance === "settings" &&
+          "h-7.5 w-35 bg-surface-overlay text-xs leading-sm",
         appearance === "model" &&
           "w-29 justify-between font-mono text-2xs leading-xs font-regular",
         appearance === "thinking" &&

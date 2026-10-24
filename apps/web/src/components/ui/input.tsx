@@ -162,3 +162,8 @@ export const FieldHint = ({
     {...props}
   />
 );
+
+/** Hidden native file picker, opened by an accessible toolbar action. */
+export const FileInput = (
+  props: Omit<ComponentProps<"input">, "type" | "hidden">
+) => <input {...props} hidden type="file" />;

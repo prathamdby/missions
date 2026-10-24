@@ -42,7 +42,7 @@ export interface Manifest {
   spacingBase: TokenEntry;
   tokens: Record<TokenGroup, Record<string, TokenEntry>>;
   typography: Record<string, TypographyRole>;
-  aliases: { color: Record<string, string> };
+  aliases: { color: Record<string, string>; pele?: Record<string, string> };
   externalVariables: { exact: string[]; prefixes: string[] };
 }
 
@@ -190,6 +190,14 @@ export const parseManifest = (raw: unknown): Manifest => {
     }
     requireRef(tokens, "color", target, `aliases.color.${alias}`);
   }
+  if (Object.hasOwn(aliases, "pele")) {
+    for (const [alias, target] of entriesOf(
+      recordAt(aliases.pele, "aliases.pele")
+    )) {
+      validateName(alias, `aliases.pele.${alias}`);
+      requireRef(tokens, "color", target, `aliases.pele.${alias}`);
+    }
+  }
   const typography = recordAt(own(raw, "typography"), "typography");
   for (const [name, value] of Object.entries(typography)) {
     const where = `typography.${name}`;
@@ -230,6 +238,9 @@ export const definedVariables = (manifest: Manifest): Set<string> => {
   }
   for (const [alias] of aliasEntries(manifest)) {
     names.add(`--color-${alias}`);
+  }
+  for (const alias of Object.keys(manifest.aliases.pele ?? {})) {
+    names.add(`--pele-${alias}`);
   }
   return names;
 };

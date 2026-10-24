@@ -34,7 +34,7 @@ import { ListLabel, ListOption, Listbox } from "@/components/ui/list-row";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/selection";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Hint } from "@/components/ui/tooltip";
+import { Hint, HintTarget } from "@/components/ui/tooltip";
 import { errorMessage } from "@/lib/api/api-error";
 import { useFsBrowse, useProjects } from "@/lib/api/queries";
 import { projectLabel, tildePath } from "@/lib/format";
@@ -415,8 +415,8 @@ const SelectionBand = ({
 const ShowHidden = () => {
   const id = useId();
   return (
-    <Hint label="The daemon hides dot-folders for now">
-      <span className="flex items-center gap-control">
+    <Hint label="Hidden dot-folders">
+      <HintTarget appearance="control">
         <Switch disabled id={id} />
         <label
           className="text-sm leading-sm font-book tracking-tight text-text"
@@ -424,7 +424,7 @@ const ShowHidden = () => {
         >
           Show hidden
         </label>
-      </span>
+      </HintTarget>
     </Hint>
   );
 };

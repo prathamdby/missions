@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { AttachmentIdsSchema } from "./attachments";
 import {
   DeliveryModeSchema,
   IdSchema,
@@ -14,6 +15,7 @@ import {
 import { WorkspaceRequestSchema } from "./workspaces";
 
 export const CreateMissionRequestSchema = z.strictObject({
+  attachmentIds: AttachmentIdsSchema.optional(),
   goal: z.string().trim().min(1).max(20_000),
   operationId: OperationIdSchema,
   orchestrator: AgentModelSettingsSchema.optional(),
@@ -32,13 +34,20 @@ export const UpdateMissionRequestSchema = z.strictObject({
 });
 export type UpdateMissionRequest = z.infer<typeof UpdateMissionRequestSchema>;
 
-export const SubmitMessageRequestSchema = z.strictObject({
-  /** Defaults to the Orchestrator. */
-  agentId: IdSchema.optional(),
-  mode: DeliveryModeSchema,
-  operationId: OperationIdSchema,
-  text: z.string().trim().min(1).max(100_000),
-});
+export const SubmitMessageRequestSchema = z
+  .strictObject({
+    /** Defaults to the Orchestrator. */
+    agentId: IdSchema.optional(),
+    attachmentIds: AttachmentIdsSchema.optional(),
+    mode: DeliveryModeSchema,
+    operationId: OperationIdSchema,
+    text: z.string().trim().max(100_000),
+  })
+  .refine(
+    (request) =>
+      request.text.length > 0 || (request.attachmentIds?.length ?? 0) > 0,
+    "Add a message or an attachment"
+  );
 export type SubmitMessageRequest = z.infer<typeof SubmitMessageRequestSchema>;
 
 export const ChangeQueueModeRequestSchema = z.strictObject({

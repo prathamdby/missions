@@ -69,3 +69,26 @@ export const Hint = ({
     <TooltipContent side={side}>{label}</TooltipContent>
   </Tooltip>
 );
+
+/** Keyboard target for a hint explaining a disabled or read-only control. */
+export const HintTarget = ({
+  appearance,
+  children,
+  inactive = true,
+  ...props
+}: Omit<ComponentProps<"span">, "role" | "tabIndex" | "className"> & {
+  appearance?: "control";
+  inactive?: boolean;
+}) => (
+  <span
+    aria-disabled={inactive || undefined}
+    className={
+      appearance === "control" ? "flex items-center gap-control" : "inline-flex"
+    }
+    role={inactive ? "button" : undefined}
+    tabIndex={inactive ? 0 : undefined}
+    {...props}
+  >
+    {children}
+  </span>
+);

@@ -131,3 +131,93 @@ test("earlier transcript failures stay visible and retry loads the missing page"
     { before: "200", limit: "100" },
   ]);
 });
+
+test("thought markdown and Pele render with inherited colors and fall back on invalid input", async ({
+  page,
+  request,
+}, info) => {
+  const project = await addProject(request, gitRepo("diagrams"));
+  const mission = await createMission(request, project.id);
+  await expect
+    .poll(
+      async () =>
+        MissionSnapshotSchema.parse(await missionSnapshot(request, mission.id))
+          .mission.status,
+      { timeout: 30_000 }
+    )
+    .toBe("awaiting_approval");
+  const snapshot = MissionSnapshotSchema.parse(
+    await missionSnapshot(request, mission.id)
+  );
+  const agentId = snapshot.agents[0]?.id;
+  if (!agentId) {
+    throw new Error("Missing scripted agent");
+  }
+  const item = {
+    agentId,
+    createdAt: snapshot.mission.createdAt,
+    isError: false,
+    missionId: mission.id,
+    requestId: null,
+    toolName: null,
+    toolUseId: null,
+  };
+  snapshot.transcript = [
+    TranscriptItemSchema.parse({
+      ...item,
+      id: "diagram-thought",
+      kind: "thinking",
+      seq: 100,
+      text: "**Reasoning** about the graph",
+    }),
+    TranscriptItemSchema.parse({
+      ...item,
+      id: "diagram-valid",
+      kind: "assistant",
+      seq: 101,
+      text: "```mermaid\nflowchart LR\nA[Input] --> B[Output]\n```",
+    }),
+    TranscriptItemSchema.parse({
+      ...item,
+      id: "diagram-invalid",
+      kind: "assistant",
+      seq: 102,
+      text: "```mermaid\nnot a diagram\n```",
+    }),
+  ];
+  await page.route(
+    `**/api/daemon/v2/missions/${mission.id}/snapshot`,
+    (route) => route.fulfill({ json: snapshot })
+  );
+  await page.goto(`/missions/${mission.id}`);
+  await page.getByRole("button", { exact: true, name: "Thought" }).click();
+  await expect(
+    page.locator("strong").filter({ hasText: "Reasoning" })
+  ).toBeVisible();
+  const diagram = page.locator('[data-slot="diagram"] svg');
+  await expect(diagram).toBeVisible();
+  await expect(diagram).toContainText("Input");
+  await expect(
+    page.getByText("Diagram unavailable", { exact: true })
+  ).toBeVisible();
+  await expect(
+    page.locator("pre").filter({ hasText: "not a diagram" })
+  ).toBeVisible();
+  await expect(page.getByText(/No diagram type detected/u)).toHaveCount(0);
+  await expect(diagram.locator("a, image, foreignObject, script")).toHaveCount(
+    0
+  );
+  const dark = await diagram.evaluate((node) => getComputedStyle(node).color);
+  await page.screenshot({ path: info.outputPath("diagram-dark.png") });
+  await page.locator('[data-slot="diagram"]').evaluate((node) => {
+    node.style.setProperty("--color-text", "rgb(20, 20, 20)");
+    node.style.setProperty("--color-text-secondary", "rgb(80, 80, 80)");
+    node.style.setProperty("--color-surface-raised", "rgb(250, 250, 250)");
+    node.style.setProperty("--color-surface-overlay", "rgb(238, 238, 238)");
+    node.style.setProperty("--color-surface-active", "rgb(229, 229, 229)");
+    node.style.setProperty("--color-border-strong", "rgb(180, 180, 180)");
+  });
+  await expect(diagram).toHaveCSS("color", "rgb(20, 20, 20)");
+  expect(dark).not.toBe("rgb(20, 20, 20)");
+  await page.screenshot({ path: info.outputPath("diagram-light.png") });
+});

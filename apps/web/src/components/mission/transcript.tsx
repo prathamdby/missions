@@ -3,6 +3,7 @@
 import type { TranscriptItem } from "@missions/protocol/missions";
 import { useEffect } from "react";
 
+import { AttachmentPreview } from "@/components/composer/attachment-chips";
 import { AgentMessages } from "@/components/mission/agent-message";
 import { AssignmentCard } from "@/components/mission/assignment-card";
 import { EventLine } from "@/components/mission/chat-cards";
@@ -23,13 +24,40 @@ import type { TimelineEntry } from "@/lib/mission/timeline";
 import { markFirstOutput } from "@/lib/perf-marks";
 
 /** Paper user bubble: right-aligned, 480px max, overlay surface. */
-export const UserMessage = ({ text }: { text: string }) => (
-  <div className="max-w-120 self-end rounded-md bg-surface-overlay px-card py-control">
-    <p className="max-w-prose text-sm leading-chat font-book tracking-tight text-pretty break-words whitespace-pre-wrap text-text select-text">
-      {text}
-    </p>
-  </div>
-);
+export const UserMessage = ({
+  text,
+  requestId,
+}: {
+  text: string;
+  requestId?: string | null;
+}) => {
+  const { live, missionId } = useMission();
+  const attachments = requestId
+    ? (live.queue[requestId]?.attachments ?? [])
+    : [];
+  return (
+    <div className="max-w-120 self-end rounded-md bg-surface-overlay px-card py-control">
+      <p className="max-w-prose text-sm leading-chat font-book tracking-tight text-pretty break-words whitespace-pre-wrap text-text select-text">
+        {text}
+      </p>
+      {attachments.length ? (
+        <ul
+          aria-label="Message attachments"
+          className="flex flex-wrap gap-sm pt-sm"
+        >
+          {attachments.map((attachment) => (
+            <li key={attachment.id}>
+              <AttachmentPreview
+                attachment={attachment}
+                missionId={missionId}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+};
 
 /** Paper QAU: the worktree the mission runs in, under the goal. */
 export const WorkspaceLine = () => {
@@ -83,7 +111,9 @@ const Preview = ({
 const EntryBody = ({ entry }: { entry: TimelineEntry }) => {
   switch (entry.kind) {
     case "user": {
-      return <UserMessage text={entry.item.text} />;
+      return (
+        <UserMessage requestId={entry.item.requestId} text={entry.item.text} />
+      );
     }
     case "assistant": {
       return <Markdown className="max-w-prose">{entry.item.text}</Markdown>;

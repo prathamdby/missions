@@ -24,7 +24,7 @@ export type ComposerAction =
 
 interface ComposerActionInput {
   agents: readonly { status: AgentStatus }[];
-  draft: string;
+  hasDraft: boolean;
   pending: PendingControl;
   status: MissionStatus;
 }
@@ -69,7 +69,7 @@ const progressLabel = (
 };
 
 export const composerAction = (input: ComposerActionInput): ComposerAction => {
-  const { draft, pending, status } = input;
+  const { hasDraft, pending, status } = input;
   const capabilities = missionCapabilities(status);
   if (pending !== null) {
     return { kind: "progress", label: progressLabel(pending, status) };
@@ -83,7 +83,6 @@ export const composerAction = (input: ComposerActionInput): ComposerAction => {
       label: CONTINUES.has(status) ? "Resume" : "Retry",
     };
   }
-  const hasDraft = draft.trim() !== "";
   if (capabilities.message && hasDraft) {
     return { enabled: true, kind: "send" };
   }

@@ -26,9 +26,10 @@ import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
 import { reportMutationError } from "@/components/mission/report-error";
 import { useMissionCommand } from "@/components/mission/use-mission-command";
-import { Button } from "@/components/ui/button";
+import { Button, UnavailableButton } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
+import { Hint, HintTarget } from "@/components/ui/tooltip";
 import { api } from "@/lib/api/endpoints";
 import { useChanges, useGithubAuth } from "@/lib/api/queries";
 import { queryKeys } from "@/lib/api/query-keys";
@@ -152,26 +153,25 @@ const CommitCard = ({
         ) : null}
       </ChatCardBody>
       <ChatCardFooter>
-        <Button
-          data-testid="commit-submit"
-          disabled={commit.isPending || blocked || !message.trim()}
-          onClick={() =>
-            commit.mutate({
-              expectedChangesHash: changes.hash,
-              expectedHead: changes.head,
-              includePreExisting,
-              message: message.trim(),
-            })
-          }
-          title={
-            blocked
-              ? "Only files changed before the mission remain. Review and include them to commit."
-              : undefined
-          }
-          variant="primary"
-        >
-          {commit.isPending ? "Committing…" : "Commit"}
-        </Button>
+        <Hint disabled={!blocked} label="Include earlier changes">
+          <HintTarget inactive={blocked}>
+            <Button
+              data-testid="commit-submit"
+              disabled={commit.isPending || blocked || !message.trim()}
+              onClick={() =>
+                commit.mutate({
+                  expectedChangesHash: changes.hash,
+                  expectedHead: changes.head,
+                  includePreExisting,
+                  message: message.trim(),
+                })
+              }
+              variant="primary"
+            >
+              {commit.isPending ? "Committing…" : "Commit"}
+            </Button>
+          </HintTarget>
+        </Hint>
         <Button onClick={() => showPanel("changes")} variant="secondary">
           Review changes
         </Button>
@@ -369,13 +369,9 @@ const PrCard = ({ changes }: { changes: Changes | undefined }) => {
         </div>
       ) : null}
       <ChatCardFooter>
-        <Button
-          aria-disabled="true"
-          title="Review comments are not available from the daemon yet. Reply on GitHub or send the Orchestrator a message."
-          variant="primary"
-        >
+        <UnavailableButton reason="Not available yet" variant="primary">
           Address with droids
-        </Button>
+        </UnavailableButton>
         <Button
           data-testid="pr-refresh"
           disabled={sync.isPending}

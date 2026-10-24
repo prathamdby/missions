@@ -104,6 +104,13 @@ export const renderTokensCss = (manifest: Manifest): string => {
     "  --default-transition-timing-function: var(--ease-out);",
     "}"
   );
+  if (manifest.aliases.pele) {
+    lines.push("", ".pele {");
+    for (const [alias, target] of Object.entries(manifest.aliases.pele)) {
+      lines.push(`  --pele-${alias}: var(--color-${target});`);
+    }
+    lines.push("}");
+  }
   for (const [name, role] of Object.entries(manifest.typography)) {
     lines.push(
       "",
