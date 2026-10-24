@@ -62,7 +62,6 @@ export const startMission = async (booted: Booted, suffix = "1") => {
     throw new Error("project not added");
   }
   const snapshot = await booted.daemon.missions.create({
-    autonomy: "high",
     goal: "Add a greeting file",
     operationId: `create-mission-${suffix}`,
     orchestrator: MODEL,

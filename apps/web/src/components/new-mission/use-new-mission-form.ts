@@ -1,6 +1,6 @@
 "use client";
 
-import type { Autonomy, ExecutionMode } from "@missions/protocol/common";
+import type { ExecutionMode } from "@missions/protocol/common";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import type { Settings } from "@missions/protocol/settings";
 import { useState } from "react";
@@ -132,7 +132,6 @@ export const useNewMissionForm = () => {
   const [workspaceChoice, setWorkspaceChoice] =
     useState<PerProject<WorkspaceChoice> | null>(null);
   const [acknowledged, setAcknowledged] = useState<string | null>(null);
-  const [autonomyChoice, setAutonomyChoice] = useState<Autonomy | null>(null);
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("work");
   const [goal, setGoal] = useState("");
   const defaults = useDraftDefaults(evidence(settings));
@@ -147,11 +146,9 @@ export const useNewMissionForm = () => {
     (entry) => !entry.isMain
   );
 
-  const autonomy = autonomyChoice ?? settings.data?.defaultAutonomy ?? "medium";
   const newBranch = pick(newBranchChoice, projectId);
   const review = reviewMissionDraft({
     acknowledged,
-    autonomy,
     branch,
     branches: evidence(branches),
     checkout: evidence(checkout),
@@ -175,7 +172,6 @@ export const useNewMissionForm = () => {
   }
 
   return {
-    autonomy,
     branch,
     checkout,
     defaultBranch: resolveDefaultBranch(project, branches.data),
@@ -183,7 +179,6 @@ export const useNewMissionForm = () => {
     executionMode,
     goal,
     handleAcknowledgeDirty: () => setAcknowledged(review.dirtyKey),
-    handleAutonomyChange: setAutonomyChoice,
     handleBranchChange: (value: string) =>
       projectId && setBranchChoice({ projectId, value }),
     handleExecutionModeChange: setExecutionMode,

@@ -14,7 +14,6 @@ import type { MissionCommandTransport } from "./commands";
 
 const AT = "2026-01-01T00:00:00.000Z";
 const mission: Mission = {
-  autonomy: "medium",
   createdAt: AT,
   endedAt: null,
   epoch: 0,

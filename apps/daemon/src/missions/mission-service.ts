@@ -646,7 +646,6 @@ export class MissionService {
       return null;
     }
     return {
-      autonomy: mission.autonomy,
       canWrite:
         agent.role === "orchestrator" ||
         (agent.assignmentId !== null &&
@@ -850,7 +849,6 @@ export class MissionService {
         );
         const at = this.#iso();
         const mission: Mission = {
-          autonomy: request.autonomy ?? settings.defaultAutonomy,
           createdAt: at,
           endedAt: null,
           epoch: 0,
@@ -3641,7 +3639,6 @@ export class MissionService {
       this.#checkUpdate(missionId, request);
       const saved = this.#mutateMission(missionId, (m) => ({
         ...m,
-        ...(request.autonomy ? { autonomy: request.autonomy } : {}),
         ...(request.title ? { title: request.title } : {}),
         ...(request.orchestrator ? { orchestrator: request.orchestrator } : {}),
         ...(request.worker ? { worker: request.worker } : {}),

@@ -94,7 +94,6 @@ const waitFor = async <T>(read: () => T, done: (value: T) => boolean) =>
   await pollUntil(() => Promise.resolve(read()), done, Date.now() + 3000, 10);
 
 interface MissionOptions {
-  autonomy?: "off" | "low" | "medium" | "high";
   executionMode?: "work" | "plan";
 }
 
@@ -113,7 +112,6 @@ const createMission = async (
     throw new Error("project not added");
   }
   const snapshot = await booted.daemon.missions.create({
-    autonomy: options.autonomy ?? "high",
     executionMode: options.executionMode,
     goal: "Add a greeting file",
     operationId: `create-mission-${suffix}`,
@@ -145,7 +143,7 @@ const startMission = async (
   return { ...created, orchestrator };
 };
 
-/** A Droid permission no autonomy level approves, so the user must decide. */
+/** An unrecognized Droid permission the policy does not approve, so the user must decide. */
 const UNCLASSIFIED: PermissionToolUse = {
   confirmationType: "custom",
   details: { type: "custom" },

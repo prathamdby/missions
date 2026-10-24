@@ -30,8 +30,6 @@ const tooltipVariants = cva(
       variant: {
         /** One line: label and an optional key cap. */
         default: "flex min-h-7 max-w-80 items-center gap-md px-md font-medium",
-        /** XXY: a small table, such as the autonomy levels. */
-        panel: "flex w-59 flex-col gap-2xs px-control py-md font-book",
       },
     },
   }

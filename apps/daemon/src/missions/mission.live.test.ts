@@ -58,7 +58,6 @@ describe("live mission", () => {
         throw new Error("project not added");
       }
       const created = await daemon.missions.create({
-        autonomy: "high",
         goal: "Append a line containing exactly `world` to README.md. Keep the plan to one step and do the edit yourself without dispatching Workers. Do not run any commands.",
         operationId: "live-mission-1",
         orchestrator: MODEL,

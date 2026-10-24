@@ -61,22 +61,6 @@ test("a Plan mission goes from goal to plan approval to completion", async ({
   expect(snapshot.mission.status).toBe("completed");
 });
 
-test("autonomy off asks before the Worker writes", async ({
-  page,
-  request,
-}) => {
-  const project = await addProject(request, gitRepo("permission"));
-  const mission = await createMission(request, project.id, "off");
-  await page.goto(`/missions/${mission.id}`);
-  await page.getByTestId("plan-approve").click({ timeout: 30_000 });
-  const allow = page.getByTestId("permission-allow-once");
-  await expect(allow).toBeVisible({ timeout: 30_000 });
-  await allow.click();
-  await expect(page.getByTestId("mission-complete")).toBeVisible({
-    timeout: 30_000,
-  });
-});
-
 test("sending changes back revises the plan", async ({ page, request }) => {
   const project = await addProject(request, gitRepo("revise"));
   const mission = await createMission(request, project.id);

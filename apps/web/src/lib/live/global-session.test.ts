@@ -75,7 +75,6 @@ const project: Project = {
 
 const settings: Settings = {
   cleanupAfterMerge: true,
-  defaultAutonomy: "medium",
   defaultWorkspaceMode: "new_worktree",
   maxConcurrentWorkers: 2,
   orchestrator: mission().orchestrator,

@@ -26,7 +26,6 @@ const create = (filePath: string): PermissionToolUse => ({
 
 const setup = (overrides: Partial<AgentContext> = {}) => {
   const ctx: AgentContext = {
-    autonomy: "medium",
     epoch: 1,
     fenced: false,
     missionId: "m1",
@@ -110,64 +109,47 @@ describe(classifyToolUse, () => {
     );
   });
 
-  it("maps autonomy levels to command impact", () => {
+  it("auto-approves commands at every impact level", () => {
     const low = classifyToolUse(exec("ls", "low"), "/w", "missions");
     const high = classifyToolUse(
       exec("rm -rf build", "high"),
       "/w",
       "missions"
     );
-    expect(autoApproves("off", low)).toBeFalsy();
-    expect(autoApproves("low", low)).toBeTruthy();
-    expect(autoApproves("medium", high)).toBeFalsy();
-    expect(autoApproves("high", high)).toBeTruthy();
+    expect(autoApproves(low)).toBeTruthy();
+    expect(autoApproves(high)).toBeTruthy();
   });
 });
 
 describe(PermissionBroker, () => {
-  it("does not share grants between semantically different quoted whitespace", async () => {
-    const { broker, grants, lastPending } = setup({ autonomy: "off" });
-    const first = broker.ask("a", [exec('printf "%s" "two  spaces"')]);
-    broker.decide(lastPending()?.id ?? "", "always_allow", 1);
-    await expect(first).resolves.toMatchObject({ approved: true });
-    expect(grants[0]?.normalizedRequest).toBe(
-      'exec:v2:printf "%s" "two  spaces"'
+  it("keeps exact command identity for quoted whitespace and excludes legacy keys", () => {
+    const first = classifyToolUse(
+      exec('printf "%s" "two  spaces"'),
+      "/w",
+      "missions"
     );
-    const second = broker.ask("a", [exec('printf "%s" "two spaces"')]);
-    expect(broker.pending("m1")).toHaveLength(1);
-    broker.decide(lastPending()?.id ?? "", "deny", 1);
-    await expect(second).resolves.toMatchObject({ approved: false });
+    const second = classifyToolUse(
+      exec('printf "%s" "two spaces"'),
+      "/w",
+      "missions"
+    );
+    expect(first.normalized).toBe('exec:v2:printf "%s" "two  spaces"');
+    expect(second.normalized).toBe('exec:v2:printf "%s" "two spaces"');
+    expect(first.normalized).not.toBe(second.normalized);
   });
 
-  it("does not reuse legacy whitespace-collapsed command grants", async () => {
-    const { broker, grants, lastPending } = setup({ autonomy: "off" });
-    const command = 'printf "%s" "two spaces"';
+  it("rejects execution-capable tools on read-only assignments before grants and policy", async () => {
+    const { broker, grants, leases } = setup({ canWrite: false });
+    const command = exec("echo hi", "low");
     grants.push({
       action: "Execute",
       createdAt: "2026-01-01T00:00:00.000Z",
-      id: "legacy",
-      normalizedRequest: command,
+      id: "read-only-grant",
+      normalizedRequest: "exec:v2:echo hi",
       projectId: "p1",
       role: "worker",
       workspacePath: "/w",
     });
-    const pending = broker.ask("a", [exec(command)]);
-    expect(broker.pending("m1")).toHaveLength(1);
-    broker.decide(lastPending()?.id ?? "", "deny", 1);
-    await expect(pending).resolves.toMatchObject({ approved: false });
-  });
-
-  it("rejects execution-capable tools on read-only assignments before grants and autonomy", async () => {
-    const { broker, ctx, grants, leases, lastPending } = setup({
-      autonomy: "off",
-    });
-    const command = exec("echo hi", "low");
-    const first = broker.ask("a", [command]);
-    broker.decide(lastPending()?.id ?? "", "always_allow", 1);
-    await first;
-    expect(grants).toHaveLength(1);
-    ctx.canWrite = false;
-    ctx.autonomy = "high";
     const executionCapableUses = [
       command,
       create("/w/x"),
@@ -206,40 +188,16 @@ describe(PermissionBroker, () => {
     expect(leases).toHaveLength(0);
   });
 
-  it("does not let global options or an old grant bypass the publish gate", async () => {
-    const { broker, grants, lastPending } = setup({
-      autonomy: "medium",
-      role: "orchestrator",
-    });
-    const command = "git -C /w push origin main";
-    grants.push({
-      action: "Execute",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      id: "old",
-      normalizedRequest: `exec:v2:${command}`,
-      projectId: "p1",
-      role: "orchestrator",
-      workspacePath: "/w",
-    });
-    const pending = broker.ask("a", [exec(command, "low")]);
-    expect(lastPending()).toMatchObject({
-      allowAlways: false,
-      kind: "publish",
-    });
-    broker.decide(lastPending()?.id ?? "", "deny", 1);
-    await expect(pending).resolves.toMatchObject({ approved: false });
-  });
-
   it("rechecks current Plan mode and capabilities after a pending approval", async () => {
-    const { broker, ctx, lastPending } = setup({ autonomy: "off" });
-    const pending = broker.ask("a", [create("/w/x")]);
+    const { broker, ctx, lastPending } = setup();
+    const pending = broker.ask("a", [create("/outside/x")]);
     ctx.canWrite = false;
     expect(() =>
       broker.decide(lastPending()?.id ?? "", "always_allow", 1)
     ).toThrow(/earlier run/u);
     await expect(pending).resolves.toMatchObject({ approved: false });
     ctx.canWrite = true;
-    const second = broker.ask("a", [create("/w/x")]);
+    const second = broker.ask("a", [create("/outside/x")]);
     ctx.planMode = true;
     expect(() =>
       broker.decide(lastPending()?.id ?? "", "approve_once", 1)
@@ -248,9 +206,9 @@ describe(PermissionBroker, () => {
   });
 
   it.each(["orchestrator", "worker"] as const)(
-    "Plan mode keeps the %s read-only even at High autonomy",
+    "Plan mode keeps the %s read-only before automatic approval",
     async (role) => {
-      const { broker } = setup({ autonomy: "high", planMode: true, role });
+      const { broker } = setup({ planMode: true, role });
       await expect(broker.ask("a", [create("/w/x")])).resolves.toMatchObject({
         approved: false,
         reason: expect.stringContaining("Plan mode"),
@@ -263,44 +221,52 @@ describe(PermissionBroker, () => {
     }
   );
 
-  it("asks the main agent before publishing below High, without an Always allow option", async () => {
-    const { broker, lastPending } = setup({
-      autonomy: "medium",
+  it.each([
+    "git commit -m x",
+    "git push",
+    "gh pr create --fill",
+    "git reset --hard",
+  ])("auto-approves main-agent %s by policy", async (command) => {
+    const { broker } = setup({ role: "orchestrator" });
+    await expect(broker.ask("a", [exec(command)])).resolves.toStrictEqual({
+      approved: true,
+      via: "policy",
+    });
+  });
+
+  it("Pause denies otherwise auto-approved edits and publishing", async () => {
+    const { broker, requests, leases } = setup({
+      fenced: true,
       role: "orchestrator",
     });
-    const pending = broker.ask("a", [exec("git push")]);
-    await Promise.resolve();
-    const request = lastPending();
-    expect(request).toMatchObject({ allowAlways: false, kind: "publish" });
-    expect(() => broker.decide(request?.id ?? "", "always_allow", 1)).toThrow(
-      /explicit/u
+    await Promise.all(
+      [create("/w/x"), exec("git push"), exec("git reset --hard")].map(
+        async (use) => {
+          await expect(broker.ask("a", [use])).resolves.toStrictEqual({
+            approved: false,
+            reason: "Mission is paused",
+          });
+        }
+      )
     );
-    broker.decide(request?.id ?? "", "approve_once", 1);
-    await expect(pending).resolves.toMatchObject({
-      approved: true,
-      via: "user",
-    });
+    expect(requests).toHaveLength(0);
+    expect(leases).toHaveLength(0);
   });
 
-  it("lets the main agent commit and publish at High autonomy", async () => {
-    const { broker } = setup({ autonomy: "high", role: "orchestrator" });
-    await expect(
-      broker.ask("a", [exec("git commit -m x")])
-    ).resolves.toMatchObject({ approved: true, via: "policy" });
-    await expect(
-      broker.ask("a", [exec("gh pr create --fill")])
-    ).resolves.toMatchObject({ approved: true, via: "policy" });
-  });
-
-  it("never lets a Worker run Git administration, whatever its autonomy", async () => {
-    const { broker } = setup({ autonomy: "high", role: "worker" });
-    for (const command of ["git commit -m x", "git push", "git switch -c x"]) {
-      // oxlint-disable-next-line no-await-in-loop -- each ask is independent and ordered
-      await expect(broker.ask("a", [exec(command)])).resolves.toMatchObject({
-        approved: false,
-        reason: expect.stringContaining("main agent"),
-      });
-    }
+  it("never lets a Worker run Git administration", async () => {
+    const { broker } = setup({ role: "worker" });
+    await Promise.all(
+      ["git commit -m x", "git push", "git switch -c x"].map(
+        async (command) => {
+          await expect(broker.ask("a", [exec(command)])).resolves.toMatchObject(
+            {
+              approved: false,
+              reason: expect.stringContaining("main agent"),
+            }
+          );
+        }
+      )
+    );
   });
 
   it("treats branch changes and destructive Git as high impact", () => {
@@ -318,8 +284,7 @@ describe(PermissionBroker, () => {
         command,
         impact: "high",
       });
-      expect(autoApproves("medium", use)).toBeFalsy();
-      expect(autoApproves("high", use)).toBeTruthy();
+      expect(autoApproves(use)).toBeTruthy();
     }
     expect(
       classifyToolUse(exec("git commit -m x"), "/w", "missions").impact
@@ -328,7 +293,6 @@ describe(PermissionBroker, () => {
 
   it("blocks repository administration while another agent is writing", async () => {
     const { broker } = setup({
-      autonomy: "high",
       otherWriters: ["Worker 2"],
       role: "orchestrator",
     });
@@ -345,33 +309,39 @@ describe(PermissionBroker, () => {
   });
 
   it("stores scoped Always allow grants that later auto-approve", async () => {
-    const { broker, grants, lastPending } = setup({ autonomy: "off" });
-    const first = broker.ask("a", [create("/w/a.ts")]);
+    const { broker, grants, lastPending } = setup();
+    const first = broker.ask("a", [create("/outside/a.ts")]);
+    expect(broker.pending("m1")).toMatchObject([
+      { allowAlways: true, kind: "tool", status: "pending" },
+    ]);
     await Promise.resolve();
     broker.decide(lastPending()?.id ?? "", "always_allow", 1);
     await expect(first).resolves.toMatchObject({ approved: true });
+    expect(lastPending()).toMatchObject({ allowAlways: true, kind: "tool" });
     expect(grants[0]).toMatchObject({
       action: "Create",
-      normalizedRequest: "a.ts",
+      normalizedRequest: "/outside/a.ts",
       projectId: "p1",
       role: "worker",
       workspacePath: "/w",
     });
-    await expect(broker.ask("a", [create("/w/a.ts")])).resolves.toMatchObject({
+    await expect(
+      broker.ask("a", [create("/outside/a.ts")])
+    ).resolves.toMatchObject({
       approved: true,
       via: "grant",
     });
   });
 
   it("rejects stale decisions and cancels waiters on Pause", async () => {
-    const { broker, ctx, lastPending } = setup({ autonomy: "off" });
-    const pending = broker.ask("a", [create("/w/a.ts")]);
+    const { broker, ctx, lastPending } = setup();
+    const pending = broker.ask("a", [create("/outside/a.ts")]);
     await Promise.resolve();
     const id = lastPending()?.id ?? "";
     expect(() => broker.decide(id, "approve_once", 0)).toThrow(/earlier run/u);
     await expect(pending).resolves.toMatchObject({ approved: false });
 
-    const second = broker.ask("a", [create("/w/b.ts")]);
+    const second = broker.ask("a", [create("/outside/b.ts")]);
     await Promise.resolve();
     ctx.fenced = true;
     broker.cancelMission("m1");
@@ -383,7 +353,7 @@ describe(PermissionBroker, () => {
   });
 
   it("takes the write lease only for writable actions", async () => {
-    const { broker, leases } = setup({ autonomy: "high" });
+    const { broker, leases } = setup();
     await broker.ask("a", [exec("ls", "low")]);
     expect(leases).toHaveLength(0);
     await broker.ask("a", [create("/w/a.ts")]);

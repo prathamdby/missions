@@ -68,13 +68,11 @@ export const addProject = async (request: APIRequestContext, repo: string) => {
 export const createMission = async (
   request: APIRequestContext,
   projectId: string,
-  autonomy: "off" | "low" | "medium" | "high" = "medium",
   goal = "Write a NOTES.md file summarizing the project",
   // Most flows exercise plan approval; Work mode is covered explicitly.
   executionMode: "work" | "plan" = "plan"
 ) => {
   const snapshot = await call(request, "POST", "/missions", {
-    autonomy,
     executionMode,
     goal,
     operationId: operationId("mission"),

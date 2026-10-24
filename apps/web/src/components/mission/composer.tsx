@@ -17,9 +17,7 @@ import {
 import { useMission } from "@/components/mission/mission-context";
 import { QueueTray } from "@/components/mission/queue-tray";
 import { reportMutationError } from "@/components/mission/report-error";
-import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { useMissionControl } from "@/components/mission/use-mission-control";
-import { AutonomyChip } from "@/components/missions/autonomy-chip";
 import { ExecutionModeChip } from "@/components/missions/execution-mode-chip";
 import { Textarea } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -197,10 +195,6 @@ export const MissionComposer = () => {
     onSuccess: (item, delivery) => markReceipt(item.id, delivery.occurrence),
   });
 
-  const autonomy = useMissionCommand("update", "Could not change autonomy");
-  const changeAutonomy = (value: typeof mission.autonomy) =>
-    autonomy.mutate({ autonomy: value, expectedRevision: mission.revision });
-
   const submit = (mode: DeliveryMode) => {
     if (disabled) {
       return;
@@ -242,11 +236,6 @@ export const MissionComposer = () => {
         <div className="-ml-sm flex items-center gap-xs">
           <ToolbarIcon icon={<PaperclipIcon />} label="Attach files" />
           <ToolbarIcon icon={<AtIcon />} label="Mention a file" />
-          <AutonomyChip
-            disabled={!capabilities.update || autonomy.isPending}
-            onChange={changeAutonomy}
-            value={mission.autonomy}
-          />
           <ExecutionModeChip
             disabled={disabled}
             onChange={(next) =>

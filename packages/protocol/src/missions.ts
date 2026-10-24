@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import {
-  AutonomySchema,
   DeliveryModeSchema,
   ExecutionModeSchema,
   IdSchema,
@@ -70,7 +69,6 @@ export const PublishStateSchema = z.object({
 export type PublishState = z.infer<typeof PublishStateSchema>;
 
 export const MissionSchema = z.object({
-  autonomy: AutonomySchema,
   createdAt: TimestampSchema,
   /**
    * When the mission last became completed or failed; null while it can still

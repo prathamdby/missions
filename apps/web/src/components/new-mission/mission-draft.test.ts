@@ -28,7 +28,6 @@ const project: Project = {
 };
 const settings: Settings = {
   cleanupAfterMerge: false,
-  defaultAutonomy: "medium",
   defaultWorkspaceMode: "new_worktree",
   maxConcurrentWorkers: 2,
   orchestrator: { modelId: "planner", reasoningEffort: "high" },
@@ -38,7 +37,6 @@ const settings: Settings = {
 
 const input = (): Parameters<typeof reviewMissionDraft>[0] => ({
   acknowledged: null,
-  autonomy: "medium",
   branch: "main",
   branches: confirmed([{ current: true, name: "main", remote: false }]),
   checkout: confirmed({
@@ -90,7 +88,6 @@ describe("new-mission workflows", () => {
     expect(
       reviewMissionDraft({ ...input(), newBranch: "missions/feature" }).draft
     ).toStrictEqual({
-      autonomy: "medium",
       goal: "Ship a tested outcome",
       orchestrator: settings.orchestrator,
       projectId: project.id,

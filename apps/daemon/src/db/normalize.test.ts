@@ -12,7 +12,7 @@ describe("v1 document normalization", () => {
   it("fills fields added in v2 without overriding stored values", () => {
     expect({
       agent: normalizeAgent({ id: "a" }),
-      mission: normalizeMission({ id: "m" }),
+      mission: normalizeMission({ autonomy: "off", id: "m" }),
       storedMode: normalizeMission({ executionMode: "plan", id: "m" })
         .executionMode,
     }).toStrictEqual({

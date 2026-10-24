@@ -25,7 +25,7 @@ const MODES: Record<ExecutionMode, { description: string; label: string }> = {
     label: "Plan",
   },
   work: {
-    description: "Agents act directly within the autonomy level.",
+    description: "Agents act directly.",
     label: "Work",
   },
 };
