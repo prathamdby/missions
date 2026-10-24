@@ -25,7 +25,6 @@ export const mission = (revision = 1): Mission => ({
   id: MISSION_ID,
   lastError: null,
   orchestrator: { modelId: "opus", reasoningEffort: "high" },
-  pendingExecutionMode: null,
   projectId: "p-1",
   publish: {
     cleanup: "none",
@@ -117,7 +116,6 @@ export const queueItem = (
   agentId: "a-1",
   createdAt: AT,
   error: null,
-  executionMode: null,
   id: "queue-1",
   missionId: MISSION_ID,
   mode: "queue",

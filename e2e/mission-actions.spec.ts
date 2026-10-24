@@ -47,7 +47,7 @@ test("the page itself never scrolls and shows no shortcut hints", async ({
     request,
     project.id,
     "Write a NOTES.md file summarizing the project",
-    "work"
+    { plan: false }
   );
   await page.goto(`/missions/${mission.id}`);
   await expect(page.getByTestId("mission-complete")).toBeVisible({

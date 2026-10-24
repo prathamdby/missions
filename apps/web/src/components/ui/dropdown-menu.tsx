@@ -28,8 +28,6 @@ export const menuItemVariants = cva(
         md: "h-8 items-center [&>svg]:size-4",
         /** Icon, title with tag, and description (PNO workspace choices). */
         option: "items-start px-md py-control",
-        /** Icon, title and description. */
-        rich: "items-start p-md",
       },
       variant: {
         danger: "text-danger data-[highlighted]:text-danger",
@@ -87,7 +85,7 @@ export const DropdownMenuRadioItem = ({
     <span
       className={cn(
         "ml-auto flex w-3.5 shrink-0 justify-center",
-        (size === "rich" || size === "option") && "pt-hairline"
+        size === "option" && "pt-hairline"
       )}
     >
       <MenuPrimitive.ItemIndicator>

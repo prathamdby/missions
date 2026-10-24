@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import type { FormEvent, KeyboardEvent } from "react";
 import { useMemo } from "react";
 
-import { ExecutionModeChip } from "@/components/missions/execution-mode-chip";
 import { BranchPicker } from "@/components/new-mission/branch-picker";
 import { ModelPicker } from "@/components/new-mission/model-picker";
 import { ProjectPicker } from "@/components/new-mission/project-picker";
@@ -425,11 +424,6 @@ export const NewMissionView = () => {
                       size="responsive"
                     />
                   </Hint>
-                  <ExecutionModeChip
-                    disabled={!hasProject}
-                    onChange={form.handleExecutionModeChange}
-                    value={form.executionMode}
-                  />
                   <ModelPicker
                     disabled={!hasProject}
                     onChange={form.handleModelChange}

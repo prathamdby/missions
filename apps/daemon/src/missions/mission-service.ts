@@ -23,7 +23,6 @@ import {
 } from "@missions/protocol/commands";
 import type {
   DeliveryMode,
-  ExecutionMode,
   MessagePurpose,
   Role,
 } from "@missions/protocol/common";
@@ -852,14 +851,11 @@ export class MissionService {
           createdAt: at,
           endedAt: null,
           epoch: 0,
-          // A Plan request on the goal is an ordered transition applied
-          // before the goal is delivered, like any later Plan message.
           executionMode: "work",
           goal: request.goal,
           id,
           lastError: null,
           orchestrator: request.orchestrator ?? settings.orchestrator,
-          pendingExecutionMode: null,
           projectId: project.id,
           publish: {
             cleanup: "none",
@@ -885,7 +881,6 @@ export class MissionService {
         );
         const goalItem = this.#newQueueItem({
           agentId: orchestrator.id,
-          executionMode: request.executionMode ?? null,
           id: `${mission.id}:goal`,
           missionId: mission.id,
           mode: "steer",
@@ -944,7 +939,6 @@ export class MissionService {
     text: string;
     mode: DeliveryMode;
     sequence: number;
-    executionMode?: ExecutionMode | null;
     origin?: QueueItem["origin"];
     purpose?: MessagePurpose;
     sender?: MessageParty | null;
@@ -956,7 +950,6 @@ export class MissionService {
       agentId: fields.agentId,
       createdAt: at,
       error: null,
-      executionMode: fields.executionMode ?? null,
       id: fields.id,
       missionId: fields.missionId,
       mode: fields.mode,
@@ -1999,7 +1992,6 @@ export class MissionService {
       this.#saveMission(emit, {
         ...mission,
         executionMode: request.approve ? "work" : mission.executionMode,
-        pendingExecutionMode: null,
         status: "running",
       });
     });
@@ -2117,13 +2109,12 @@ export class MissionService {
     this.#mutateMission(mission.id, (m) => ({
       ...m,
       executionMode: "plan",
-      pendingExecutionMode: null,
     }));
     this.#planEntries.set(mission.id, reason?.trim() || null);
     return "Plan mode recorded: every agent is now read-only. End your turn now; planning continues automatically in Spec mode.";
   }
 
-  /** The main loop yielded: apply a requested Plan entry or a waiting transition. */
+  /** The main loop yielded: activate agent-requested Plan entry or deliver messages. */
   #onAgentIdle(agent: Agent, mission: Mission) {
     if (agent.role !== "orchestrator") {
       return;
@@ -2452,7 +2443,6 @@ export class MissionService {
       if (
         !sameMessage(existing, {
           agentId: recipient.agent.id,
-          executionMode: null,
           missionId: mission.id,
           mode: "steer",
           text,
@@ -2664,91 +2654,11 @@ export class MissionService {
       if (!next) {
         return;
       }
-      const ready =
-        current.agent.role !== "orchestrator" ||
-        // oxlint-disable-next-line no-await-in-loop -- strict admission order
-        (await this.#applyRequestedMode(live, next));
       // oxlint-disable-next-line no-await-in-loop -- strict admission order
-      if (!(ready && (await this.#submitAccepted(live, runtime, next)))) {
+      if (!(await this.#submitAccepted(live, runtime, next))) {
         return;
       }
     }
-  }
-
-  /**
-   * A requested mode is an ordered boundary: it applies only once the main
-   * loop and shared writes are quiescent; until then this and every later
-   * message stay in the outbox.
-   */
-  async #applyRequestedMode(live: LiveAgent, item: QueueItem) {
-    const mission = this.get(live.missionId);
-    const target = item.executionMode;
-    if (target === null || target === mission.executionMode) {
-      if (mission.pendingExecutionMode !== null) {
-        this.#mutateMission(mission.id, (m) => ({
-          ...m,
-          pendingExecutionMode: null,
-        }));
-      }
-      return true;
-    }
-    if (!this.#quiescent(live)) {
-      if (mission.pendingExecutionMode !== target) {
-        this.#mutateMission(mission.id, (m) => ({
-          ...m,
-          pendingExecutionMode: target,
-        }));
-      }
-      return false;
-    }
-    const previous = mission.executionMode;
-    this.#mutateMission(mission.id, (m) => ({
-      ...m,
-      executionMode: target,
-      pendingExecutionMode: null,
-    }));
-    try {
-      await this.#syncNativeMode(live);
-      return true;
-    } catch (error) {
-      // Keep the transition pending so the next pass retries the native switch.
-      this.#mutateMission(mission.id, (m) =>
-        m.executionMode === target
-          ? { ...m, executionMode: previous, pendingExecutionMode: target }
-          : m
-      );
-      if (this.#isCurrent(live.agentId, live)) {
-        this.#notice(
-          mission.id,
-          "run_failed",
-          "error",
-          `Could not switch the main agent to ${target === "plan" ? "Plan" : "Work"} mode: ${errorMessage(error)}`
-        );
-      }
-      return false;
-    }
-  }
-
-  #quiescent(live: LiveAgent) {
-    const agent = this.#store.getAgent(live.agentId);
-    if (!agent) {
-      return false;
-    }
-    const busy =
-      agent.status === "working" ||
-      agent.status === "waiting_permission" ||
-      agent.status === "waiting_answer" ||
-      (agent.workingState !== null && agent.workingState !== "idle");
-    const nativeOpen = this.#store.queue
-      .list(agent.missionId)
-      .some(
-        (item) =>
-          item.agentId === agent.id &&
-          (item.state === "submitting" ||
-            item.state === "queued" ||
-            item.state === "removing")
-      );
-    return !(busy || nativeOpen) && this.leases.holder(live.workspace) === null;
   }
 
   /** Persists `submitting` before native I/O; returns whether to continue. */
@@ -3079,7 +2989,7 @@ export class MissionService {
   /** The receipt for a retried operation ID, or a conflict if its intent differs. */
   #acceptedBefore(
     operationId: string,
-    intent: Pick<QueueItem, "agentId" | "executionMode" | "mode" | "text"> & {
+    intent: Pick<QueueItem, "agentId" | "mode" | "text"> & {
       missionId: string;
     }
   ) {
@@ -3093,8 +3003,7 @@ export class MissionService {
       if (
         detail.agentId !== intent.agentId ||
         detail.text !== intent.text ||
-        detail.mode !== intent.mode ||
-        (detail.executionMode ?? null) !== intent.executionMode
+        detail.mode !== intent.mode
       ) {
         throw conflict(DUPLICATE_OPERATION);
       }
@@ -3133,7 +3042,6 @@ export class MissionService {
     const agentId = request.agentId ?? this.#orchestrator(missionId).id;
     const intent = {
       agentId,
-      executionMode: request.executionMode ?? null,
       missionId,
       mode: request.mode,
       text: request.text,
@@ -3148,9 +3056,6 @@ export class MissionService {
     const agent = this.#store.getAgent(agentId);
     if (!agent || agent.missionId !== missionId) {
       throw notFound("Agent");
-    }
-    if (agent.role === "worker" && intent.executionMode !== null) {
-      throw conflict("Only messages to the main agent can change the mode");
     }
     this.#requireRunningWorker(agent);
     const items = this.#store.queue.list(missionId);
@@ -3351,7 +3256,6 @@ export class MissionService {
     }
     const retry = this.#newQueueItem({
       agentId: item.agentId,
-      executionMode: item.executionMode,
       id: request.operationId,
       missionId,
       mode: item.mode,
@@ -3446,7 +3350,6 @@ export class MissionService {
     }
     const replacement = this.#newQueueItem({
       agentId: latest.agentId,
-      executionMode: latest.executionMode,
       id: request.operationId,
       missionId: latest.missionId,
       mode: latest.mode,
@@ -3490,7 +3393,6 @@ export class MissionService {
     const replacement: QueueItem = {
       ...this.#newQueueItem({
         agentId: item.agentId,
-        executionMode: item.executionMode,
         id: replacementId,
         missionId,
         mode: item.mode,

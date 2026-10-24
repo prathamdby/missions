@@ -29,7 +29,6 @@ const snapshot = (id: string): MissionSnapshot => ({
     id,
     lastError: null,
     orchestrator: { modelId: "planner", reasoningEffort: "high" },
-    pendingExecutionMode: null,
     publish: {
       cleanup: "none",
       cleanupReason: null,

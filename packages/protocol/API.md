@@ -74,12 +74,12 @@ Mutations are idempotent per `operationId`: repeating the same action for the sa
 
 ## Messages and delivery
 
-The queue is a durable outbox. Every logical message (user prompt, agent message, assignment, handoff) is a `QueueItem` with a stable `id`, recipient `agentId`, `origin` (`user`, `agent`, `daemon`), `purpose` (`message`, `assignment`, `handoff`, `control`), placement `mode` (`steer`, `queue`), an optional requested `executionMode`, a server-bound `sender` for agent messages, and a per-mission `sequence`.
+The queue is a durable outbox. Every logical message (user prompt, agent message, assignment, handoff) is a `QueueItem` with a stable `id`, recipient `agentId`, `origin` (`user`, `agent`, `daemon`), `purpose` (`message`, `assignment`, `handoff`, `control`), placement `mode` (`steer`, `queue`), a server-bound `sender` for agent messages, and a per-mission `sequence`.
 
 - `POST missionMessages(id)` returns as soon as the message is durably `accepted`; it does not wait for the agent to start. Delivery to one recipient follows `sequence`. Before native I/O the item moves to `submitting`; native admission and consumption move it to `queued` and `sent`.
 - `accepted` items have definitely not been sent. They can be edited, removed or switched between steer and queue locally, even while the agent is still starting. After a restart they stay `accepted` and are delivered only after Resume.
 - `unknown` means the message may or may not have reached the runner. It is never replayed automatically. `queueItemRetry` sends it again as a new message after the user chooses to; for `unknown` originals this can deliver it twice.
-- Reusing an `operationId` with a different recipient, text, placement or `executionMode` returns `409`. Text is never used to merge two intentional messages.
+- Reusing an `operationId` with a different recipient, text, placement returns `409`. Text is never used to merge two intentional messages.
 - Each recipient holds at most 20 outstanding user messages and 20 outstanding agent messages; beyond that the request fails with an explicit capacity error.
 - Agent messages (`send_message`, assignments and handoffs) are persisted with exactly one `agent_message` `TranscriptItem` carrying `sender`, `recipient`, `purpose` and the queue item ID as `requestId`. The SDK receives the structured sender; the recipient's native echo is not projected again.
 - `steer` maps to native `end_of_turn` (the next tool-completion boundary), `queue` to native `end_of_loop`. Steers admitted before the same boundary are consumed together before the next model continuation.
@@ -87,8 +87,9 @@ The queue is a durable outbox. Every logical message (user prompt, agent message
 
 ## Work mode and Plan mode
 
-`Mission.executionMode` is `work` by default. A message or mission creation with `executionMode: "plan"` requests Plan mode; the transition applies in order, after earlier admitted work is quiescent (`Mission.pendingExecutionMode` shows a waiting transition). The main agent can also call `enter_plan`.
+`Mission.executionMode` is `work` by default. Only the main agent can enter Plan mode, through `missions.enter_plan`, when the user asks in plain language to plan, scope or review an approach before changes, or the agent judges that a broad, risky or ambiguous request needs planning. Mission creation and message requests reject `executionMode` with `400` (`bad_request`).
 
+- To leave planning early, ask in chat to skip or stop planning. The main agent immediately presents a minimal plan with `ExitSpecMode`; one approval returns the mission to Work mode.
 - In Plan mode every agent is read-only (writes, Git administration and publishing are denied) and the main agent runs in native Spec mode with the planning guidance added once as model-only context.
 - The main agent presents a plan with native `ExitSpecMode`. The resulting `PlanRevision` is `actionable` only while that native request is live and bound to the same session and epoch. `POST plan(id)` with `approve: true` proceeds once and returns the mission to `work`; `approve: false` cancels the request and sends the feedback back. A non-actionable revision returns `409` (`stale_revision`); after Resume the agent is asked to present it again.
 

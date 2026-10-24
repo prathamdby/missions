@@ -1,5 +1,4 @@
 import type { CreateMissionRequest } from "@missions/protocol/commands";
-import type { ExecutionMode } from "@missions/protocol/common";
 import type {
   AgentModelSettings,
   MissionSummary,
@@ -101,8 +100,6 @@ interface DraftInput {
   branch: string | null;
   branches: Evidence<readonly Branch[]>;
   checkout: Evidence<CheckoutStatus>;
-  /** Work (the default) is omitted from the request. */
-  executionMode?: ExecutionMode;
   goal: string;
   /** Explicit or frozen choices; Settings defaults when omitted. */
   models?: ModelChoices | null;
@@ -208,9 +205,6 @@ const buildRequest = (
   }
   const models = input.models ?? settings.data;
   return {
-    ...(input.executionMode === "plan"
-      ? { executionMode: "plan" as const }
-      : {}),
     goal,
     orchestrator: models.orchestrator,
     projectId: project.id,

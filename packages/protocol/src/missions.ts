@@ -89,8 +89,6 @@ export const MissionSchema = z.object({
     })
     .nullable(),
   orchestrator: AgentModelSettingsSchema,
-  /** A requested mode transition that applies once earlier work is quiescent. */
-  pendingExecutionMode: ExecutionModeSchema.nullable().default(null),
   projectId: IdSchema,
   publish: PublishStateSchema,
   revision: RevisionSchema,
@@ -329,8 +327,6 @@ export const QueueItemSchema = z.object({
   agentId: IdSchema,
   createdAt: TimestampSchema,
   error: z.string().nullable(),
-  /** Requested mode for the recipient's next work; null keeps the current mode. */
-  executionMode: ExecutionModeSchema.nullable().default(null),
   /** Stable correlation ID, also used as the SDK request ID. */
   id: IdSchema,
   missionId: IdSchema,

@@ -1,6 +1,5 @@
 "use client";
 
-import type { ExecutionMode } from "@missions/protocol/common";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import type { Settings } from "@missions/protocol/settings";
 import { useState } from "react";
@@ -132,7 +131,6 @@ export const useNewMissionForm = () => {
   const [workspaceChoice, setWorkspaceChoice] =
     useState<PerProject<WorkspaceChoice> | null>(null);
   const [acknowledged, setAcknowledged] = useState<string | null>(null);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode>("work");
   const [goal, setGoal] = useState("");
   const defaults = useDraftDefaults(evidence(settings));
   const [models, handleModelChange] = useModelChoices(defaults);
@@ -152,7 +150,6 @@ export const useNewMissionForm = () => {
     branch,
     branches: evidence(branches),
     checkout: evidence(checkout),
-    executionMode,
     goal,
     models,
     newBranch,
@@ -176,12 +173,10 @@ export const useNewMissionForm = () => {
     checkout,
     defaultBranch: resolveDefaultBranch(project, branches.data),
     ...review,
-    executionMode,
     goal,
     handleAcknowledgeDirty: () => setAcknowledged(review.dirtyKey),
     handleBranchChange: (value: string) =>
       projectId && setBranchChoice({ projectId, value }),
-    handleExecutionModeChange: setExecutionMode,
     handleModelChange,
     handleNewBranch: (value: string | null) =>
       setNewBranchChoice(projectId && value ? { projectId, value } : null),

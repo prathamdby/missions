@@ -2,7 +2,6 @@ import { expect, test } from "@playwright/test";
 
 import {
   addProject,
-  chooseExecutionMode,
   createMission,
   gitRepo,
   missionSnapshot,
@@ -21,7 +20,6 @@ test("a Work mission goes from goal to completion without a plan gate", async ({
   await page.goto("/");
   await page.getByRole("button", { exact: true, name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
-  await expect(page.getByTestId("execution-mode")).toContainText("Work");
   await page
     .getByRole("textbox", { name: "Mission goal" })
     .fill("Write a NOTES.md file summarizing the project");
@@ -42,10 +40,9 @@ test("a Plan mission goes from goal to plan approval to completion", async ({
   await page.goto("/");
   await page.getByRole("button", { exact: true, name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
-  await chooseExecutionMode(page, "Plan");
   await page
     .getByRole("textbox", { name: "Mission goal" })
-    .fill("Write a NOTES.md file summarizing the project");
+    .fill("Write a NOTES.md file summarizing the project. Plan it first.");
   await page.getByRole("button", { name: "Start mission" }).click();
   await expect(page).toHaveURL(/\/missions\//u);
 
