@@ -135,7 +135,7 @@ test("earlier transcript failures stay visible and retry loads the missing page"
 test("thought markdown and Pele render with inherited colors and fall back on invalid input", async ({
   page,
   request,
-}) => {
+}, info) => {
   const project = await addProject(request, gitRepo("diagrams"));
   const mission = await createMission(request, project.id);
   await expect
@@ -203,13 +203,21 @@ test("thought markdown and Pele render with inherited colors and fall back on in
   await expect(
     page.locator("pre").filter({ hasText: "not a diagram" })
   ).toBeVisible();
+  await expect(page.getByText(/No diagram type detected/u)).toHaveCount(0);
   await expect(diagram.locator("a, image, foreignObject, script")).toHaveCount(
     0
   );
   const dark = await diagram.evaluate((node) => getComputedStyle(node).color);
-  await diagram.evaluate((node) =>
-    node.style.setProperty("--pele-fg", "rgb(20, 20, 20)")
-  );
+  await page.screenshot({ path: info.outputPath("diagram-dark.png") });
+  await page.locator('[data-slot="diagram"]').evaluate((node) => {
+    node.style.setProperty("--color-text", "rgb(20, 20, 20)");
+    node.style.setProperty("--color-text-secondary", "rgb(80, 80, 80)");
+    node.style.setProperty("--color-surface-raised", "rgb(250, 250, 250)");
+    node.style.setProperty("--color-surface-overlay", "rgb(238, 238, 238)");
+    node.style.setProperty("--color-surface-active", "rgb(229, 229, 229)");
+    node.style.setProperty("--color-border-strong", "rgb(180, 180, 180)");
+  });
   await expect(diagram).toHaveCSS("color", "rgb(20, 20, 20)");
   expect(dark).not.toBe("rgb(20, 20, 20)");
+  await page.screenshot({ path: info.outputPath("diagram-light.png") });
 });
