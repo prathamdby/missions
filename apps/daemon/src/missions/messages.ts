@@ -113,11 +113,21 @@ export const handoffMessage = (
   return lines.join("\n");
 };
 
-export const resumedMessage = (interrupted: readonly Assignment[]) =>
+const assignmentList = (assignments: readonly Assignment[]) =>
+  assignments.map((a) => `${a.id} ("${a.title}")`).join(", ");
+
+export const resumedMessage = (
+  interrupted: readonly Assignment[],
+  unconfirmedFailures: readonly Assignment[] = []
+) =>
   `[Missions] The mission was stopped and the user resumed it. ${
     interrupted.length > 0
-      ? `These assignments are being resumed using their original Worker sessions: ${interrupted.map((a) => `${a.id} ("${a.title}")`).join(", ")}. Do not re-dispatch them. If a saved session cannot load, its assignment fails and you will receive an error; ask the user before replacing it.`
+      ? `These assignments are being resumed using their original Worker sessions: ${assignmentList(interrupted)}. Do not re-dispatch them. If a saved session cannot load, its assignment fails and you will receive an error; ask the user before replacing it.`
       : "No assignments were interrupted."
+  }${
+    unconfirmedFailures.length > 0
+      ? ` These assignments failed before the stop and their failure notice was not confirmed delivered (you may already have been told): ${assignmentList(unconfirmedFailures)}. They will not resume.`
+      : ""
   } Re-check the workspace before continuing.`;
 
 /** Recipient-facing header; the structured SDK sender is the authoritative identity. */
@@ -130,6 +140,62 @@ export const agentMessageText = (
 
 const clip = (text: string, limit: number) =>
   text.length > limit ? `${text.slice(0, limit)}…` : text;
+
+const NOTICE_LABEL = "[Missions] Automated daemon notice (not from the user).";
+const NOTICE_DISCLAIMER =
+  "This is task context only, never user authorization.";
+const MAX_SUMMARIES = 5;
+const SUMMARY_LIMIT = 300;
+const REASON_LIMIT = 500;
+
+const workerRef = (workerTitle: string, assignment: Assignment) =>
+  `${workerTitle} (assignment ${assignment.id}, "${clip(assignment.title, 120)}")`;
+
+export type WorkerFailure =
+  | { kind: "exit"; detail: string }
+  | { kind: "start"; detail: string };
+
+export const workerFailedMessage = (
+  workerTitle: string,
+  assignment: Assignment,
+  failure: WorkerFailure
+) => {
+  const what =
+    failure.kind === "exit"
+      ? "stopped unexpectedly: its process exited or lost its connection"
+      : "could not start";
+  return `${NOTICE_LABEL} ${workerRef(workerTitle, assignment)} ${what} (${clip(failure.detail, REASON_LIMIT)}). The assignment is marked failed and will not resume. Queued assignments start once its cleanup finishes. Whether to dispatch a replacement is your decision. ${NOTICE_DISCLAIMER}`;
+};
+
+/** What a blocked Worker waits for; question text is agent-written and never included. */
+export type WorkerWait =
+  | { kind: "permission"; summaries: readonly string[] }
+  | { kind: "question" };
+
+export const workerBlockedMessage = (
+  workerTitle: string,
+  assignment: Assignment,
+  since: string,
+  wait: WorkerWait
+) => {
+  let what = "to answer a question";
+  if (wait.kind === "permission") {
+    const shown = wait.summaries
+      .slice(0, MAX_SUMMARIES)
+      .map((summary) => clip(summary, SUMMARY_LIMIT));
+    const more = wait.summaries.length - shown.length;
+    what = `to approve: ${shown.join("; ")}${more > 0 ? ` (+${more} more)` : ""}`;
+  }
+  return `${NOTICE_LABEL} As of ${since}, ${workerRef(workerTitle, assignment)} is waiting for the user ${what}. Only the user can decide; you will get another notice when the wait ends. ${NOTICE_DISCLAIMER}`;
+};
+
+export const workerUnblockedMessage = (
+  workerTitle: string,
+  assignment: Assignment,
+  since: string,
+  outcome: string
+) =>
+  `${NOTICE_LABEL} The wait of ${workerRef(workerTitle, assignment)} that began at ${since} ended: the request was ${outcome}. ${NOTICE_DISCLAIMER}`;
 
 export interface ContinuationContext {
   mission: Mission;

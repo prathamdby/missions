@@ -198,6 +198,95 @@ const nativelyQueued = async (daemon: Daemon, id: string) => {
   return item;
 };
 
+const EVENT_LABEL = "[Missions] Automated daemon notice (not from the user).";
+
+type Started = Awaited<ReturnType<typeof startMission>>;
+
+const agentEvents = (ctx: Started) =>
+  ctx.daemon.store.queue
+    .list(ctx.missionId)
+    .filter((item) => item.id.startsWith("evt:"))
+    .toSorted((a, b) => a.sequence - b.sequence);
+
+/** Dispatches one Worker and waits until it received its assignment. */
+const startWorker = async (
+  ctx: Started,
+  title = "Write",
+  needsWrite = true
+) => {
+  await ctx.orchestrator.tool("dispatch_worker", {
+    instructions: title,
+    needsWrite,
+    title,
+  });
+  const worker = await waitFor(
+    () =>
+      ctx.runtimes.find(
+        (runtime) =>
+          runtime.options.role === "worker" && runtime.submitted.length > 0
+      ),
+    Boolean
+  );
+  const assignment = ctx.daemon.missions
+    .snapshot(ctx.missionId)
+    .assignments.find((entry) => entry.title === title);
+  if (!(worker && assignment)) {
+    throw new Error("Worker did not start");
+  }
+  return { assignment, worker };
+};
+
+/** Parks the main agent's outbox on a hung submit so later items stay accepted. */
+const holdOrchestrator = async (ctx: Started) => {
+  const release = Promise.withResolvers<undefined>();
+  const submit = ctx.orchestrator.submit.bind(ctx.orchestrator);
+  vi.spyOn(ctx.orchestrator, "submit").mockImplementation(
+    async (id, text, mode, options) => {
+      if (id === "hold-delivery") {
+        await release.promise;
+      }
+      return await submit(id, text, mode, options);
+    }
+  );
+  await ctx.daemon.missions.submitMessage(ctx.missionId, {
+    mode: "steer",
+    operationId: "hold-delivery",
+    text: "Hold",
+  });
+  await waitFor(
+    () => ctx.daemon.store.queue.get("hold-delivery"),
+    (item) => item?.state === "submitting"
+  );
+  return () => release.resolve(undefined);
+};
+
+const askWorkerPermission = async (ctx: Started, worker: FakeRuntime) => {
+  const approved = worker.options.onPermission({
+    agentId: worker.options.agentId,
+    toolUses: [UNCLASSIFIED],
+  });
+  const request = await waitFor(
+    () =>
+      ctx.daemon.store.permissions
+        .list(ctx.missionId, ["pending"])
+        .find((entry) => entry.agentId === worker.options.agentId),
+    Boolean
+  );
+  if (!request) {
+    throw new Error("Permission was not requested");
+  }
+  return { approved, request };
+};
+
+const submittedNotice = async (
+  ctx: Started,
+  id: string,
+  runtime = ctx.orchestrator
+) =>
+  await waitFor(
+    () => runtime.submitted.find((entry) => entry.id === id),
+    Boolean
+  );
 const saveCleanupOperation = (
   ctx: { daemon: Daemon; missionId: string },
   id: string,
@@ -2129,6 +2218,33 @@ describe("mission service", () => {
     worker.emit({ message: "connection lost", type: "process_exit" });
     await entered.promise;
     expect(ctx.runtimes).toHaveLength(2);
+    const [first] = ctx.daemon.missions.snapshot(ctx.missionId).assignments;
+    const id = `evt:worker-failed:${first?.id}:0`;
+    const notice = await submittedNotice(ctx, id);
+    expect({
+      item: ctx.daemon.store.queue.get(id),
+      notice,
+      records: ctx.daemon.missions
+        .snapshot(ctx.missionId)
+        .transcript.filter((entry) => entry.requestId === id)
+        .map((entry) => entry.kind),
+    }).toStrictEqual({
+      item: expect.objectContaining({
+        mode: "steer",
+        origin: "daemon",
+        purpose: "control",
+        sender: null,
+      }),
+      notice: {
+        id,
+        mode: "steer",
+        options: {},
+        text: expect.stringMatching(
+          /^\[Missions\] Automated daemon notice \(not from the user\)\..*stopped unexpectedly: its process exited or lost its connection \(connection lost\)\. The assignment is marked failed.*never user authorization\.$/u
+        ),
+      },
+      records: ["system"],
+    });
     release.resolve(undefined);
     await waitFor(
       () => ctx.runtimes[2],
@@ -2140,6 +2256,442 @@ describe("mission service", () => {
         .assignments.map((assignment) => assignment.status)
         .toSorted()
     ).toStrictEqual(["failed", "running"]);
+  });
+
+  it("tells the main agent at once when a worker exits, before cleanup finishes", async () => {
+    const ctx = await startMission();
+    const { assignment, worker } = await startWorker(ctx);
+    const release = Promise.withResolvers<undefined>();
+    const close = worker.close.bind(worker);
+    worker.survivors = [4242];
+    vi.spyOn(worker, "close").mockImplementation(async () => {
+      await release.promise;
+      return await close();
+    });
+    worker.emit({ message: "connection lost", type: "process_exit" });
+    const id = `evt:worker-failed:${assignment.id}:0`;
+    const notice = await submittedNotice(ctx, id);
+    expect(worker.closed).toBeFalsy();
+    release.resolve(undefined);
+    await waitFor(
+      () => ctx.daemon.missions.get(ctx.missionId).status,
+      (status) => status === "stop_failed"
+    );
+    expect({
+      events: agentEvents(ctx).map((item) => item.id),
+      notices: ctx.daemon.log
+        .replay(ctx.missionId, 0)
+        .filter(
+          (event) =>
+            event.type === "notice" && event.data.notice.code === "run_failed"
+        ).length,
+      text: notice?.text,
+    }).toStrictEqual({
+      events: [id],
+      notices: 1,
+      text: expect.stringContaining("connection lost"),
+    });
+  });
+
+  it("reports a worker that crashes during startup exactly once", async () => {
+    const booted = await boot(undefined, (runtime, index) => {
+      if (index !== 1) {
+        return;
+      }
+      vi.spyOn(runtime, "start").mockImplementation(async () => {
+        await yieldImmediate();
+        runtime.emit({ message: "spawn died", type: "process_exit" });
+        throw new Error("worker initialization failed");
+      });
+    });
+    const created = await createMission(booted);
+    const orchestrator = await waitFor(
+      () => booted.runtimes[0],
+      (runtime) => (runtime?.submitted.length ?? 0) > 0
+    );
+    if (!orchestrator) {
+      throw new Error("Missing orchestrator");
+    }
+    const ctx = { ...created, orchestrator };
+    await orchestrator.tool("dispatch_worker", {
+      instructions: "Crash",
+      needsWrite: false,
+      title: "Crash",
+    });
+    const [assignment] = ctx.daemon.missions.snapshot(
+      ctx.missionId
+    ).assignments;
+    const id = `evt:worker-failed:${assignment?.id}:0`;
+    await submittedNotice(ctx, id);
+    await waitFor(() => booted.runtimes[1]?.closed, Boolean);
+    await yieldImmediate();
+    expect({
+      events: agentEvents(ctx).map((item) => item.id),
+      failures: orchestrator.submitted.filter((entry) =>
+        entry.text.includes("stopped unexpectedly")
+      ).length,
+      notices: ctx.daemon.log
+        .replay(ctx.missionId, 0)
+        .filter(
+          (event) =>
+            event.type === "notice" && event.data.notice.code === "run_failed"
+        ).length,
+      status: ctx.daemon.missions.snapshot(ctx.missionId).assignments[0]
+        ?.status,
+    }).toStrictEqual({
+      events: [id],
+      failures: 1,
+      notices: 1,
+      status: "failed",
+    });
+  });
+
+  it("ignores a late exit from a worker execution replaced by Pause and Resume", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx, "Read", false);
+    const paused = await ctx.daemon.missions.pause(ctx.missionId, {
+      expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
+      operationId: "late-exit-pause",
+    });
+    await ctx.daemon.missions.resume(ctx.missionId, {
+      expectedRevision: paused.revision,
+      operationId: "late-exit-resume",
+    });
+    await waitFor(
+      () => ctx.runtimes.at(-1),
+      (runtime) =>
+        runtime !== worker &&
+        runtime?.options.agentId === worker.options.agentId &&
+        runtime.submitted.length > 0
+    );
+    await yieldImmediate();
+    const before = {
+      events: ctx.daemon.log.replay(ctx.missionId, 0).length,
+      queue: ctx.daemon.store.queue.list(ctx.missionId).length,
+    };
+    worker.emit({ message: "late exit", type: "process_exit" });
+    await yieldImmediate();
+    expect({
+      assignment: ctx.daemon.missions.snapshot(ctx.missionId).assignments[0]
+        ?.status,
+      events: ctx.daemon.log.replay(ctx.missionId, 0).length,
+      queue: ctx.daemon.store.queue.list(ctx.missionId).length,
+    }).toStrictEqual({ ...before, assignment: "running" });
+  });
+
+  it("discards an undelivered failure notice on Pause and summarizes it after Resume", async () => {
+    const ctx = await startMission();
+    const { assignment, worker } = await startWorker(ctx);
+    await holdOrchestrator(ctx);
+    worker.emit({ message: "connection lost", type: "process_exit" });
+    const id = `evt:worker-failed:${assignment.id}:0`;
+    expect(ctx.daemon.store.queue.get(id)?.state).toBe("accepted");
+    const paused = await ctx.daemon.missions.pause(ctx.missionId, {
+      expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
+      operationId: "racing-pause",
+    });
+    expect(ctx.daemon.store.queue.get(id)?.state).toBe("discarded");
+    await ctx.daemon.missions.resume(ctx.missionId, {
+      expectedRevision: paused.revision,
+      operationId: "racing-resume",
+    });
+    const restarted = await waitFor(
+      () => ctx.runtimes.at(-1),
+      (runtime) =>
+        runtime?.options.role === "orchestrator" &&
+        runtime !== ctx.orchestrator &&
+        runtime.submitted.length > 0
+    );
+    expect({
+      events: restarted?.submitted.filter((entry) =>
+        entry.id.startsWith("evt:")
+      ),
+      resume: restarted?.submitted[0]?.text,
+      sentBeforePause: ctx.orchestrator.submitted.some(
+        (entry) => entry.id === id
+      ),
+    }).toStrictEqual({
+      events: [],
+      resume: expect.stringContaining(
+        `failure notice was not confirmed delivered (you may already have been told): ${assignment.id}`
+      ),
+      sentBeforePause: false,
+    });
+  });
+
+  it("never resends an uncertain notice and refuses user changes to daemon items", async () => {
+    let failing = false;
+    const booted = await boot(undefined, (runtime, index) => {
+      if (index === 0) {
+        runtime.failSubmits = () => failing;
+      }
+    });
+    const created = await createMission(booted);
+    const orchestrator = await waitFor(
+      () => booted.runtimes[0],
+      (runtime) => (runtime?.submitted.length ?? 0) > 0
+    );
+    if (!orchestrator) {
+      throw new Error("Missing orchestrator");
+    }
+    const ctx = { ...created, orchestrator };
+    const { assignment, worker } = await startWorker(ctx);
+    failing = true;
+    worker.emit({ message: "connection lost", type: "process_exit" });
+    const id = `evt:worker-failed:${assignment.id}:0`;
+    const item = await waitFor(
+      () => ctx.daemon.store.queue.get(id),
+      (entry) => entry?.state === "unknown"
+    );
+    failing = false;
+    await ctx.daemon.missions.submitMessage(ctx.missionId, {
+      mode: "steer",
+      operationId: "after-unknown",
+      text: "Next",
+    });
+    await nativelyQueued(ctx.daemon, "after-unknown");
+    const revision = item?.revision ?? -1;
+    const attempts = await Promise.allSettled([
+      ctx.daemon.missions.changeQueueMode(ctx.missionId, id, {
+        expectedRevision: revision,
+        mode: "queue",
+      }),
+      ctx.daemon.missions.removeQueueItem(ctx.missionId, id, revision),
+      ctx.daemon.missions.editQueueItem(ctx.missionId, id, {
+        expectedRevision: revision,
+        operationId: "edit-daemon-item",
+        text: "Changed",
+      }),
+      ctx.daemon.missions.retryQueueItem(ctx.missionId, id, {
+        expectedRevision: revision,
+        operationId: "retry-daemon-item",
+      }),
+    ]);
+    expect({
+      attempts: attempts.map((attempt) =>
+        attempt.status === "rejected"
+          ? (attempt.reason as { code?: string }).code
+          : "fulfilled"
+      ),
+      notice: ctx.daemon.log
+        .replay(ctx.missionId, 0)
+        .some(
+          (event) =>
+            event.type === "notice" &&
+            event.data.notice.message.includes(
+              "automated notice to the main agent may not have been delivered"
+            )
+        ),
+      resent: orchestrator.submitted.some((entry) => entry.id === id),
+      state: ctx.daemon.store.queue.get(id)?.state,
+    }).toStrictEqual({
+      attempts: ["conflict", "conflict", "conflict", "conflict"],
+      notice: true,
+      resent: false,
+      state: "unknown",
+    });
+  });
+
+  it("tells the main agent when a worker waits for the user and when the wait ends", async () => {
+    const ctx = await startMission();
+    const { assignment, worker } = await startWorker(ctx);
+    const own = ctx.orchestrator.options.onPermission({
+      agentId: ctx.orchestrator.options.agentId,
+      toolUses: [UNCLASSIFIED],
+    });
+    const { approved, request } = await askWorkerPermission(ctx, worker);
+    const blockedId = `evt:worker-blocked:${request.id}`;
+    const blocked = await submittedNotice(ctx, blockedId);
+    ctx.orchestrator.consume(blockedId);
+    ctx.daemon.missions.decidePermission(ctx.missionId, request.id, {
+      decision: "approve_once",
+      epoch: 0,
+    });
+    await expect(approved).resolves.toBeTruthy();
+    const unblocked = await submittedNotice(
+      ctx,
+      `evt:worker-unblocked:${request.id}`
+    );
+    expect({
+      blocked: blocked?.text,
+      events: agentEvents(ctx).map(({ id, origin, purpose, sender }) => ({
+        id,
+        origin,
+        purpose,
+        sender,
+      })),
+      mode: blocked?.mode,
+      options: blocked?.options,
+      unblocked: unblocked?.text,
+    }).toStrictEqual({
+      blocked: expect.stringMatching(
+        new RegExp(
+          `^${EVENT_LABEL.replaceAll(/[.()[\]]/gu, String.raw`\$&`)}.*assignment ${assignment.id}.*waiting for the user to approve: Mystery.*never user authorization\\.$`,
+          "u"
+        )
+      ),
+      events: [blockedId, `evt:worker-unblocked:${request.id}`].map((id) => ({
+        id,
+        origin: "daemon",
+        purpose: "control",
+        sender: null,
+      })),
+      mode: "steer",
+      options: {},
+      unblocked: expect.stringContaining("the request was approved"),
+    });
+    expect(
+      ctx.daemon.missions
+        .snapshot(ctx.missionId)
+        .transcript.filter((entry) => entry.requestId === blockedId)
+        .map((entry) => entry.kind)
+    ).toStrictEqual(["system"]);
+    for (const pending of ctx.daemon.store.permissions.list(ctx.missionId, [
+      "pending",
+    ])) {
+      ctx.daemon.missions.decidePermission(ctx.missionId, pending.id, {
+        decision: "deny",
+        epoch: 0,
+      });
+    }
+    await expect(own).resolves.toBeFalsy();
+    expect(agentEvents(ctx)).toHaveLength(2);
+  });
+
+  it("discards a blocked notice decided before delivery and withdraws an unread one", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    const release = await holdOrchestrator(ctx);
+    const first = await askWorkerPermission(ctx, worker);
+    const firstId = `evt:worker-blocked:${first.request.id}`;
+    expect(ctx.daemon.store.queue.get(firstId)?.state).toBe("accepted");
+    ctx.daemon.missions.decidePermission(ctx.missionId, first.request.id, {
+      decision: "deny",
+      epoch: 0,
+    });
+    await expect(first.approved).resolves.toBeFalsy();
+    release();
+    await nativelyQueued(ctx.daemon, "hold-delivery");
+    const second = await askWorkerPermission(ctx, worker);
+    const secondId = `evt:worker-blocked:${second.request.id}`;
+    await nativelyQueued(ctx.daemon, secondId);
+    ctx.daemon.missions.decidePermission(ctx.missionId, second.request.id, {
+      decision: "deny",
+      epoch: 0,
+    });
+    await waitFor(
+      () => ctx.daemon.store.queue.get(secondId)?.state,
+      (state) => state === "removed"
+    );
+    await yieldImmediate();
+    expect({
+      events: agentEvents(ctx).map(({ id, state }) => ({ id, state })),
+      submitted: ctx.orchestrator.submitted
+        .map((entry) => entry.id)
+        .filter((id) => id.startsWith("evt:")),
+    }).toStrictEqual({
+      events: [
+        { id: firstId, state: "discarded" },
+        { id: secondId, state: "removed" },
+      ],
+      submitted: [secondId],
+    });
+  });
+
+  it("follows a blocked notice the runner already delivered with an unblocked notice", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    const { request } = await askWorkerPermission(ctx, worker);
+    const blockedId = `evt:worker-blocked:${request.id}`;
+    await nativelyQueued(ctx.daemon, blockedId);
+    vi.spyOn(ctx.orchestrator, "remove").mockResolvedValue("already_sent");
+    ctx.daemon.missions.decidePermission(ctx.missionId, request.id, {
+      decision: "deny",
+      epoch: 0,
+    });
+    const unblocked = await submittedNotice(
+      ctx,
+      `evt:worker-unblocked:${request.id}`
+    );
+    expect(unblocked?.text).toContain("the request was denied");
+  });
+
+  it("sends only the failure notice when a blocked worker dies", async () => {
+    const ctx = await startMission();
+    const { assignment, worker } = await startWorker(ctx);
+    const { approved, request } = await askWorkerPermission(ctx, worker);
+    const blockedId = `evt:worker-blocked:${request.id}`;
+    await submittedNotice(ctx, blockedId);
+    ctx.orchestrator.consume(blockedId);
+    worker.emit({ message: "connection lost", type: "process_exit" });
+    await expect(approved).resolves.toBeFalsy();
+    await submittedNotice(ctx, `evt:worker-failed:${assignment.id}:0`);
+    await waitFor(() => worker.closed, Boolean);
+    await yieldImmediate();
+    expect(agentEvents(ctx).map((item) => item.id)).toStrictEqual([
+      blockedId,
+      `evt:worker-failed:${assignment.id}:0`,
+    ]);
+  });
+
+  it("reports worker questions without their text and the main agent's own waits not at all", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx, "Read", false);
+    const question = {
+      index: 1,
+      multiSelect: false,
+      options: ["A"],
+      question: "Secret detail?",
+      topic: "Hidden topic",
+    };
+    const own = ctx.orchestrator.options.onAskUser({
+      agentId: ctx.orchestrator.options.agentId,
+      questions: [question],
+      toolCallId: "own-ask",
+    });
+    const answer = worker.options.onAskUser({
+      agentId: worker.options.agentId,
+      questions: [question],
+      toolCallId: "worker-ask",
+    });
+    const pending = ctx.daemon.store.questions
+      .list(ctx.missionId, ["pending"])
+      .find((entry) => entry.agentId === worker.options.agentId);
+    const blockedId = `evt:worker-blocked:${pending?.id}`;
+    const blocked = await submittedNotice(ctx, blockedId);
+    ctx.orchestrator.consume(blockedId);
+    ctx.daemon.missions.answerQuestion(ctx.missionId, pending?.id ?? "", {
+      answers: [{ answer: "A", index: 1 }],
+      epoch: 0,
+    });
+    await expect(answer).resolves.toMatchObject({ cancelled: false });
+    const unblocked = await submittedNotice(
+      ctx,
+      `evt:worker-unblocked:${pending?.id}`
+    );
+    expect({
+      blocked: blocked?.text.includes("to answer a question"),
+      events: agentEvents(ctx).length,
+      leaked: [blocked?.text, unblocked?.text].some(
+        (text) => text?.includes("Secret") || text?.includes("Hidden")
+      ),
+      unblocked: unblocked?.text.includes("the request was answered"),
+    }).toStrictEqual({
+      blocked: true,
+      events: 2,
+      leaked: false,
+      unblocked: true,
+    });
+    const ownQuestion = ctx.daemon.store.questions
+      .list(ctx.missionId, ["pending"])
+      .find((entry) => entry.agentId === ctx.orchestrator.options.agentId);
+    ctx.daemon.missions.answerQuestion(ctx.missionId, ownQuestion?.id ?? "", {
+      answers: [],
+      cancelled: true,
+      epoch: 0,
+    });
+    await expect(own).resolves.toMatchObject({ cancelled: true });
+    expect(agentEvents(ctx)).toHaveLength(2);
   });
 
   it("tool call correlation is agent-scoped and discarded with its generation", async () => {

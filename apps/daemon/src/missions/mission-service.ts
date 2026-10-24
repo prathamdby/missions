@@ -105,6 +105,13 @@ import {
 import type { WorkspaceService } from "../workspaces/workspace-service";
 import { WriteLeaseRegistry } from "../workspaces/write-lease";
 import {
+  agentEventStillValid,
+  parseAgentEventId,
+  workerBlockedId,
+  workerFailedId,
+  workerUnblockedId,
+} from "./agent-events";
+import {
   ACTIVE,
   agentMessageText,
   assignmentMessage,
@@ -125,7 +132,11 @@ import {
   SNAPSHOT_TRANSCRIPT,
   SYSTEM_PREFIX,
   titleFromGoal,
+  workerBlockedMessage,
+  workerFailedMessage,
+  workerUnblockedMessage,
 } from "./messages";
+import type { WorkerFailure, WorkerWait } from "./messages";
 import {
   deliverableFor,
   isOutstanding,
@@ -229,6 +240,9 @@ interface PendingQuestion {
   resolve: (answer: AskUserAnswer) => void;
 }
 
+/** A Worker's permission request or question, as agent events refer to it. */
+type WorkerWaitRecord = Pick<Question, "createdAt" | "epoch" | "id">;
+
 const WRITE_TOOLS = new Set([
   "Edit",
   "Create",
@@ -257,6 +271,16 @@ const ENDED_STATUSES = new Set<Mission["status"]>([
 
 const isDefiniteFailure = (error: unknown) => error instanceof AppError;
 const MISSION_DELETE = "mission.delete";
+
+const PERMISSION_OUTCOMES: Record<
+  Exclude<PermissionRequest["status"], "pending">,
+  string
+> = {
+  approved: "approved",
+  cancelled: "cancelled",
+  denied: "denied",
+  stale: "no longer valid",
+};
 
 const isExitSpecMode = (use: PermissionToolUse) =>
   use.confirmationType === "exit_spec_mode" ||
@@ -624,6 +648,21 @@ export class MissionService {
         waitingReason: pending ? "permission" : null,
       });
     }
+    if (!request.agentId) {
+      return;
+    }
+    if (request.status === "pending") {
+      this.#workerBlocked(request.agentId, request, {
+        kind: "permission",
+        summaries: request.toolUses.map((use) => use.summary),
+      });
+    } else {
+      this.#workerUnblocked(
+        request.agentId,
+        request,
+        PERMISSION_OUTCOMES[request.status]
+      );
+    }
   }
 
   #saveQuestion(question: Question) {
@@ -634,6 +673,11 @@ export class MissionService {
         type: "question.updated",
       });
     });
+    if (question.status === "pending") {
+      this.#workerBlocked(question.agentId, question, { kind: "question" });
+    } else {
+      this.#workerUnblocked(question.agentId, question, question.status);
+    }
   }
 
   #saveAssignment(assignment: Assignment) {
@@ -1793,15 +1837,15 @@ export class MissionService {
       }
       return;
     }
+    // Recorded before cleanup, so the main agent hears about it at once and
+    // decisions cancelled by cleanup find the assignment no longer running.
+    this.#recordWorkerFailure(agent, mission.epoch, {
+      detail: message,
+      kind: "exit",
+    });
     const result = await this.#closeRuntime(agent.id);
-    if (agent.assignmentId) {
-      const assignment = this.#store.assignments.get(agent.assignmentId);
-      if (assignment?.status === "running") {
-        this.#saveAssignment({ ...assignment, status: "failed" });
-      }
-      if (result.stopped) {
-        await this.#pumpAssignments(mission.id);
-      }
+    if (agent.assignmentId && result.stopped) {
+      await this.#pumpAssignments(mission.id);
     }
   }
 
@@ -2482,35 +2526,28 @@ export class MissionService {
     worker: Agent,
     error: unknown
   ) {
+    const recorded = this.#recordWorkerFailure(worker, mission.epoch, {
+      detail: errorMessage(error),
+      kind: "start",
+    });
     this.#failUndelivered(worker.id, "The Worker could not start");
-    const result = await this.#closeRuntime(worker.id);
-    if (!FENCED.has(this.get(mission.id).status)) {
-      this.#patchAgent(worker.id, { status: "failed" });
-    }
-    const latest = this.#store.assignments.get(assignment.id) ?? assignment;
-    if (latest.status === "running") {
-      this.#saveAssignment({ ...latest, status: "failed" });
-    }
-    if (!FENCED.has(this.get(mission.id).status) && !this.#closing) {
-      this.#notice(
-        mission.id,
-        "run_failed",
-        "error",
-        `Assignment ${assignment.title} could not start: ${errorMessage(error)}`
-      );
+    if (recorded) {
       this.#saveSharedFile(
         mission.id,
         `errors/${worker.id}-${mission.epoch}.md`,
         `# ${assignment.title}\n\n${errorMessage(error)}\n`
       );
-      void this.#systemSubmit(
-        this.#orchestrator(mission.id).id,
-        `[Missions] Assignment ${assignment.id} could not start: ${errorMessage(error)}`,
-        "steer"
-      );
-      if (result.stopped) {
-        await this.#pumpAssignments(mission.id);
-      }
+    }
+    const result = await this.#closeRuntime(worker.id);
+    if (!FENCED.has(this.get(mission.id).status)) {
+      this.#patchAgent(worker.id, { status: "failed" });
+    }
+    if (
+      result.stopped &&
+      !FENCED.has(this.get(mission.id).status) &&
+      !this.#closing
+    ) {
+      await this.#pumpAssignments(mission.id);
     }
   }
 
@@ -2656,6 +2693,240 @@ export class MissionService {
     return item;
   }
 
+  // --------------------------------------------------------- agent events
+
+  /**
+   * Persists an agent event and its one transcript record in a single
+   * commit, then schedules delivery. The native echo of a daemon item is
+   * suppressed, so the record is the only transcript entry. An existing ID is
+   * never accepted twice.
+   */
+  #acceptDaemonEvent(event: {
+    id: string;
+    recipient: Agent;
+    text: string;
+    alsoCommit?: (emit: Emit) => void;
+  }): boolean {
+    if (this.#store.queue.get(event.id)) {
+      return false;
+    }
+    const { missionId } = event.recipient;
+    const item = this.#newQueueItem({
+      agentId: event.recipient.id,
+      id: event.id,
+      missionId,
+      mode: "steer",
+      origin: "daemon",
+      purpose: "control",
+      sequence: nextSequence(this.#store.queue.list(missionId)),
+      text: event.text,
+    });
+    const record: NewTranscriptItem = {
+      agentId: event.recipient.id,
+      createdAt: item.createdAt,
+      id: `${event.id}:record`,
+      isError: false,
+      kind: "system",
+      missionId,
+      purpose: "control",
+      recipient: null,
+      requestId: event.id,
+      sender: null,
+      text: event.text,
+      toolName: null,
+      toolUseId: null,
+    };
+    this.#log.commit((emit) => {
+      event.alsoCommit?.(emit);
+      this.#store.queue.put(item);
+      emit(missionId, { data: { item }, type: "queue.updated" });
+      if (!this.#store.getTranscriptItem(record.id)) {
+        const saved = this.#store.appendTranscript(record);
+        emit(missionId, { data: { item: saved }, type: "transcript.item" });
+      }
+    });
+    this.#scheduleDelivery(item.agentId);
+    return true;
+  }
+
+  /** A Worker whose assignment is running in an open mission; only these produce events. */
+  #runningWorker(agentId: string) {
+    const worker = this.#store.getAgent(agentId);
+    if (this.#closing || worker?.role !== "worker" || !worker.assignmentId) {
+      return null;
+    }
+    const mission = this.#store.getMission(worker.missionId);
+    const assignment = this.#store.assignments.get(worker.assignmentId);
+    if (
+      !mission ||
+      FENCED.has(mission.status) ||
+      assignment?.status !== "running"
+    ) {
+      return null;
+    }
+    return { assignment, mission, worker };
+  }
+
+  /**
+   * Marks a running assignment failed and tells the main agent in one commit,
+   * before cleanup starts. Returns true only for the first caller, so a
+   * Worker that both crashes and fails startup is reported once.
+   */
+  #recordWorkerFailure(
+    worker: Agent,
+    epoch: number,
+    failure: WorkerFailure
+  ): boolean {
+    const running = this.#runningWorker(worker.id);
+    if (!running || running.mission.epoch !== epoch) {
+      return false;
+    }
+    const { assignment, mission } = running;
+    const failed: Assignment = {
+      ...assignment,
+      status: "failed",
+      updatedAt: this.#iso(),
+    };
+    const recorded = this.#acceptDaemonEvent({
+      alsoCommit: (emit) => {
+        this.#store.assignments.put(failed);
+        emit(mission.id, {
+          data: { assignment: failed },
+          type: "assignment.updated",
+        });
+      },
+      id: workerFailedId(assignment.id, epoch),
+      recipient: this.#orchestrator(mission.id),
+      text: workerFailedMessage(running.worker.title, failed, failure),
+    });
+    if (recorded) {
+      this.#notice(
+        mission.id,
+        "run_failed",
+        "error",
+        failure.kind === "start"
+          ? `Assignment ${assignment.title} could not start: ${failure.detail}`
+          : `${running.worker.title} stopped unexpectedly on ${assignment.title}: ${failure.detail}`
+      );
+    }
+    return recorded;
+  }
+
+  #workerBlocked(agentId: string, wait: WorkerWaitRecord, detail: WorkerWait) {
+    const running = this.#runningWorker(agentId);
+    if (!running || running.mission.epoch !== wait.epoch) {
+      return;
+    }
+    this.#acceptDaemonEvent({
+      id: workerBlockedId(wait.id),
+      recipient: this.#orchestrator(running.mission.id),
+      text: workerBlockedMessage(
+        running.worker.title,
+        running.assignment,
+        wait.createdAt,
+        detail
+      ),
+    });
+  }
+
+  /**
+   * A blocked notice the main agent never read is withdrawn; one it may have
+   * read is followed by an unblocked notice.
+   */
+  #workerUnblocked(agentId: string, wait: WorkerWaitRecord, outcome: string) {
+    const blocked = this.#store.queue.get(workerBlockedId(wait.id));
+    if (!blocked) {
+      return;
+    }
+    if (blocked.state === "accepted") {
+      this.#reviseAccepted(blocked.id, {
+        error: "The wait ended before delivery",
+        state: "discarded",
+      });
+      return;
+    }
+    if (
+      blocked.state === "submitting" ||
+      blocked.state === "queued" ||
+      blocked.state === "removing"
+    ) {
+      this.#own(this.#withdrawBlocked(blocked, agentId, wait, outcome));
+      return;
+    }
+    // A failed, removed or discarded notice was never read.
+    if (blocked.state === "sent" || blocked.state === "unknown") {
+      this.#sendUnblocked(agentId, wait, outcome);
+    }
+  }
+
+  async #withdrawBlocked(
+    blocked: QueueItem,
+    agentId: string,
+    wait: WorkerWaitRecord,
+    outcome: string
+  ) {
+    let removal: RemoveOutcome = "unconfirmed";
+    const live = this.#live.get(blocked.agentId);
+    if (
+      live &&
+      this.#isCurrent(blocked.agentId, live) &&
+      live.phase === "ready"
+    ) {
+      try {
+        removal = await this.#execute(blocked.agentId, live.runtime, () =>
+          live.runtime.remove(blocked.id)
+        );
+      } catch {
+        // An unconfirmed delete may already have been read.
+      }
+    }
+    if (removal !== "removed") {
+      this.#sendUnblocked(agentId, wait, outcome);
+    }
+  }
+
+  #sendUnblocked(agentId: string, wait: WorkerWaitRecord, outcome: string) {
+    // A Worker that died or a mission that stopped is covered by the failure
+    // notice or the resume message instead.
+    const running = this.#runningWorker(agentId);
+    if (!running || running.mission.epoch !== wait.epoch) {
+      return;
+    }
+    this.#acceptDaemonEvent({
+      id: workerUnblockedId(wait.id),
+      recipient: this.#orchestrator(running.mission.id),
+      text: workerUnblockedMessage(
+        running.worker.title,
+        running.assignment,
+        wait.createdAt,
+        outcome
+      ),
+    });
+  }
+
+  #eventStillValid(item: QueueItem, missionEpoch: number) {
+    const event = parseAgentEventId(item.id);
+    if (!event) {
+      return true;
+    }
+    if (event.kind === "worker-failed") {
+      return agentEventStillValid(event, {
+        assignmentStatus:
+          this.#store.assignments.get(event.assignmentId)?.status ?? null,
+        missionEpoch,
+        wait: null,
+      });
+    }
+    const wait =
+      this.#store.permissions.get(event.waitId) ??
+      this.#store.questions.get(event.waitId);
+    return agentEventStillValid(event, {
+      assignmentStatus: null,
+      missionEpoch,
+      wait: wait ? { epoch: wait.epoch, status: wait.status } : null,
+    });
+  }
+
   // -------------------------------------------------------------- outbox
 
   /** One delivery loop per recipient; later acceptances rerun it. */
@@ -2744,6 +3015,16 @@ export class MissionService {
       if (!next) {
         return;
       }
+      if (
+        next.origin === "daemon" &&
+        !this.#eventStillValid(next, current.mission.epoch)
+      ) {
+        this.#reviseAccepted(next.id, {
+          error: "Superseded before delivery",
+          state: "discarded",
+        });
+        continue;
+      }
       // oxlint-disable-next-line no-await-in-loop -- strict admission order
       if (!(await this.#submitAccepted(live, runtime, next))) {
         return;
@@ -2802,7 +3083,18 @@ export class MissionService {
       // A definite rejection affects only this message; anything uncertain
       // stops the pass so nothing races an ambiguous transport.
       const outcome = this.#store.queue.get(item.id)?.state;
-      if (outcome === "unknown" && this.#isCurrent(live.agentId, live)) {
+      if (
+        latest.origin === "daemon" &&
+        (outcome === "unknown" || outcome === "failed") &&
+        this.#isCurrent(live.agentId, live)
+      ) {
+        this.#notice(
+          live.missionId,
+          "run_failed",
+          "warning",
+          `An automated notice to the main agent ${outcome === "failed" ? "was not delivered" : "may not have been delivered"} (${errorMessage(error)}). Notices are never sent again automatically.`
+        );
+      } else if (outcome === "unknown" && this.#isCurrent(live.agentId, live)) {
         this.#notice(
           live.missionId,
           "run_failed",
@@ -3222,6 +3514,9 @@ export class MissionService {
     const item = this.#store.queue.get(itemId);
     if (!item || item.missionId !== missionId) {
       throw notFound("Queued message");
+    }
+    if (item.origin === "daemon") {
+      throw conflict("Automated notices cannot be changed or retried");
     }
     if (item.revision !== expectedRevision) {
       throw stale("This message changed; refresh and try again");
@@ -3858,6 +4153,14 @@ export class MissionService {
       this.#saveAssignment({ ...assignment, status: "cancelled" });
     }
     for (const item of this.#store.queue.list(missionId)) {
+      // Agent events describe the stopped run; Resume summarizes instead.
+      if (item.state === "accepted" && item.origin === "daemon") {
+        this.#reviseAccepted(item.id, {
+          error: "The mission stopped before delivery",
+          state: "discarded",
+        });
+        continue;
+      }
       // Accepted messages were never sent; they stay durable until Resume.
       if (
         !TERMINAL_QUEUE.has(item.state) &&
@@ -3979,9 +4282,28 @@ export class MissionService {
       .list(missionId)
       .filter((plan) => plan.status === "proposed" && !plan.actionable)
       .toSorted((a, b) => b.revision - a.revision);
-    return ended
-      ? `${resumedMessage(interrupted)}\n\n${planReissueMessage(ended)}`
-      : resumedMessage(interrupted);
+    const resumed = resumedMessage(
+      interrupted,
+      this.#unconfirmedFailures(missionId)
+    );
+    return ended ? `${resumed}\n\n${planReissueMessage(ended)}` : resumed;
+  }
+
+  /** Failures from the stopped run whose notice the main agent may never have read. */
+  #unconfirmedFailures(missionId: string) {
+    const stoppedEpoch = this.get(missionId).epoch - 1;
+    return this.#store.queue.list(missionId).flatMap((item) => {
+      const event = parseAgentEventId(item.id);
+      if (
+        event?.kind !== "worker-failed" ||
+        event.epoch !== stoppedEpoch ||
+        item.state === "sent"
+      ) {
+        return [];
+      }
+      const assignment = this.#store.assignments.get(event.assignmentId);
+      return assignment ? [assignment] : [];
+    });
   }
 
   /** Stop-failed missions must prove their recorded processes are gone before resuming. */
