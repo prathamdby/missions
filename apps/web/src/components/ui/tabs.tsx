@@ -48,7 +48,7 @@ export const TabsContent = ({
   ...props
 }: ComponentProps<typeof TabsPrimitive.Content>) => (
   <TabsPrimitive.Content
-    className={cn("min-h-0 flex-1 outline-none", className)}
+    className={cn("relative min-h-0 flex-1 outline-none", className)}
     {...props}
   />
 );

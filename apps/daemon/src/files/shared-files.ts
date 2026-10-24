@@ -32,6 +32,11 @@ export class SharedFiles {
     await ready;
   }
 
+  /** Drops the in-memory readiness cache; the files themselves stay on disk. */
+  forget(missionId: string) {
+    this.#ready.delete(missionId);
+  }
+
   async #initialize(missionId: string) {
     const root = this.root(missionId);
     await mkdir(root, { mode: 0o700, recursive: true });

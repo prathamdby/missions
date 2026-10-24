@@ -40,6 +40,57 @@ const project = <T>(
   }
 };
 
+const removedMissions = new WeakMap<QueryClient, Set<string>>();
+const removalListeners = new WeakMap<
+  QueryClient,
+  Set<(missionId: string) => void>
+>();
+
+export const isMissionRemoved = (client: QueryClient, missionId: string) =>
+  removedMissions.get(client)?.has(missionId) ?? false;
+
+/** Called once per removed mission, whether the DELETE response or the event came first. */
+export const onMissionRemoved = (
+  client: QueryClient,
+  listener: (missionId: string) => void
+) => {
+  let listeners = removalListeners.get(client);
+  if (!listeners) {
+    listeners = new Set();
+    removalListeners.set(client, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
+
+/**
+ * Deletion is terminal: drop every cached read for the mission and remember
+ * the id so late snapshots, responses, and events cannot bring it back.
+ */
+export const removeMission = (client: QueryClient, missionId: string) => {
+  let removed = removedMissions.get(client);
+  if (!removed) {
+    removed = new Set();
+    removedMissions.set(client, removed);
+  }
+  if (removed.has(missionId)) {
+    return;
+  }
+  removed.add(missionId);
+  void client.cancelQueries({ queryKey: ["mission", missionId] });
+  client.removeQueries({ queryKey: ["mission", missionId] });
+  project<MissionSummary[]>(client, queryKeys.missions, (list) =>
+    list?.filter((entry) => entry.id !== missionId)
+  );
+  invalidate(client, queryKeys.pullRequests);
+  invalidate(client, ["project"]);
+  for (const listener of removalListeners.get(client) ?? []) {
+    listener(missionId);
+  }
+};
+
 const missionVersions = new WeakMap<
   QueryClient,
   Map<
@@ -56,6 +107,9 @@ export const upsertMissionSummary = (
   client: QueryClient,
   mission: MissionSummary | Mission
 ): boolean => {
+  if (isMissionRemoved(client, mission.id)) {
+    return false;
+  }
   let versions = missionVersions.get(client);
   if (!versions) {
     versions = new Map();
@@ -120,6 +174,9 @@ export const invalidateMissionResources = (
 };
 
 export const applyMissionEvent = (client: QueryClient, event: DaemonEvent) => {
+  if (event.missionId && isMissionRemoved(client, event.missionId)) {
+    return;
+  }
   if (event.type === "mission.updated") {
     upsertMissionSummary(client, event.data.mission);
   }
@@ -157,6 +214,10 @@ export const applyGlobalEvent = (client: QueryClient, event: DaemonEvent) => {
       ]) {
         invalidate(client, queryKey);
       }
+      break;
+    }
+    case "mission.removed": {
+      removeMission(client, event.data.missionId);
       break;
     }
     case "clone.updated": {

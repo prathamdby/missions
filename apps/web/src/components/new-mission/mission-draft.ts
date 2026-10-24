@@ -1,8 +1,14 @@
 import type { CreateMissionRequest } from "@missions/protocol/commands";
 import type { Autonomy, ExecutionMode } from "@missions/protocol/common";
-import type { MissionSummary } from "@missions/protocol/missions";
+import type {
+  AgentModelSettings,
+  MissionSummary,
+} from "@missions/protocol/missions";
 import type { Branch, Project } from "@missions/protocol/projects";
-import type { Settings } from "@missions/protocol/settings";
+import type {
+  DefaultWorkspaceMode,
+  Settings,
+} from "@missions/protocol/settings";
 import type {
   CheckoutStatus,
   WorkspaceRequest,
@@ -15,11 +21,55 @@ export type WorkspaceChoice =
   | { mode: "existing_worktree"; path: string }
   | { mode: "new_worktree" };
 
+/** The models a new mission starts with. */
+export interface ModelChoices {
+  orchestrator: AgentModelSettings;
+  worker: AgentModelSettings;
+}
+
 export interface Evidence<T> {
   data: T | undefined;
   confirmed: boolean;
   version: number;
 }
+
+/** Settings a draft starts from, read once from confirmed Settings. */
+export interface DraftDefaults {
+  models: ModelChoices;
+  workspaceMode: DefaultWorkspaceMode;
+}
+
+export const draftDefaults = ({
+  confirmed,
+  data,
+}: Evidence<Settings>): DraftDefaults | null =>
+  confirmed && data
+    ? {
+        models: { orchestrator: data.orchestrator, worker: data.worker },
+        workspaceMode: data.defaultWorkspaceMode,
+      }
+    : null;
+
+/** Explicit model picks win over the frozen defaults, per role. */
+export const chooseModels = (
+  defaults: DraftDefaults | null,
+  choice: Partial<ModelChoices>
+): ModelChoices | null =>
+  defaults
+    ? {
+        orchestrator: choice.orchestrator ?? defaults.models.orchestrator,
+        worker: choice.worker ?? defaults.models.worker,
+      }
+    : null;
+
+/** Non-Git folders can only run in place; Git projects follow the saved default. */
+export const defaultWorkspace = (
+  isGit: boolean,
+  defaults: Pick<DraftDefaults, "workspaceMode"> | null
+): WorkspaceChoice =>
+  isGit && defaults?.workspaceMode !== "current_checkout"
+    ? { mode: "new_worktree" }
+    : { mode: "current_checkout" };
 
 export const resolveProject = (
   list: readonly Project[],
@@ -55,6 +105,8 @@ interface DraftInput {
   /** Work (the default) is omitted from the request. */
   executionMode?: ExecutionMode;
   goal: string;
+  /** Explicit or frozen choices; Settings defaults when omitted. */
+  models?: ModelChoices | null;
   newBranch: string | null;
   project: Project | null;
   projectsConfirmed: boolean;
@@ -155,15 +207,16 @@ const buildRequest = (
   ) {
     return null;
   }
+  const models = input.models ?? settings.data;
   return {
     autonomy: input.autonomy,
     ...(input.executionMode === "plan"
       ? { executionMode: "plan" as const }
       : {}),
     goal,
-    orchestrator: settings.data.orchestrator,
+    orchestrator: models.orchestrator,
     projectId: project.id,
-    worker: settings.data.worker,
+    worker: models.worker,
     workspace,
   };
 };

@@ -265,6 +265,19 @@ export class ProcessSupervisor {
     );
   }
 
+  /** Confirms a record's processes are gone without signalling any of them. */
+  async inspectRecord(record: ProcessRecord): Promise<StopResult> {
+    return ProcessSupervisor.#result(await this.#observeRecord(record));
+  }
+
+  static #result(observed: Observation): StopResult {
+    return {
+      stopped: !observed.unobservable && observed.members.length === 0,
+      survivors: observed.members.map((stat) => stat.pid),
+      ...(observed.unobservable ? { unobservable: true } : {}),
+    };
+  }
+
   async stopRecord(
     record: ProcessRecord,
     { graceMs = 1500, killMs = 2000 } = {}
@@ -284,11 +297,7 @@ export class ProcessSupervisor {
         observed = await this.#waitForExit(record, Date.now() + killMs);
       }
     }
-    return {
-      stopped: !observed.unobservable && observed.members.length === 0,
-      survivors: observed.members.map((stat) => stat.pid),
-      ...(observed.unobservable ? { unobservable: true } : {}),
-    };
+    return ProcessSupervisor.#result(observed);
   }
 
   async stop(agentId: string, options?: { graceMs?: number; killMs?: number }) {

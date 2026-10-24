@@ -13,7 +13,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { CheckIcon, ChevronDownIcon, ShieldIcon } from "@/components/ui/icons";
-import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
   TooltipContent,
@@ -48,12 +47,8 @@ const isAutonomy = (value: string): value is Autonomy =>
 /** XXY: hover table of levels with the current one checked. */
 const ScopeTable = ({ value }: { value: Autonomy }) => (
   <>
-    <span className="flex items-center gap-xs pb-xs">
-      <span className="flex-1 font-medium text-text">
-        What runs without asking
-      </span>
-      <Kbd size="xs">⇧</Kbd>
-      <Kbd size="xs">Tab</Kbd>
+    <span className="pb-xs font-medium text-text">
+      What runs without asking
     </span>
     {AUTONOMY_LEVELS.map((level) => {
       const current = level === value;
@@ -180,18 +175,9 @@ export const AutonomyChip = ({
         ))}
       </DropdownMenuRadioGroup>
       <DropdownMenuSeparator />
-      <div className="flex items-center gap-sm px-md py-sm text-xs leading-sm">
-        <Kbd size="sm" surface="active">
-          ⇧
-        </Kbd>
-        <Kbd size="sm" surface="active">
-          Tab
-        </Kbd>
-        <span className="flex-1 text-text-tertiary">cycles levels</span>
-        <span className="font-medium text-text-secondary">
-          Default in Settings
-        </span>
-      </div>
+      <p className="px-md py-sm text-xs leading-sm text-text-tertiary">
+        Set the default in Settings.
+      </p>
     </DropdownMenuContent>
   </DropdownMenu>
 );

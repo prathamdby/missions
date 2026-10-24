@@ -1,6 +1,6 @@
 import type { UpdateMissionRequest } from "@missions/protocol/commands";
 import type { AgentModelSettings } from "@missions/protocol/missions";
-import type { ModelOption } from "@missions/protocol/settings";
+import type { ModelList, ModelOption } from "@missions/protocol/settings";
 
 export type ModelRole = "orchestrator" | "worker";
 
@@ -28,6 +28,17 @@ export const modelSettingsUpdate = (
   role === "orchestrator"
     ? { expectedRevision, orchestrator: settings }
     : { expectedRevision, worker: settings };
+
+/** Choices stay visible but cannot change until Droid's live catalog lists models. */
+export const catalogUnavailable = (catalog: {
+  data?: ModelList;
+  isError: boolean;
+  isPending: boolean;
+}) =>
+  catalog.isPending ||
+  catalog.isError ||
+  catalog.data?.source !== "droid" ||
+  catalog.data.models.length === 0;
 
 export const modelSettingsSupported = (
   settings: AgentModelSettings,

@@ -3,22 +3,31 @@
 import type { DeliveryMode, ExecutionMode } from "@missions/protocol/common";
 import type { MissionStatus } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
-import { useId, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 
-import { ArrowUpIcon, AtIcon, PaperclipIcon } from "@/components/mission/icons";
+import {
+  ArrowUpIcon,
+  AtIcon,
+  PaperclipIcon,
+  PauseIcon,
+  PlayIcon,
+  RepeatIcon,
+} from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
-import { QueueTray, useVisibleQueue } from "@/components/mission/queue-tray";
+import { QueueTray } from "@/components/mission/queue-tray";
 import { reportMutationError } from "@/components/mission/report-error";
 import { useMissionCommand } from "@/components/mission/use-mission-command";
+import { useMissionControl } from "@/components/mission/use-mission-control";
 import { AutonomyChip } from "@/components/missions/autonomy-chip";
 import { ExecutionModeChip } from "@/components/missions/execution-mode-chip";
 import { Textarea } from "@/components/ui/input";
-import { Kbd, KbdSizeContext } from "@/components/ui/kbd";
+import { Spinner } from "@/components/ui/spinner";
 import { Hint } from "@/components/ui/tooltip";
-import { nextAutonomy } from "@/lib/autonomy";
 import { canResume, isMissionActive } from "@/lib/format";
 import { missionCapabilities } from "@/lib/mission/capabilities";
+import { composerAction } from "@/lib/mission/composer-action";
+import type { ComposerAction } from "@/lib/mission/composer-action";
 import {
   effectiveMode,
   modeStatus,
@@ -55,21 +64,102 @@ const placeholderFor = (status: MissionStatus) => {
   return "Reply to the orchestrator…";
 };
 
-/** Paper S22 legend under the composer while messages wait in the queue. */
-const QueueHints = () => (
-  <KbdSizeContext value="sm">
-    <p className="flex items-center gap-sm px-card pt-xs text-xs leading-sm font-book tracking-tight text-text-tertiary">
-      <Kbd>↵</Kbd>
-      steer
-      <span className="w-md shrink-0" />
-      <Kbd>⌥</Kbd>
-      <Kbd>↵</Kbd>
-      queue
-      <span className="flex-1" />
-      Pause clears anything not yet sent.
-    </p>
-  </KbdSizeContext>
-);
+const ACTION_BUTTON =
+  "flex size-7 cursor-pointer items-center justify-center rounded-full bg-accent text-on-accent transition-colors duration-fast hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-surface-overlay disabled:text-text-disabled aria-disabled:cursor-not-allowed aria-busy:bg-surface-overlay";
+
+const actionPresentation = (action: ComposerAction, working: boolean) => {
+  switch (action.kind) {
+    case "pause": {
+      return {
+        hint: "Pause all agents at a safe point",
+        icon: <PauseIcon className="size-3.5" />,
+        label: "Pause mission",
+      };
+    }
+    case "resume": {
+      return {
+        hint:
+          action.label === "Resume"
+            ? "Resume the mission"
+            : "Resume from the last safe point",
+        icon:
+          action.label === "Resume" ? (
+            <PlayIcon className="size-3.5" />
+          ) : (
+            <RepeatIcon className="size-3.5" />
+          ),
+        label: `${action.label} mission`,
+      };
+    }
+    case "progress": {
+      return {
+        hint: action.label,
+        icon: <Spinner label={action.label} pattern="wave" size="sm" />,
+        label: action.label,
+      };
+    }
+    default: {
+      return {
+        hint: working ? "Steer now" : "Send",
+        icon: <ArrowUpIcon className="size-3.5" />,
+        label: "Send message",
+      };
+    }
+  }
+};
+
+/**
+ * One button for the composer's current action: Send while there is text,
+ * Pause while agents work and the draft is empty, Resume or Retry once
+ * stopped. Only a click runs Pause or Resume; Enter only ever sends.
+ */
+const ComposerActionButton = ({
+  onSend,
+  text,
+}: {
+  onSend: () => void;
+  text: string;
+}) => {
+  const { live } = useMission();
+  const { status } = live.mission;
+  const { control, pause, resume } = useMissionControl();
+  const action = composerAction({
+    agents: Object.values(live.agents),
+    draft: text,
+    pending: control,
+    status,
+  });
+  const capabilities = missionCapabilities(status);
+  const { hint, icon, label } = actionPresentation(action, capabilities.active);
+  const inert =
+    action.kind === "progress" || (action.kind === "send" && !action.enabled);
+  const run = () => {
+    if (action.kind === "send") {
+      onSend();
+    } else if (action.kind === "pause") {
+      pause();
+    } else if (action.kind === "resume") {
+      resume();
+    }
+  };
+  return (
+    <Hint label={hint}>
+      <button
+        aria-busy={action.kind === "progress" || undefined}
+        aria-disabled={inert}
+        aria-label={label}
+        className={ACTION_BUTTON}
+        data-action={action.kind}
+        data-testid="composer-send"
+        disabled={action.kind === "send" && !capabilities.message}
+        onClick={inert ? undefined : run}
+        type="button"
+      >
+        {icon}
+      </button>
+    </Hint>
+  );
+};
 
 /**
  * Paper composer. Enter steers (delivered after the current tool call);
@@ -84,11 +174,9 @@ export const MissionComposer = () => {
     draft.snapshot,
     draft.snapshot
   );
-  const hintId = useId();
   const working = isMissionActive(mission.status);
   const capabilities = missionCapabilities(mission.status);
   const disabled = !capabilities.message;
-  const queued = useVisibleQueue().length > 0;
   // Null follows the mission's mode; a pick applies to the next message only.
   const [modeChoice, setModeChoice] = useState<ExecutionMode | null>(null);
   const selectedMode = modeChoice ?? effectiveMode(mission);
@@ -132,24 +220,14 @@ export const MissionComposer = () => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       submit(event.altKey && working ? "queue" : "steer");
-    } else if (event.key === "Tab" && event.shiftKey) {
-      event.preventDefault();
-      if (capabilities.update) {
-        changeAutonomy(nextAutonomy(mission.autonomy));
-      }
     }
   };
-
-  const hint = working
-    ? "Enter steers now, Alt+Enter queues for the end of the turn, Shift+Enter adds a line, Shift+Tab changes autonomy."
-    : "Enter sends, Shift+Enter adds a line, Shift+Tab changes autonomy.";
 
   return (
     <div className="flex w-full max-w-chat flex-col gap-sm">
       <QueueTray />
       <div className="flex flex-col gap-md rounded-2xl bg-surface-raised pt-lg pr-md pb-md pl-card shadow-md">
         <Textarea
-          aria-describedby={hintId}
           aria-label="Message the Orchestrator"
           data-composer-input=""
           data-testid="composer-input"
@@ -161,9 +239,6 @@ export const MissionComposer = () => {
           value={text}
           variant="bare"
         />
-        <span className="sr-only" id={hintId}>
-          {hint}
-        </span>
         <div className="-ml-sm flex items-center gap-xs">
           <ToolbarIcon icon={<PaperclipIcon />} label="Attach files" />
           <ToolbarIcon icon={<AtIcon />} label="Mention a file" />
@@ -180,19 +255,7 @@ export const MissionComposer = () => {
             value={selectedMode}
           />
           <span className="flex-1" />
-          <Hint label={working ? "Steer now · ⌥↵ to queue" : "Send · ↵"}>
-            <button
-              aria-label="Send message"
-              aria-disabled={!text.trim()}
-              className="flex size-7 cursor-pointer items-center justify-center rounded-full bg-accent text-on-accent transition-colors duration-fast hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-surface-overlay disabled:text-text-disabled aria-disabled:cursor-not-allowed"
-              data-testid="composer-send"
-              disabled={disabled}
-              onClick={() => submit("steer")}
-              type="button"
-            >
-              <ArrowUpIcon className="size-3.5" />
-            </button>
-          </Hint>
+          <ComposerActionButton onSend={() => submit("steer")} text={text} />
         </div>
       </div>
       {status ? (
@@ -203,7 +266,6 @@ export const MissionComposer = () => {
           {status}
         </p>
       ) : null}
-      {queued && working ? <QueueHints /> : null}
     </div>
   );
 };

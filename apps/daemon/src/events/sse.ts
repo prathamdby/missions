@@ -8,6 +8,7 @@ import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { SSEStreamingApi } from "hono/streaming";
 
+import { notFound } from "../lib/app-error";
 import type { EventLog } from "./event-log";
 
 /** At most this many live events plus one in-flight frame are retained. */
@@ -15,6 +16,7 @@ const MAX_BUFFERED = 5000;
 const REPLAY_BATCH = 500;
 type ReplayFrame = DaemonEvent | { oldestSeq: number };
 type Frame = ReplayFrame | "heartbeat" | null;
+export type MissionExists = (missionId: string) => boolean;
 
 const parseCursor = (raw: string | undefined | null) => {
   if (!raw) {
@@ -40,6 +42,8 @@ class EventSession {
   readonly #heartbeat: ReturnType<typeof setInterval>;
   #cursor: number;
   #stopped = false;
+  /** The mission was removed: deliver what is buffered, then end the stream. */
+  #ended = false;
   #writing = false;
   #heartbeatDue = false;
   #wake: (() => void) | undefined;
@@ -49,7 +53,8 @@ class EventSession {
     log: EventLog,
     missionId: string | null,
     after: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    missionExists?: MissionExists
   ) {
     this.#stream = stream;
     this.#log = log;
@@ -61,6 +66,15 @@ class EventSession {
     this.#oldest = oldest;
     // No asynchronous gap between the high-water capture and subscription.
     this.#unsubscribe = log.subscribe((event) => {
+      if (
+        missionId !== null &&
+        event.type === "mission.removed" &&
+        event.data.missionId === missionId
+      ) {
+        this.#ended = true;
+        this.#wake?.();
+        return;
+      }
       if (
         this.#stopped ||
         event.missionId !== missionId ||
@@ -77,6 +91,10 @@ class EventSession {
       this.#buffered.push(event);
       this.#wake?.();
     });
+    // Checked after subscribing: a removal is either seen here or delivered above.
+    if (missionId !== null && missionExists && !missionExists(missionId)) {
+      this.#ended = true;
+    }
     this.#heartbeat = setInterval(() => {
       if (!this.#writing && this.#buffered.length === 0) {
         this.#heartbeatDue = true;
@@ -145,7 +163,7 @@ class EventSession {
       yield { oldestSeq: this.#oldest };
       return false;
     }
-    while (!this.#stopped && this.#cursor < this.#highWater) {
+    while (!this.#stopped && !this.#ended && this.#cursor < this.#highWater) {
       const batch = this.#log
         .replay(this.#missionId, this.#cursor, REPLAY_BATCH)
         .filter((event) => event.seq <= this.#highWater);
@@ -161,7 +179,9 @@ class EventSession {
         yield event;
       }
     }
-    return !this.#stopped;
+    // A removal can cut replay short; live events then follow only if no gap
+    // remains, and the purged history cannot fill one.
+    return !this.#stopped && this.#cursor >= this.#highWater;
   }
 
   async #nextLive(): Promise<Frame> {
@@ -171,6 +191,9 @@ class EventSession {
     const event = this.#buffered.shift();
     if (event) {
       return event;
+    }
+    if (this.#ended) {
+      return null;
     }
     if (this.#heartbeatDue) {
       this.#heartbeatDue = false;
@@ -214,9 +237,19 @@ class EventSession {
   }
 }
 
-/** Snapshot cursor -> bounded replay -> live delivery, scoped to one stream. */
-export const eventStream = (c: Context, log: EventLog) => {
+/**
+ * Snapshot cursor -> bounded replay -> live delivery, scoped to one stream.
+ * With `missionExists`, a missing mission is 404 and a removed one ends its stream.
+ */
+export const eventStream = (
+  c: Context,
+  log: EventLog,
+  missionExists?: MissionExists
+) => {
   const missionId = c.req.query("missionId") ?? null;
+  if (missionId !== null && missionExists && !missionExists(missionId)) {
+    throw notFound("Mission");
+  }
   const after = parseCursor(
     c.req.query("after") ?? c.req.header("last-event-id")
   );
@@ -226,7 +259,8 @@ export const eventStream = (c: Context, log: EventLog) => {
       log,
       missionId,
       after,
-      c.req.raw.signal
+      c.req.raw.signal,
+      missionExists
     ).run();
   });
 };

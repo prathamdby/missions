@@ -12,7 +12,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 export const AppShell = ({ children }: { children: ReactNode }) => {
   const { navOpen, setNavOpen } = useShell();
   return (
-    <div className="flex h-dvh overflow-hidden bg-bg">
+    <div className="relative flex h-dvh overflow-hidden bg-bg">
       <aside
         aria-label="Missions navigation"
         className="hidden w-sidebar shrink-0 md:flex"
@@ -30,7 +30,7 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
         id="main"
         tabIndex={-1}
       >
-        <div className="flex min-w-0 flex-1 overflow-hidden bg-surface md:rounded-lg md:shadow-sm">
+        <div className="relative flex min-w-0 flex-1 overflow-hidden bg-surface md:rounded-lg md:shadow-sm">
           {children}
         </div>
       </main>

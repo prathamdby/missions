@@ -13,9 +13,3 @@ export const AUTONOMY: Record<Autonomy, { label: string; scope: string }> = {
   medium: { label: "Medium", scope: "+ installs, commits, builds" },
   off: { label: "Off", scope: "Reads only" },
 };
-
-/** Shift+Tab cycles through levels in the composers. */
-export const nextAutonomy = (current: Autonomy): Autonomy => {
-  const index = AUTONOMY_LEVELS.indexOf(current);
-  return AUTONOMY_LEVELS[(index + 1) % AUTONOMY_LEVELS.length] ?? "off";
-};

@@ -53,22 +53,38 @@ export const RightPanel = ({
         </TabsTrigger>
       </TabsList>
     </div>
-    <TabsContent className="overflow-y-auto" value="overview">
+    <TabsContent
+      className="overflow-y-auto overscroll-contain"
+      tabIndex={-1}
+      value="overview"
+    >
       <Body gap="gutter">
         <OverviewTab />
       </Body>
     </TabsContent>
-    <TabsContent className="overflow-y-auto" value="digest">
+    <TabsContent
+      className="overflow-y-auto overscroll-contain"
+      tabIndex={-1}
+      value="digest"
+    >
       <Body gap="section">
         <DigestTab />
       </Body>
     </TabsContent>
-    <TabsContent className="overflow-y-auto" value="files">
+    <TabsContent
+      className="overflow-y-auto overscroll-contain"
+      tabIndex={-1}
+      value="files"
+    >
       <Body gap="xl">
         <FilesTab />
       </Body>
     </TabsContent>
-    <TabsContent className="overflow-y-auto" value="changes">
+    <TabsContent
+      className="overflow-y-auto overscroll-contain"
+      tabIndex={-1}
+      value="changes"
+    >
       <Body gap="lg">
         <ChangesTab />
       </Body>

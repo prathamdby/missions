@@ -156,7 +156,7 @@ const PausedCard = ({ mission }: { mission: Mission }) => {
     mission.lastError?.message ??
     (interrupted
       ? "The daemon stopped while agents were working. Resume to pick up where they left off."
-      : "Agents stopped at a safe point and unsent messages were cleared. Nothing is lost.");
+      : "Agents stopped at a safe point. Messages that were not sent yet stay in the queue and go out after you resume.");
   return (
     <ChatCard label={title} testId="paused-card">
       <ChatCardHeader

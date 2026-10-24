@@ -3,6 +3,9 @@ import type { Settings } from "@missions/protocol/settings";
 import { describe, expect, it } from "vitest";
 
 import {
+  chooseModels,
+  defaultWorkspace,
+  draftDefaults,
   nextDirtyAcknowledgement,
   resolveProject,
   reviewMissionDraft,
@@ -26,6 +29,7 @@ const project: Project = {
 const settings: Settings = {
   cleanupAfterMerge: false,
   defaultAutonomy: "medium",
+  defaultWorkspaceMode: "new_worktree",
   maxConcurrentWorkers: 2,
   orchestrator: { modelId: "planner", reasoningEffort: "high" },
   worker: { modelId: "builder", reasoningEffort: null },
@@ -240,6 +244,45 @@ describe("new-mission workflows", () => {
       acknowledgeDirty: false,
       mode: "current_checkout",
     });
+  });
+
+  it("starts with the chosen models instead of the Settings defaults", () => {
+    const fast = { modelId: "fast", reasoningEffort: null };
+    const defaults = draftDefaults(confirmed(settings));
+    const models = chooseModels(defaults, { worker: fast });
+    expect(reviewMissionDraft({ ...input(), models }).draft).toMatchObject({
+      orchestrator: settings.orchestrator,
+      worker: fast,
+    });
+  });
+
+  it("reads draft defaults only from confirmed Settings", () => {
+    expect(
+      draftDefaults({ confirmed: false, data: settings, version: 1 })
+    ).toBeNull();
+    expect(chooseModels(null, {})).toBeNull();
+    expect(draftDefaults(confirmed(settings))).toStrictEqual({
+      models: { orchestrator: settings.orchestrator, worker: settings.worker },
+      workspaceMode: "new_worktree",
+    });
+  });
+
+  it("follows the saved workspace default for Git projects and runs non-Git folders in place", () => {
+    const inPlace = { workspaceMode: "current_checkout" as const };
+    const worktree = { workspaceMode: "new_worktree" as const };
+    expect([
+      defaultWorkspace(true, worktree),
+      defaultWorkspace(true, inPlace),
+      defaultWorkspace(true, null),
+      defaultWorkspace(false, worktree),
+      defaultWorkspace(false, inPlace),
+    ]).toStrictEqual([
+      { mode: "new_worktree" },
+      { mode: "current_checkout" },
+      { mode: "new_worktree" },
+      { mode: "current_checkout" },
+      { mode: "current_checkout" },
+    ]);
   });
 
   it("an explicit frozen default survives newer mission activity and never falls back after removal", () => {

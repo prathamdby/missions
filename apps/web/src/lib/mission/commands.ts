@@ -1,5 +1,6 @@
 import type {
   AnswerQuestionRequest,
+  CommandAccepted,
   ChangeQueueModeRequest,
   CleanupRequest,
   CommitRequest,
@@ -31,6 +32,7 @@ export interface MissionCommandInputs {
   archive: WithoutOperation<MissionControlRequest>;
   cleanup: WithoutOperation<CleanupRequest>;
   commit: WithoutOperation<CommitRequest>;
+  delete: WithoutOperation<MissionControlRequest>;
   editQueue: WithoutOperation<EditQueueItemRequest> & { itemId: string };
   message: WithoutOperation<SubmitMessageRequest>;
   pause: WithoutOperation<MissionControlRequest>;
@@ -50,6 +52,7 @@ export interface MissionCommandResults {
   archive: Mission;
   cleanup: Mission;
   commit: Mission;
+  delete: CommandAccepted;
   editQueue: EditQueueItemResponse;
   message: QueueItem;
   pause: Mission;
@@ -73,9 +76,16 @@ export type MissionCommandTransport = {
   ) => Promise<MissionCommandResults[K]>;
 };
 
-type ControlAction = "archive" | "pause" | "resume";
+export type ControlAction = "archive" | "delete" | "pause" | "resume";
 const isControl = (kind: MissionCommandKind): kind is ControlAction =>
-  kind === "pause" || kind === "resume" || kind === "archive";
+  kind === "pause" ||
+  kind === "resume" ||
+  kind === "archive" ||
+  kind === "delete";
+
+/** A different control is already running for this mission. */
+export const CONTROL_BUSY =
+  "Another action on this mission is still running. Try again once it finishes.";
 
 /**
  * One mission's commands. Captures complete request values before any await,
@@ -126,6 +136,11 @@ export class MissionCommands {
       .map((lane) => this.flights.get(lane))
       .find((flight) => flight !== undefined);
     if (existing) {
+      // Only a repeat of the running control may share its result: pause,
+      // resume, archive and delete each ask the daemon for something else.
+      if (isControl(kind) && this.control !== kind) {
+        return Promise.reject(new Error(CONTROL_BUSY));
+      }
       // Each shared lane has one result type: Mission or PermissionRequest.
       return existing as Promise<MissionCommandResults[K]>;
     }

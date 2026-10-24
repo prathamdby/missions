@@ -8,6 +8,7 @@ import { useMemo } from "react";
 import { AutonomyChip } from "@/components/missions/autonomy-chip";
 import { ExecutionModeChip } from "@/components/missions/execution-mode-chip";
 import { BranchPicker } from "@/components/new-mission/branch-picker";
+import { ModelPicker } from "@/components/new-mission/model-picker";
 import { ProjectPicker } from "@/components/new-mission/project-picker";
 import { ProjectSheet } from "@/components/new-mission/project-sheet";
 import { ProjectsEmpty } from "@/components/new-mission/projects-empty";
@@ -33,7 +34,6 @@ import {
   LaptopIcon,
 } from "@/components/ui/icons";
 import { Textarea } from "@/components/ui/input";
-import { Kbd } from "@/components/ui/kbd";
 import { ListCard } from "@/components/ui/list-row";
 import {
   Popover,
@@ -47,7 +47,6 @@ import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
 import { useConnectionStatus } from "@/lib/api/queries";
 import { useSingleFlightMutation } from "@/lib/api/use-operation";
-import { nextAutonomy } from "@/lib/autonomy";
 import { tildePath } from "@/lib/format";
 import { upsertMissionSummary } from "@/lib/live/global-cache";
 import { goalRequestId } from "@/lib/mission/queue";
@@ -369,9 +368,6 @@ export const NewMissionView = () => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       submit();
-    } else if (event.key === "Tab" && event.shiftKey) {
-      event.preventDefault();
-      form.handleAutonomyChange(nextAutonomy(form.autonomy));
     }
   };
 
@@ -444,6 +440,11 @@ export const NewMissionView = () => {
                     onChange={form.handleExecutionModeChange}
                     value={form.executionMode}
                   />
+                  <ModelPicker
+                    disabled={!hasProject}
+                    onChange={form.handleModelChange}
+                    value={form.models}
+                  />
                   <span className="flex-1" />
                   <IconButton
                     disabled={!canSubmit}
@@ -459,20 +460,9 @@ export const NewMissionView = () => {
             </form>
           </div>
           <ComposerLegend>
-            <span>
-              <Kbd>↵</Kbd>
-              {form.executionMode === "plan" ? "to plan" : "to start"}
-            </span>
-            <span>
-              <Kbd>⇧</Kbd>
-              <Kbd>↵</Kbd>
-              new line
-            </span>
-            <span>
-              {form.executionMode === "plan"
-                ? "Nothing changes until you approve the plan."
-                : "Agents act within the autonomy level you pick."}
-            </span>
+            {form.executionMode === "plan"
+              ? "Nothing changes until you approve the plan."
+              : "Agents act within the autonomy level you pick."}
           </ComposerLegend>
         </div>
       </div>
