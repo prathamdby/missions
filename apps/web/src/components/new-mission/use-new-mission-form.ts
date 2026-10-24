@@ -143,7 +143,6 @@ export const useNewMissionForm = () => {
     messageDraft.attachmentSnapshot,
     messageDraft.attachmentSnapshot
   );
-  const setGoal = messageDraft.change.bind(messageDraft);
   const defaults = useDraftDefaults(evidence(settings));
   const [models, handleModelChange] = useModelChoices(defaults);
 
@@ -219,12 +218,6 @@ export const useNewMissionForm = () => {
     otherWorktrees,
     project,
     projects,
-    setGoal: (value: string) => {
-      if (chosenProject === null && project) {
-        setChosenProject(project.id);
-      }
-      setGoal(value);
-    },
     settings,
     workspace,
   };
