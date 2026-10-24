@@ -218,6 +218,9 @@ const QueueRow = ({
 }) => {
   const editable = isEditable(item);
   const route = useRoute(item);
+  const attachmentNames = item.attachments
+    .map((attachment) => attachment.name)
+    .join(", ");
 
   const mode = useMissionCommand("queueMode", "Could not change delivery");
   const remove = useMissionCommand(
@@ -235,12 +238,11 @@ const QueueRow = ({
           {stateText(item)}
         </span>
         <span className="truncate type-caption text-text">
-          {item.text ||
-            item.attachments.map((attachment) => attachment.name).join(", ")}
+          {item.text || attachmentNames}
         </span>
         {item.text && item.attachments.length ? (
           <span className="truncate type-micro text-text-tertiary">
-            {item.attachments.map((attachment) => attachment.name).join(", ")}
+            {attachmentNames}
           </span>
         ) : null}
       </div>
