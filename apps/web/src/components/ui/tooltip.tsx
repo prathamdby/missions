@@ -69,3 +69,29 @@ export const Hint = ({
     <TooltipContent side={side}>{label}</TooltipContent>
   </Tooltip>
 );
+
+// Rich disabled controls cannot sit inside another native button.
+const HINT_TARGET_ROLE = "button";
+
+/** Keyboard target for a hint explaining a disabled or read-only control. */
+export const HintTarget = ({
+  appearance,
+  children,
+  inactive = true,
+  ...props
+}: Omit<ComponentProps<"span">, "role" | "tabIndex" | "className"> & {
+  appearance?: "control";
+  inactive?: boolean;
+}) => (
+  <span
+    aria-disabled={inactive || undefined}
+    className={
+      appearance === "control" ? "flex items-center gap-control" : "inline-flex"
+    }
+    role={inactive ? HINT_TARGET_ROLE : undefined}
+    tabIndex={inactive ? 0 : undefined}
+    {...props}
+  >
+    {children}
+  </span>
+);

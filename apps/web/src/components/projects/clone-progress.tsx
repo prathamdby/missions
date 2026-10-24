@@ -19,7 +19,7 @@ import { CheckIcon, ChevronRightIcon, CopyIcon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
 import { Step, StepList } from "@/components/ui/step-list";
 import type { StepState } from "@/components/ui/step-list";
-import { Hint } from "@/components/ui/tooltip";
+import { Hint, HintTarget } from "@/components/ui/tooltip";
 import { errorMessage } from "@/lib/api/api-error";
 import { useCloneJob } from "@/lib/api/queries";
 import { tildePath } from "@/lib/format";
@@ -225,12 +225,12 @@ const Cloning = ({
           Keeps going if you close this
         </span>
         <span className="flex-1" />
-        <Hint label="The daemon can’t stop a clone once it starts">
-          <span className="inline-flex">
+        <Hint label="Can’t stop a clone">
+          <HintTarget>
             <Button disabled variant="secondary">
               Cancel clone
             </Button>
-          </span>
+          </HintTarget>
         </Hint>
         <DialogClose asChild>
           <Button variant="ghost">Hide</Button>

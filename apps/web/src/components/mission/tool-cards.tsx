@@ -7,6 +7,7 @@ import { PenSquareIcon, TerminalIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
 import { useDiffHighlight } from "@/components/mission/use-diff-highlight";
+import { UnavailableButton } from "@/components/ui/button";
 import { DiffRow } from "@/components/ui/diff-row";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { HighlightedLine } from "@/components/ui/syntax-highlight";
@@ -37,9 +38,6 @@ const TONES: Record<LineTone, string> = {
   success: "text-success",
   warning: "text-warning",
 };
-
-const STOP_UNSUPPORTED =
-  "Stopping a single command is not supported. Pause the mission to stop every agent.";
 
 export const CommandCard = ({ call }: { call: ToolCall }) => {
   const { live } = useMission();
@@ -73,14 +71,13 @@ export const CommandCard = ({ call }: { call: ToolCall }) => {
             <span className="font-mono text-2xs leading-xs text-text-secondary">
               Running · {runTime(elapsedOf(call, now))}
             </span>
-            <button
-              aria-disabled="true"
-              className="cursor-not-allowed text-xs leading-sm font-medium tracking-tight text-text-tertiary"
-              title={STOP_UNSUPPORTED}
-              type="button"
+            <UnavailableButton
+              reason="Pause to stop"
+              size="text"
+              variant="link"
             >
               Stop
-            </button>
+            </UnavailableButton>
           </span>
         )}
       </header>
