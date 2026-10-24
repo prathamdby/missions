@@ -9,7 +9,7 @@ import { ApiRequestError } from "../api/api-error";
 import { OperationIntents } from "../api/operation-intents";
 import type { LocalEntity } from "../live/mission-store";
 import { missionCommandTransport } from "./command-transport";
-import { MissionCommands } from "./commands";
+import { CONTROL_BUSY, MissionCommands } from "./commands";
 import type { MissionCommandTransport } from "./commands";
 
 const AT = "2026-01-01T00:00:00.000Z";
@@ -88,6 +88,7 @@ const fakeTransport = (
   archive: missing,
   cleanup: missing,
   commit: missing,
+  delete: missing,
   editQueue: missing,
   message: missing,
   pause: missing,
@@ -140,6 +141,44 @@ describe(MissionCommands, () => {
     expect(commands.pendingControl()).toBeNull();
     expect(listener).toHaveBeenCalledTimes(2);
     unsubscribe();
+  });
+
+  it("never hands a Mission from another control to delete", async () => {
+    const pausing = Promise.withResolvers<Mission>();
+    const pause = vi
+      .fn<MissionCommandTransport["pause"]>()
+      .mockReturnValue(pausing.promise);
+    const remove = vi.fn<MissionCommandTransport["delete"]>();
+    const commands = new MissionCommands(
+      "m",
+      fakeTransport({ delete: remove, pause }),
+      intents()
+    );
+    const paused = commands.run("pause", { expectedRevision: 1 });
+    await expect(
+      commands.run("delete", { expectedRevision: 1 })
+    ).rejects.toThrow(CONTROL_BUSY);
+    pausing.resolve(mission);
+    await expect(paused).resolves.toBe(mission);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("never hands a delete acknowledgment to another control", async () => {
+    const remove = vi
+      .fn<MissionCommandTransport["delete"]>()
+      .mockResolvedValue({ operationId: "operation-1", status: "accepted" });
+    const commands = new MissionCommands(
+      "m",
+      fakeTransport({ delete: remove }),
+      intents()
+    );
+    const deleting = commands.run("delete", { expectedRevision: 2 });
+    expect(commands.pendingControl()).toBe("delete");
+    await expect(
+      commands.run("resume", { expectedRevision: 2 })
+    ).rejects.toThrow(CONTROL_BUSY);
+    await expect(deleting).resolves.toMatchObject({ status: "accepted" });
+    expect(commands.pendingControl()).toBeNull();
   });
 
   it("captures complete payloads before transport and releases the control after failure", async () => {

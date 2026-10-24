@@ -10,6 +10,7 @@ import type { DatabaseHandle } from "../db/database";
 import { Store } from "../db/store";
 import { EventLog } from "./event-log";
 import { eventStream } from "./sse";
+import type { MissionExists } from "./sse";
 
 const opened: DatabaseHandle[] = [];
 const controllers: AbortController[] = [];
@@ -23,7 +24,7 @@ const notice = (message: string) =>
 
 const flush = () => setImmediate();
 
-const setup = (retainPerStream?: number) => {
+const setup = (retainPerStream?: number, missionExists?: MissionExists) => {
   const handle = openDatabase(":memory:");
   opened.push(handle);
   const log = new EventLog(new Store(handle), { retainPerStream });
@@ -38,7 +39,7 @@ const setup = (retainPerStream?: number) => {
   });
   const replay = vi.spyOn(log, "replay");
   const app = new Hono();
-  app.get("/events", (c) => eventStream(c, log));
+  app.get("/events", (c) => eventStream(c, log, missionExists));
   const connect = async (query = "", headers?: Record<string, string>) => {
     const controller = new AbortController();
     controllers.push(controller);
@@ -250,5 +251,29 @@ describe("event stream lifecycle", () => {
     expect(idsOf(frame)).toStrictEqual([2]);
     expect(frame).toContain("global-two");
     expect(frame).not.toContain("mission-only");
+  });
+
+  it("ends a mission stream after its removal while global readers see mission.removed", async () => {
+    const missions = new Set(["mission-one"]);
+    const { connect, log, unsubscribed } = setup(undefined, (missionId) =>
+      missions.has(missionId)
+    );
+    log.publish("mission-one", notice("before"));
+    const scoped = await connect("?missionId=mission-one&after=0");
+    const global = await connect("?after=0");
+    expect(idsOf(await readFrames(scoped.reader, 1))).toStrictEqual([1]);
+    log.commit((emit) => {
+      log.removeStream("mission-one");
+      missions.delete("mission-one");
+      emit(null, {
+        data: { missionId: "mission-one" },
+        type: "mission.removed",
+      });
+    });
+    expect(idsOf(await readFrames(scoped.reader, 1))).toStrictEqual([]);
+    const globalFrame = await readFrames(global.reader, 1);
+    expect(idsOf(globalFrame)).toStrictEqual([1]);
+    expect(globalFrame).toContain('"type":"mission.removed"');
+    expect(unsubscribed).toHaveBeenCalledWith();
   });
 });

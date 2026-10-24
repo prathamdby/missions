@@ -71,6 +71,8 @@ export const EventBodySchema = z.discriminatedUnion("type", [
   eventData("notice", z.object({ notice: NoticeSchema })),
   eventData("project.updated", z.object({ project: ProjectSchema })),
   eventData("project.removed", z.object({ projectId: IdSchema })),
+  /** Global: the mission's records and event stream are gone; its files stay on disk. */
+  eventData("mission.removed", z.object({ missionId: IdSchema })),
   eventData("clone.updated", z.object({ job: CloneJobSchema })),
   eventData("settings.updated", z.object({ settings: SettingsSchema })),
 ]);

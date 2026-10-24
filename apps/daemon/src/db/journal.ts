@@ -82,6 +82,39 @@ export class OperationJournal {
     return existing;
   }
 
+  /** The recorded outcome of a repeated operation ID, or null for a new one. */
+  replay<T>(spec: OperationSpec): { result: T; duplicate: boolean } | null {
+    const existing = this.get(spec.id, spec);
+    return existing
+      ? replayRecorded<T>(existing.operation, existing.result)
+      : null;
+  }
+
+  /**
+   * Records a database-only operation as succeeded inside the caller's
+   * transaction, so the receipt commits or rolls back with its effect. It
+   * emits nothing: the caller decides which stream, if any, learns about it.
+   */
+  recordCompleted(spec: OperationSpec, result: unknown = null): Operation {
+    const at = this.#now().toISOString();
+    const operation: Operation = {
+      createdAt: at,
+      detail: structuredClone(spec.detail ?? {}),
+      id: spec.id,
+      kind: spec.kind,
+      missionId: spec.missionId,
+      status: "succeeded",
+      updatedAt: at,
+    };
+    this.#store.transaction(() => {
+      if (this.#store.getOperation(spec.id)) {
+        throw conflict("This operation ID was already used");
+      }
+      this.#store.putOperation(operation, result);
+    });
+    return operation;
+  }
+
   async run<T>(
     spec: OperationSpec,
     effect: (detail: Record<string, unknown>) => Promise<T>,

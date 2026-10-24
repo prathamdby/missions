@@ -22,6 +22,7 @@ export const defaultSettings = (
   return {
     cleanupAfterMerge: false,
     defaultAutonomy: "medium",
+    defaultWorkspaceMode: "new_worktree",
     maxConcurrentWorkers: 2,
     orchestrator: { modelId, reasoningEffort: null },
     worker: { modelId, reasoningEffort: null },

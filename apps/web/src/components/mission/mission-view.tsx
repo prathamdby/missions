@@ -1,7 +1,9 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AgentConversations } from "@/components/mission/agent-conversations";
 import { MissionProvider } from "@/components/mission/mission-context";
@@ -20,8 +22,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage, isApiError } from "@/lib/api/api-error";
 import { agentLabels } from "@/lib/format";
 import { useMissionLive } from "@/lib/live/hooks";
-import { missionCommandTransport } from "@/lib/mission/command-transport";
-import { MissionCommands } from "@/lib/mission/commands";
+import {
+  attachMissionSink,
+  missionCommandsFor,
+} from "@/lib/mission/command-registry";
 import { useMediaQuery, WIDE_QUERY } from "@/lib/use-media-query";
 
 const MissionPlaceholder = ({ error }: { error: unknown }) => {
@@ -68,6 +72,8 @@ const MissionPlaceholder = ({ error }: { error: unknown }) => {
 /** One mission: chat column plus details panel (docked when wide, a sheet otherwise). */
 export const MissionView = ({ missionId }: { missionId: string }) => {
   const mission = useMissionLive(missionId);
+  const client = useQueryClient();
+  const router = useRouter();
   const wide = useMediaQuery(WIDE_QUERY);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [tab, setTab] = useState<PanelTab>("overview");
@@ -93,14 +99,17 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
     () => (agents ? agentLabels(Object.values(agents)) : {}),
     [agents]
   );
-  const commands = useMemo(
-    () =>
-      new MissionCommands(
-        missionId,
-        missionCommandTransport(missionId, applyLocal, refresh)
-      ),
-    [missionId, applyLocal, refresh]
+  const commands = missionCommandsFor(client, missionId);
+  useEffect(
+    () => attachMissionSink(client, missionId, { apply: applyLocal, refresh }),
+    [client, missionId, applyLocal, refresh]
   );
+  const { removed } = mission;
+  useEffect(() => {
+    if (removed) {
+      router.replace("/");
+    }
+  }, [removed, router]);
   const value = useMemo<MissionContextValue | null>(
     () =>
       live
@@ -133,7 +142,7 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
     ]
   );
 
-  if (!value) {
+  if (!value || removed) {
     return (
       <MissionPlaceholder
         error={mission.status === "error" ? mission.error : null}
@@ -155,7 +164,7 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
         {wide ? (
           <aside
             aria-label="Mission details"
-            className="flex w-panel shrink-0 flex-col border-l border-border-subtle"
+            className="relative flex w-panel shrink-0 flex-col border-l border-border-subtle"
           >
             <RightPanel onTabChange={setTab} tab={tab} />
           </aside>

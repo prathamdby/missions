@@ -19,7 +19,7 @@ test("a Work mission goes from goal to completion without a plan gate", async ({
 }) => {
   const project = await addProject(request, gitRepo("work-mode"));
   await page.goto("/");
-  await page.getByRole("button", { name: "Project" }).click();
+  await page.getByRole("button", { exact: true, name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
   await expect(page.getByTestId("execution-mode")).toContainText("Work");
   await page
@@ -40,7 +40,7 @@ test("a Plan mission goes from goal to plan approval to completion", async ({
   const repo = gitRepo("lifecycle");
   const project = await addProject(request, repo);
   await page.goto("/");
-  await page.getByRole("button", { name: "Project" }).click();
+  await page.getByRole("button", { exact: true, name: "Project" }).click();
   await page.getByRole("option", { name: project.name }).click();
   await chooseExecutionMode(page, "Plan");
   await page

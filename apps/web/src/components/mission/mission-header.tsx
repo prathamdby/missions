@@ -1,25 +1,11 @@
 "use client";
 
-import type { ReactNode } from "react";
-
-import {
-  ClipboardIcon,
-  PauseIcon,
-  PlayIcon,
-  RepeatIcon,
-  SidebarIcon,
-} from "@/components/mission/icons";
+import { ClipboardIcon, SidebarIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
-import { useMissionControl } from "@/components/mission/use-mission-control";
 import { useShell } from "@/components/shell/shell-context";
 import { Badge } from "@/components/ui/badge";
 import { useProjects } from "@/lib/api/queries";
-import {
-  canPause,
-  canResume,
-  formatDuration,
-  isMissionActive,
-} from "@/lib/format";
+import { formatDuration, isMissionActive } from "@/lib/format";
 import { displayStatus } from "@/lib/mission/display-status";
 import { modeStatus } from "@/lib/mission/execution-mode";
 import { todoProgress } from "@/lib/mission/overview";
@@ -54,77 +40,6 @@ const TodoPill = ({ onClick }: { onClick: () => void }) => {
       ) : null}
     </button>
   );
-};
-
-/** Paper's header button: 28px, 10px leading pad, 14px icon. */
-const HeaderAction = ({
-  children,
-  disabled,
-  icon,
-  onClick,
-  title,
-}: {
-  children: ReactNode;
-  disabled?: boolean;
-  icon: ReactNode;
-  onClick?: () => void;
-  title?: string;
-}) => (
-  <button
-    aria-disabled={disabled}
-    className="flex h-7 shrink-0 cursor-pointer items-center gap-sm rounded-sm bg-surface-overlay pr-lg pl-control text-sm leading-sm font-medium tracking-tight text-text shadow-button transition-colors duration-fast hover:bg-surface-active aria-disabled:cursor-not-allowed aria-disabled:text-text-disabled [&_svg]:size-3.5"
-    onClick={disabled ? undefined : onClick}
-    title={title}
-    type="button"
-  >
-    {icon}
-    {children}
-  </button>
-);
-
-const ControlButton = () => {
-  const { live } = useMission();
-  const { pause, pausing, resume, resuming, pending } = useMissionControl();
-  const { status } = live.mission;
-  if (canPause(status)) {
-    return (
-      <HeaderAction
-        disabled={pending}
-        icon={<PauseIcon />}
-        onClick={pause}
-        title="Pause all agents at a safe point"
-      >
-        {pausing ? "Pausing…" : "Pause"}
-      </HeaderAction>
-    );
-  }
-  if (status === "pausing") {
-    return (
-      <HeaderAction disabled icon={<PauseIcon />}>
-        Pausing…
-      </HeaderAction>
-    );
-  }
-  if (status === "paused") {
-    return (
-      <HeaderAction disabled={pending} icon={<PlayIcon />} onClick={resume}>
-        {resuming ? "Resuming…" : "Resume"}
-      </HeaderAction>
-    );
-  }
-  if (canResume(status)) {
-    return (
-      <HeaderAction
-        disabled={pending}
-        icon={<RepeatIcon />}
-        onClick={resume}
-        title="Resume from the last safe point"
-      >
-        {resuming ? "Retrying…" : "Retry"}
-      </HeaderAction>
-    );
-  }
-  return null;
 };
 
 export const MissionHeader = ({
@@ -191,9 +106,6 @@ export const MissionHeader = ({
       <span className="font-mono text-2xs leading-xs text-text-tertiary tabular-nums max-md:hidden">
         {elapsed}
       </span>
-      <div className="contents max-md:hidden">
-        <ControlButton />
-      </div>
       {panelToggle ? <TodoPill onClick={onTogglePanel} /> : null}
     </header>
   );

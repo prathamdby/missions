@@ -14,7 +14,10 @@ import type {
   UpdateMissionRequest,
   AnswerQuestionRequest,
 } from "@missions/protocol/commands";
-import { EditQueueItemResponseSchema } from "@missions/protocol/commands";
+import {
+  CommandAcceptedSchema,
+  EditQueueItemResponseSchema,
+} from "@missions/protocol/commands";
 import { PageSchema } from "@missions/protocol/common";
 import type { ComparisonMode } from "@missions/protocol/files";
 import {
@@ -147,6 +150,12 @@ export const api = {
       body,
       method: "POST",
     }),
+  /** Forgets a stopped mission; its worktree, branch and files stay on disk. */
+  deleteMission: (missionId: string, body: MissionControlRequest) =>
+    apiRequest(routes.mission(missionId), CommandAcceptedSchema, {
+      body,
+      method: "DELETE",
+    }),
   editQueueItem: (
     missionId: string,
     itemId: string,
@@ -184,6 +193,8 @@ export const api = {
     }),
   grants: (signal?: AbortSignal) =>
     apiRequest(routes.grants(), GrantListSchema, { signal }),
+  mission: (missionId: string, signal?: AbortSignal) =>
+    apiRequest(routes.mission(missionId), MissionSchema, { signal }),
   missionSnapshot: (missionId: string, signal?: AbortSignal) =>
     apiRequest(routes.missionSnapshot(missionId), MissionSnapshotSchema, {
       signal,

@@ -1,6 +1,7 @@
 import {
   AnswerQuestionRequestSchema,
   ChangeQueueModeRequestSchema,
+  CommandAcceptedSchema,
   CreateMissionRequestSchema,
   DecidePermissionRequestSchema,
   DecidePlanRequestSchema,
@@ -70,6 +71,16 @@ export const registerMissionRoutes = (app: Hono, missions: MissionService) => {
       await missions.update(
         id(c),
         await parseBody(c, UpdateMissionRequestSchema)
+      )
+    )
+  );
+  app.delete(routes.mission(M), async (c) =>
+    reply(
+      c,
+      CommandAcceptedSchema,
+      await missions.remove(
+        id(c),
+        await parseBody(c, MissionControlRequestSchema)
       )
     )
   );

@@ -14,7 +14,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FolderIcon, SearchIcon, TaskDoneIcon } from "@/components/ui/icons";
-import { Kbd } from "@/components/ui/kbd";
 import {
   ListLabel,
   ListOption,
@@ -172,7 +171,6 @@ const SearchPanel = ({ onClose }: { onClose: () => void }) => {
           role="combobox"
           value={query}
         />
-        <Kbd>esc</Kbd>
       </div>
       <div className="max-h-96 min-h-0 overflow-y-auto p-xs">
         <Listbox aria-label="Results" id="search-results">
@@ -199,7 +197,7 @@ const SearchPanel = ({ onClose }: { onClose: () => void }) => {
   );
 };
 
-/** Cmd/Ctrl+K: jump to a mission or start one in a project. */
+/** Jump to a mission or start one in a project. */
 export const SearchDialog = () => {
   const { searchOpen, setSearchOpen } = useShell();
   return (

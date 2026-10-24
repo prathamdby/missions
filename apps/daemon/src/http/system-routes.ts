@@ -69,7 +69,9 @@ const connection = async (deps: SystemDeps): Promise<ConnectionStatus> => {
 };
 
 export const registerSystemRoutes = (app: Hono, deps: SystemDeps) => {
-  app.get(EVENTS_PATH, (c) => eventStream(c, deps.log));
+  app.get(EVENTS_PATH, (c) =>
+    eventStream(c, deps.log, (id) => deps.store.getMission(id) !== null)
+  );
   app.get(routes.settings(), (c) =>
     reply(c, SettingsSchema, deps.settings.get())
   );

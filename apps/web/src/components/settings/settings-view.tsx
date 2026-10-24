@@ -3,6 +3,7 @@
 import type { Autonomy } from "@missions/protocol/common";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import type {
+  DefaultWorkspaceMode,
   ModelOption,
   Settings,
   UpdateSettingsRequest,
@@ -57,6 +58,25 @@ const LEVEL_DETAIL: Record<Autonomy, string> = {
 };
 
 const NOT_YET = "The daemon does not support changing this yet.";
+
+const WORKSPACE_MODES: Record<
+  DefaultWorkspaceMode,
+  { description: string; label: string }
+> = {
+  current_checkout: {
+    description:
+      "New missions edit the project folder directly, on the branch you have checked out. You confirm first if it has uncommitted changes.",
+    label: "Current checkout",
+  },
+  new_worktree: {
+    description:
+      "New missions get an isolated copy on a new branch, so your checkout stays untouched. Folders without Git always use the current checkout.",
+    label: "New worktree",
+  },
+};
+
+const isWorkspaceMode = (value: string): value is DefaultWorkspaceMode =>
+  Object.hasOwn(WORKSPACE_MODES, value);
 
 const coordinators = new WeakMap<QueryClient, SettingsCoordinator>();
 
@@ -564,7 +584,7 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
         />
       </Group>
       <Group
-        description="What droids can run without asking. ⇧Tab changes it for one mission."
+        description="What droids can run without asking. Each mission can change it from the composer."
         title="Autonomy"
       >
         <Row
@@ -579,9 +599,33 @@ const SettingsGroups = ({ data }: { data: Settings }) => {
         </Row>
       </Group>
       <Group
-        description="Each mission works in its own git worktree, so your checkout stays untouched."
+        description="Where new missions run. You can still pick another workspace when you start one."
         title="Worktrees"
       >
+        <Row
+          description={WORKSPACE_MODES[data.defaultWorkspaceMode].description}
+          label="Default workspace"
+        >
+          <SelectBox
+            className="w-35"
+            disabled={busy}
+            label="Default workspace"
+            onChange={(mode) => {
+              if (isWorkspaceMode(mode)) {
+                save({ defaultWorkspaceMode: mode });
+              }
+            }}
+            options={(["new_worktree", "current_checkout"] as const).map(
+              (mode) => ({ label: WORKSPACE_MODES[mode].label, value: mode })
+            )}
+            testId="settings-default-workspace"
+            value={data.defaultWorkspaceMode}
+          >
+            <span className="min-w-0 flex-1 truncate text-xs leading-sm font-medium tracking-tight text-text">
+              {WORKSPACE_MODES[data.defaultWorkspaceMode].label}
+            </span>
+          </SelectBox>
+        </Row>
         <LocationRow
           disabled={busy}
           onSave={(worktreeRoot) => save({ worktreeRoot })}
@@ -668,7 +712,7 @@ export const SettingsView = () => {
         </h1>
       </header>
       <ConnectionBanner />
-      <div className="min-h-0 flex-1 overflow-y-auto px-3xl pt-2xl pb-4xl max-md:px-lg">
+      <div className="relative min-h-0 flex-1 overflow-y-auto px-3xl pt-2xl pb-4xl max-md:px-lg">
         <div className="mx-auto flex w-full max-w-settings flex-col gap-group">
           <SettingsBody />
         </div>

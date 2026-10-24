@@ -17,6 +17,8 @@ export const useMissionControl = () => {
   const resume = useMissionCommand("resume", "Could not resume");
   const body = () => ({ expectedRevision: live.mission.revision });
   return {
+    /** The control in flight, shared with every surface for this mission. */
+    control: pending,
     pause: () => pause.mutate(body()),
     pausing: pending === "pause",
     pending: pending !== null,

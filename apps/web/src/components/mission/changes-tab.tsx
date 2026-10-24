@@ -14,6 +14,8 @@ import {
   ChevronsUpDownIcon,
 } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
+import { useDiffHighlight } from "@/components/mission/use-diff-highlight";
+import type { RowTokens } from "@/components/mission/use-diff-highlight";
 import { DiffRow } from "@/components/ui/diff-row";
 import {
   Select,
@@ -23,8 +25,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { HighlightedLine } from "@/components/ui/syntax-highlight";
 import { errorMessage } from "@/lib/api/api-error";
 import { useChanges } from "@/lib/api/queries";
+import { languageForPath } from "@/lib/code-language";
 import { hunkGaps, splitPath } from "@/lib/mission/changes";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +39,13 @@ const STATUS_LABEL: Partial<Record<FileDiff["status"], string>> = {
   untracked: "New",
 };
 
-const Line = ({ line }: { line: DiffLine }) => (
+const Line = ({
+  line,
+  tokens,
+}: {
+  line: DiffLine;
+  tokens: RowTokens[number] | undefined;
+}) => (
   <DiffRow
     kind={line.kind}
     lineNumber={
@@ -43,7 +53,7 @@ const Line = ({ line }: { line: DiffLine }) => (
     }
     variant="file"
   >
-    {line.text}
+    <HighlightedLine text={line.text} tokens={tokens} />
   </DiffRow>
 );
 
@@ -56,10 +66,25 @@ const Gap = ({ lines }: { lines: number }) => (
   </div>
 );
 
-const Hunks = ({ hunks }: { hunks: DiffHunk[] }) => {
+const Hunks = ({
+  hunks,
+  oldPath,
+  path,
+}: {
+  hunks: DiffHunk[];
+  oldPath: string | null;
+  path: string;
+}) => {
   const gaps = hunkGaps(hunks);
+  const language =
+    languageForPath(path) ?? (oldPath ? languageForPath(oldPath) : null);
+  const tokens = useDiffHighlight(hunks, language);
   return (
-    <div className="flex flex-col overflow-x-auto pb-xs">
+    // Chrome makes an overflowing scroller a tab stop, so it needs a name.
+    <section
+      aria-label={`Diff of ${path}`}
+      className="flex flex-col overflow-x-auto overscroll-x-contain pb-xs"
+    >
       {hunks.map((hunk, index) => (
         <div className="flex flex-col" key={`${hunk.header}-${String(index)}`}>
           {gaps[index] ? <Gap lines={gaps[index]} /> : null}
@@ -67,11 +92,12 @@ const Hunks = ({ hunks }: { hunks: DiffHunk[] }) => {
             <Line
               key={`${String(line.oldNumber)}-${String(line.newNumber)}-${String(lineIndex)}`}
               line={line}
+              tokens={tokens?.[index]?.[lineIndex]}
             />
           ))}
         </div>
       ))}
-    </div>
+    </section>
   );
 };
 
@@ -141,7 +167,7 @@ const FileCard = ({
       </button>
       {open && canExpand ? (
         <>
-          <Hunks hunks={file.hunks} />
+          <Hunks hunks={file.hunks} oldPath={file.oldPath} path={file.path} />
           {file.truncated ? (
             <p className="px-lg pb-sm text-2xs leading-xs text-text-tertiary">
               Diff cut at the line budget. Open the file to see the rest.

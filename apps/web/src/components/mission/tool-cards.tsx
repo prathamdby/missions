@@ -1,10 +1,15 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { ChatCard } from "@/components/mission/chat-cards";
 import { PenSquareIcon, TerminalIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
+import { useDiffHighlight } from "@/components/mission/use-diff-highlight";
 import { DiffRow } from "@/components/ui/diff-row";
+import { HighlightedLine } from "@/components/ui/syntax-highlight";
+import { languageForPath } from "@/lib/code-language";
 import type { ToolCall } from "@/lib/mission/timeline";
 import {
   argumentOf,
@@ -133,14 +138,21 @@ export const RanRow = ({ call }: { call: ToolCall }) => {
 export const EditCard = ({ call }: { call: ToolCall }) => {
   const { live } = useMission();
   const name = toolNameOf(call);
-  const diff = editDiff(name, inputOf(call));
+  const input = inputOf(call);
+  const diff = useMemo(() => editDiff(name, input), [name, input]);
+  const filePath = stringField(input, "file_path", "path");
   const path = relativeTo(
     live.mission.workspace?.path ?? null,
-    stringField(inputOf(call), "file_path", "path") ?? "file"
+    filePath ?? "file"
   );
   const added = diff.filter((line) => line.kind === "add").length;
   const removed = diff.length - added;
-  const shown = diff.slice(0, DIFF_LINES);
+  const shown = useMemo(() => diff.slice(0, DIFF_LINES), [diff]);
+  const hunks = useMemo(() => [{ lines: shown }], [shown]);
+  const tokens = useDiffHighlight(
+    hunks,
+    filePath ? languageForPath(filePath) : null
+  )?.[0];
   return (
     <ChatCard label={`Edited ${path}`}>
       <header className="flex h-9 shrink-0 items-center gap-control border-b border-border-subtle px-lg">
@@ -168,7 +180,7 @@ export const EditCard = ({ call }: { call: ToolCall }) => {
             key={index}
             variant="tool"
           >
-            {line.text}
+            <HighlightedLine text={line.text} tokens={tokens?.[index]} />
           </DiffRow>
         ))}
         {diff.length > shown.length ? (

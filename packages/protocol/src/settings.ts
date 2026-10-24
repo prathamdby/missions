@@ -3,9 +3,18 @@ import { z } from "zod";
 import { AutonomySchema, IdSchema, ReasoningEffortSchema } from "./common";
 import { AgentModelSettingsSchema, GrantSchema } from "./missions";
 
+/** Where new missions run unless the user picks otherwise. */
+export const DefaultWorkspaceModeSchema = z.enum([
+  "new_worktree",
+  "current_checkout",
+]);
+export type DefaultWorkspaceMode = z.infer<typeof DefaultWorkspaceModeSchema>;
+
 export const SettingsSchema = z.object({
   cleanupAfterMerge: z.boolean(),
   defaultAutonomy: AutonomySchema,
+  // Older daemons omit it; they always started in a new worktree.
+  defaultWorkspaceMode: DefaultWorkspaceModeSchema.default("new_worktree"),
   maxConcurrentWorkers: z.int().min(1).max(8),
   orchestrator: AgentModelSettingsSchema,
   worker: AgentModelSettingsSchema,
@@ -16,6 +25,7 @@ export type Settings = z.infer<typeof SettingsSchema>;
 export const UpdateSettingsRequestSchema = z.strictObject({
   cleanupAfterMerge: z.boolean().optional(),
   defaultAutonomy: AutonomySchema.optional(),
+  defaultWorkspaceMode: DefaultWorkspaceModeSchema.optional(),
   maxConcurrentWorkers: z.int().min(1).max(8).optional(),
   orchestrator: AgentModelSettingsSchema.optional(),
   worker: AgentModelSettingsSchema.optional(),

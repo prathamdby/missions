@@ -24,7 +24,7 @@ export const menuItemVariants = cva(
     defaultVariants: { size: "md", variant: "default" },
     variants: {
       size: {
-        /** Icon, label, and optional shortcut on one 32px line. */
+        /** Icon and label on one 32px line. */
         md: "h-8 items-center [&>svg]:size-4",
         /** Icon, title with tag, and description (PNO workspace choices). */
         option: "items-start px-md py-control",
@@ -116,20 +116,6 @@ export const DropdownMenuSeparator = ({
 }: ComponentProps<typeof MenuPrimitive.Separator>) => (
   <MenuPrimitive.Separator
     className={cn("-mx-xs my-xs h-px shrink-0 bg-border-subtle", className)}
-    {...props}
-  />
-);
-
-/** Trailing keyboard shortcut text, e.g. ⌘O. */
-export const DropdownMenuShortcut = ({
-  className,
-  ...props
-}: ComponentProps<"span">) => (
-  <span
-    className={cn(
-      "ml-auto font-mono text-2xs leading-xs font-book text-text-tertiary",
-      className
-    )}
     {...props}
   />
 );

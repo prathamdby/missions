@@ -26,6 +26,7 @@ const setup = async () => {
     settings: () => ({
       cleanupAfterMerge: false,
       defaultAutonomy: "medium",
+      defaultWorkspaceMode: "new_worktree",
       maxConcurrentWorkers: 2,
       orchestrator: { modelId: "m", reasoningEffort: null },
       worker: { modelId: "m", reasoningEffort: null },

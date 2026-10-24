@@ -94,6 +94,31 @@ describe("numbered file diff rows", () => {
     expect(spansOf(markup)[0]?.text).toBe("0");
     expect(markup).toContain("&lt;script&gt; &amp; text");
   });
+
+  it("wraps highlighted token spans in the same row chrome and keeps the source text", () => {
+    const markup = renderToStaticMarkup(
+      createElement(
+        DiffRow,
+        { kind: "add", lineNumber: 3, variant: "file" },
+        createElement("span", { className: "text-syntax-keyword" }, "const"),
+        createElement("span", { className: "text-syntax-text" }, "\tx = 1;")
+      )
+    );
+    expect(rowClasses(markup)).toStrictEqual(
+      classSet("flex h-5 min-w-max shrink-0 items-center bg-diff-add")
+    );
+    const text =
+      /<span class="(?<classes>[^"]*pr-lg[^"]*)">(?<body>.*)<\/span><\/div>$/u.exec(
+        markup
+      )?.groups;
+    expect(classSet(text?.classes ?? "")).toStrictEqual(
+      classSet(`${textClasses} pr-lg`)
+    );
+    expect(text?.body).toBe(
+      '<span class="text-syntax-keyword">const</span><span class="text-syntax-text">\tx = 1;</span>'
+    );
+    expect(markup).toContain('<span class="sr-only">Added: </span>');
+  });
 });
 
 describe("signed tool diff rows", () => {

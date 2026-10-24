@@ -2,6 +2,7 @@ import { SSE_RESYNC } from "@missions/protocol/http";
 import type { TranscriptItem } from "@missions/protocol/missions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ApiRequestError } from "../api/api-error";
 import { createMissionStore } from "./mission-store";
 import type { MissionStore, MissionStoreOptions } from "./mission-store";
 import {
@@ -434,5 +435,89 @@ describe("mission session lifecycle", () => {
     await expect(final).resolves.toBeTruthy();
     expect(store.getSnapshot().live?.previews).toStrictEqual({});
     expect(store.getSnapshot().live?.transcript["t-2"]?.text).toBe("Final");
+  });
+});
+
+const notFound = () =>
+  new ApiRequestError({
+    code: "not_found",
+    message: "Mission not found",
+    status: 404,
+  });
+const isMissing = (error: unknown) =>
+  error instanceof ApiRequestError && error.code === "not_found";
+
+describe("deleted missions", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    for (const store of stores.splice(0)) {
+      store.stop();
+    }
+    vi.useRealTimers();
+  });
+
+  it("a direct visit to a missing mission stops after the authoritative not_found", async () => {
+    const onMissing = vi.fn<() => void>();
+    const { reads, sources, store } = session({ isMissing, onMissing });
+    store.start();
+    reads[0]?.reject(notFound());
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect({
+      connections: sources.length,
+      missing: onMissing.mock.calls.length,
+      reads: reads.length,
+      status: store.getSnapshot().status,
+      timers: vi.getTimerCount(),
+    }).toStrictEqual({
+      connections: 0,
+      missing: 0,
+      reads: 1,
+      status: "error",
+      timers: 0,
+    });
+  });
+
+  it("temporary failures still retry", async () => {
+    const { reads, store } = session({ isMissing });
+    store.start();
+    reads[0]?.reject(new Error("offline"));
+    await settle();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(reads.length).toBeGreaterThan(1);
+    expect(store.getSnapshot().status).toBe("error");
+  });
+
+  it("an open mission whose stream keeps failing learns it was deleted and stops", async () => {
+    const onMissing = vi.fn<() => void>();
+    const { reads, sources } = await ready({ isMissing, onMissing });
+    sources[0]?.emit("error");
+    await vi.advanceTimersByTimeAsync(250);
+    sources[1]?.emit("error");
+    reads.at(-1)?.reject(notFound());
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect({
+      closed: sources.at(-1)?.closed,
+      missing: onMissing.mock.calls.length,
+      timers: vi.getTimerCount(),
+    }).toStrictEqual({ closed: true, missing: 1, timers: 0 });
+  });
+
+  it("removal ends the session for good and late reads cannot publish", async () => {
+    const { reads, sources, store } = await ready();
+    const refresh = store.refresh();
+    store.remove();
+    const removed = store.getSnapshot();
+    reads[1]?.resolve(snapshot({ cursor: 20, mission: mission(5) }));
+    sources[0]?.send(event(21));
+    store.start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(refresh).resolves.toBeFalsy();
+    expect({
+      removed: store.getSnapshot().removed,
+      same: store.getSnapshot() === removed,
+      sources: sources.length,
+    }).toStrictEqual({ removed: true, same: true, sources: 1 });
   });
 });

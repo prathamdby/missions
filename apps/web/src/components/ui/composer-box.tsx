@@ -4,7 +4,6 @@ import { cva } from "class-variance-authority";
 import type { VariantProps } from "class-variance-authority";
 import type { ComponentProps } from "react";
 
-import { KbdSizeContext } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 
 const composerBoxVariants = cva(
@@ -54,19 +53,17 @@ export const ComposerToolbar = ({
   />
 );
 
-/** Keyboard legend under a composer. Children are groups; groups sit 22px apart. */
+/** One-line note under a composer, hidden on touch screens. */
 export const ComposerLegend = ({
   className,
   ...props
-}: ComponentProps<"div">) => (
-  <KbdSizeContext value="sm">
-    <div
-      className={cn(
-        "hidden flex-wrap items-center justify-center gap-x-sm gap-y-xs text-xs leading-sm font-book tracking-tight text-text-tertiary md:flex [&>*]:flex [&>*]:items-center [&>*]:gap-sm [&>*+*]:ml-xl",
-        className
-      )}
-      data-slot="composer-legend"
-      {...props}
-    />
-  </KbdSizeContext>
+}: ComponentProps<"p">) => (
+  <p
+    className={cn(
+      "hidden text-center text-xs leading-sm font-book tracking-tight text-text-tertiary md:block",
+      className
+    )}
+    data-slot="composer-legend"
+    {...props}
+  />
 );
