@@ -2346,6 +2346,49 @@ describe("mission service", () => {
     });
   });
 
+  it("records a startup failure even when cleanup cannot stop the worker", async () => {
+    const booted = await boot(undefined, (runtime, index) => {
+      if (index !== 1) {
+        return;
+      }
+      runtime.survivors = [4242];
+      vi.spyOn(runtime, "start").mockRejectedValue(
+        new Error("worker initialization failed")
+      );
+    });
+    const created = await createMission(booted);
+    const orchestrator = await waitFor(
+      () => booted.runtimes[0],
+      (runtime) => (runtime?.submitted.length ?? 0) > 0
+    );
+    if (!orchestrator) {
+      throw new Error("Missing orchestrator");
+    }
+    await orchestrator.tool("dispatch_worker", {
+      instructions: "Stuck",
+      needsWrite: false,
+      title: "Stuck",
+    });
+    await waitFor(
+      () => created.daemon.missions.get(created.missionId).status,
+      (status) => status === "stop_failed"
+    );
+    const [assignment] = created.daemon.missions.snapshot(
+      created.missionId
+    ).assignments;
+    expect({
+      assignment: assignment?.status,
+      event: created.daemon.store.queue.get(
+        `evt:worker-failed:${assignment?.id}:0`
+      )?.text,
+    }).toStrictEqual({
+      assignment: "failed",
+      event: expect.stringContaining(
+        "could not start (worker initialization failed)"
+      ),
+    });
+  });
+
   it("ignores a late exit from a worker execution replaced by Pause and Resume", async () => {
     const ctx = await startMission();
     const { worker } = await startWorker(ctx, "Read", false);
@@ -2417,6 +2460,62 @@ describe("mission service", () => {
       ),
       sentBeforePause: false,
     });
+  });
+
+  it("keeps summarizing an unconfirmed failure until a resume message carried it", async () => {
+    let failOrchestrator = false;
+    const booted = await boot(undefined, (runtime) => {
+      if (runtime.options.role !== "orchestrator") {
+        return;
+      }
+      const start = runtime.start.bind(runtime);
+      vi.spyOn(runtime, "start").mockImplementation(async (sessionId) => {
+        if (failOrchestrator) {
+          throw new Error("orchestrator unavailable");
+        }
+        return await start(sessionId);
+      });
+    });
+    const created = await createMission(booted);
+    const orchestrator = await waitFor(
+      () => booted.runtimes[0],
+      (runtime) => (runtime?.submitted.length ?? 0) > 0
+    );
+    if (!orchestrator) {
+      throw new Error("Missing orchestrator");
+    }
+    const ctx = { ...created, orchestrator };
+    const { assignment, worker } = await startWorker(ctx);
+    await holdOrchestrator(ctx);
+    worker.emit({ message: "connection lost", type: "process_exit" });
+    const control = (kind: "pause" | "resume", operationId: string) => {
+      const request = {
+        expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
+        operationId,
+      };
+      return kind === "pause"
+        ? ctx.daemon.missions.pause(ctx.missionId, request)
+        : ctx.daemon.missions.resume(ctx.missionId, request);
+    };
+    const resumeText = () =>
+      ctx.runtimes
+        .findLast((runtime) => runtime.options.role === "orchestrator")
+        ?.submitted.at(0)?.text;
+    const summary = `failure notice was not confirmed delivered (you may already have been told): ${assignment.id}`;
+    await control("pause", "first-pause");
+    failOrchestrator = true;
+    await expect(control("resume", "failed-resume")).rejects.toThrow(
+      /Could not restart/u
+    );
+    failOrchestrator = false;
+    await control("resume", "retried-resume");
+    const retried = resumeText();
+    await control("pause", "second-pause");
+    await control("resume", "later-resume");
+    expect({
+      later: resumeText()?.includes(summary),
+      retried: retried?.includes(summary),
+    }).toStrictEqual({ later: false, retried: true });
   });
 
   it("never resends an uncertain notice and refuses user changes to daemon items", async () => {
@@ -2614,6 +2713,36 @@ describe("mission service", () => {
       `evt:worker-unblocked:${request.id}`
     );
     expect(unblocked?.text).toContain("the request was denied");
+  });
+
+  it("follows a removed blocked notice the runner still consumed with an unblocked notice", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    const { request } = await askWorkerPermission(ctx, worker);
+    const blockedId = `evt:worker-blocked:${request.id}`;
+    const unblockedId = `evt:worker-unblocked:${request.id}`;
+    await nativelyQueued(ctx.daemon, blockedId);
+    ctx.daemon.missions.decidePermission(ctx.missionId, request.id, {
+      decision: "deny",
+      epoch: 0,
+    });
+    await waitFor(
+      () => ctx.daemon.store.queue.get(blockedId)?.state,
+      (state) => state === "removed"
+    );
+    await yieldImmediate();
+    const beforeConsumed = ctx.daemon.store.queue.get(unblockedId);
+    ctx.orchestrator.consume(blockedId);
+    const unblocked = await submittedNotice(ctx, unblockedId);
+    expect({
+      beforeConsumed,
+      blocked: ctx.daemon.store.queue.get(blockedId)?.state,
+      text: unblocked?.text,
+    }).toStrictEqual({
+      beforeConsumed: null,
+      blocked: "sent",
+      text: expect.stringContaining("the request was denied"),
+    });
   });
 
   it("sends only the failure notice when a blocked worker dies", async () => {

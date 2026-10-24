@@ -243,6 +243,9 @@ interface PendingQuestion {
 /** A Worker's permission request or question, as agent events refer to it. */
 type WorkerWaitRecord = Pick<Question, "createdAt" | "epoch" | "id">;
 
+/** Marks an unread failure notice whose content a later resume message carried. */
+const SUMMARIZED_ON_RESUME = "Summarized in the resume message";
+
 const WRITE_TOOLS = new Set([
   "Edit",
   "Create",
@@ -1321,9 +1324,20 @@ export class MissionService {
       }
       return live.runtime;
     } catch (error) {
-      await this.#closeRuntime(agent.id, live);
+      await this.#startFailed(live, agent, error);
       throw error;
     }
+  }
+
+  /** Cleanup can outlive or fence the mission, so a Worker's failure is recorded first. */
+  async #startFailed(live: LiveAgent, agent: Agent, error: unknown) {
+    if (agent.role === "worker" && this.#isCurrent(agent.id, live)) {
+      this.#recordWorkerFailure(agent, live.epoch, {
+        detail: errorMessage(error),
+        kind: "start",
+      });
+    }
+    await this.#closeRuntime(agent.id, live);
   }
 
   /**
@@ -1969,6 +1983,9 @@ export class MissionService {
       state: entry.state,
       updatedAt: this.#iso(),
     });
+    if (entry.state === "sent" && item.state !== "sent") {
+      this.#blockedNoticeRead(entry.id);
+    }
   }
 
   // ------------------------------------------------------------ questions
@@ -2309,9 +2326,10 @@ export class MissionService {
       await this.#execute(agentId, runtime, () =>
         runtime.submit(`${SYSTEM_PREFIX}${randomUUID()}`, text, mode)
       );
+      return true;
     } catch (error) {
       if (this.#closing) {
-        return;
+        return false;
       }
       const agent = this.#store.getAgent(agentId);
       if (agent && !FENCED.has(this.get(agent.missionId).status)) {
@@ -2526,18 +2544,11 @@ export class MissionService {
     worker: Agent,
     error: unknown
   ) {
-    const recorded = this.#recordWorkerFailure(worker, mission.epoch, {
+    this.#recordWorkerFailure(worker, mission.epoch, {
       detail: errorMessage(error),
       kind: "start",
     });
     this.#failUndelivered(worker.id, "The Worker could not start");
-    if (recorded) {
-      this.#saveSharedFile(
-        mission.id,
-        `errors/${worker.id}-${mission.epoch}.md`,
-        `# ${assignment.title}\n\n${errorMessage(error)}\n`
-      );
-    }
     const result = await this.#closeRuntime(worker.id);
     if (!FENCED.has(this.get(mission.id).status)) {
       this.#patchAgent(worker.id, { status: "failed" });
@@ -2800,6 +2811,13 @@ export class MissionService {
       text: workerFailedMessage(running.worker.title, failed, failure),
     });
     if (recorded) {
+      if (failure.kind === "start") {
+        this.#saveSharedFile(
+          mission.id,
+          `errors/${worker.id}-${epoch}.md`,
+          `# ${assignment.title}\n\n${failure.detail}\n`
+        );
+      }
       this.#notice(
         mission.id,
         "run_failed",
@@ -2882,6 +2900,30 @@ export class MissionService {
     }
     if (removal !== "removed") {
       this.#sendUnblocked(agentId, wait, outcome);
+    }
+  }
+
+  /**
+   * The runner can report consumption after a confirmed removal; the main
+   * agent then read the blocked notice and needs to hear the wait ended.
+   */
+  #blockedNoticeRead(itemId: string) {
+    const event = parseAgentEventId(itemId);
+    if (event?.kind !== "worker-blocked") {
+      return;
+    }
+    const permission = this.#store.permissions.get(event.waitId);
+    if (permission?.agentId && permission.status !== "pending") {
+      this.#sendUnblocked(
+        permission.agentId,
+        permission,
+        PERMISSION_OUTCOMES[permission.status]
+      );
+      return;
+    }
+    const question = this.#store.questions.get(event.waitId);
+    if (question && question.status !== "pending") {
+      this.#sendUnblocked(question.agentId, question, question.status);
     }
   }
 
@@ -4242,11 +4284,19 @@ export class MissionService {
           const runtime = await this.#ensureRuntime(orchestrator.id);
           this.#requireRuntime(orchestrator.id, runtime);
           if (!goalPending) {
-            await this.#sendSystem(
+            const failures = this.#unconfirmedFailures(missionId);
+            const sent = await this.#sendSystem(
               orchestrator.id,
-              this.#resumeNotice(missionId, interrupted),
+              this.#resumeNotice(
+                missionId,
+                interrupted,
+                failures.map(({ assignment }) => assignment)
+              ),
               "steer"
             );
+            if (sent) {
+              this.#markSummarized(failures.map(({ item }) => item.id));
+            }
           }
         } catch (error) {
           if (!FENCED.has(this.get(missionId).status)) {
@@ -4277,33 +4327,53 @@ export class MissionService {
   }
 
   /** Resume context, including Plan revisions whose native approval ended with the stop. */
-  #resumeNotice(missionId: string, interrupted: readonly Assignment[]) {
+  #resumeNotice(
+    missionId: string,
+    interrupted: readonly Assignment[],
+    unconfirmedFailures: readonly Assignment[]
+  ) {
     const [ended] = this.#store.plans
       .list(missionId)
       .filter((plan) => plan.status === "proposed" && !plan.actionable)
       .toSorted((a, b) => b.revision - a.revision);
-    const resumed = resumedMessage(
-      interrupted,
-      this.#unconfirmedFailures(missionId)
-    );
+    const resumed = resumedMessage(interrupted, unconfirmedFailures);
     return ended ? `${resumed}\n\n${planReissueMessage(ended)}` : resumed;
   }
 
-  /** Failures from the stopped run whose notice the main agent may never have read. */
+  /**
+   * Failures from earlier runs whose notice the main agent may never have
+   * read and no resume message has carried yet. A failed Resume advances the
+   * epoch again, so this cannot look at the previous epoch alone.
+   */
   #unconfirmedFailures(missionId: string) {
-    const stoppedEpoch = this.get(missionId).epoch - 1;
+    const { epoch } = this.get(missionId);
     return this.#store.queue.list(missionId).flatMap((item) => {
       const event = parseAgentEventId(item.id);
       if (
         event?.kind !== "worker-failed" ||
-        event.epoch !== stoppedEpoch ||
-        item.state === "sent"
+        event.epoch >= epoch ||
+        item.state === "sent" ||
+        item.error === SUMMARIZED_ON_RESUME
       ) {
         return [];
       }
       const assignment = this.#store.assignments.get(event.assignmentId);
-      return assignment ? [assignment] : [];
+      return assignment ? [{ assignment, item }] : [];
     });
+  }
+
+  #markSummarized(itemIds: readonly string[]) {
+    for (const id of itemIds) {
+      const item = this.#store.queue.get(id);
+      if (item && item.state !== "sent") {
+        this.#saveQueueItem({
+          ...item,
+          error: SUMMARIZED_ON_RESUME,
+          revision: item.revision + 1,
+          updatedAt: this.#iso(),
+        });
+      }
+    }
   }
 
   /** Stop-failed missions must prove their recorded processes are gone before resuming. */
