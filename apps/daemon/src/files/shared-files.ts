@@ -4,6 +4,7 @@ import path from "node:path";
 import type { FileTree } from "@missions/protocol/files";
 
 import { badRequest } from "../lib/app-error";
+import { removeMissionFolder, sweepMissionFolders } from "./mission-folders";
 import { readWorkspaceFile, resolveWorkspacePath } from "./workspace-files";
 
 const DIRECTORIES = ["plans", "handoffs", "results", "errors"] as const;
@@ -35,6 +36,16 @@ export class SharedFiles {
   /** Drops the in-memory readiness cache; the files themselves stay on disk. */
   forget(missionId: string) {
     this.#ready.delete(missionId);
+  }
+
+  async remove(missionId: string) {
+    await this.#ready.get(missionId);
+    this.forget(missionId);
+    await removeMissionFolder(this.#dir, missionId);
+  }
+
+  async sweepRemoved(deleted: ReadonlySet<string>) {
+    await sweepMissionFolders(this.#dir, deleted);
   }
 
   async #initialize(missionId: string) {

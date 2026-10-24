@@ -25,11 +25,7 @@ export const AppShell = ({ children }: { children: ReactNode }) => {
           <Sidebar layout="touch" />
         </SheetContent>
       </Sheet>
-      <main
-        className="flex min-w-0 flex-1 md:my-md md:mr-md"
-        id="main"
-        tabIndex={-1}
-      >
+      <main className="flex min-w-0 flex-1 md:my-md md:mr-md" id="main">
         <div className="relative flex min-w-0 flex-1 overflow-hidden bg-surface md:rounded-lg md:shadow-sm">
           {children}
         </div>

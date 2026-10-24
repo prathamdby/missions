@@ -134,7 +134,16 @@ export const ListboxGroup = ({
 /** A selectable row inside a Listbox; `selected` maps to aria-selected. */
 export const ListOption = ({
   selected,
+  virtualFocus = false,
   ...props
-}: Omit<ListRowProps, "asChild" | "role"> & { selected: boolean }) => (
-  <ListRow aria-selected={selected} role={OPTION_ROLE} {...props} />
+}: Omit<ListRowProps, "asChild" | "role"> & {
+  selected: boolean;
+  virtualFocus?: boolean;
+}) => (
+  <ListRow
+    aria-selected={selected}
+    role={OPTION_ROLE}
+    {...props}
+    tabIndex={virtualFocus ? -1 : props.tabIndex}
+  />
 );

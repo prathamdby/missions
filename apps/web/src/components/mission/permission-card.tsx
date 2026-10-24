@@ -7,6 +7,7 @@ import { CheckIcon, CloseIcon, ShieldIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { usePermissionDecision } from "@/components/mission/use-permission-decision";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { permissionDecisions } from "@/lib/mission/permissions";
 
 const titleOf = (request: PermissionRequest) => {
@@ -65,16 +66,22 @@ const ResolvedPermission = ({ request }: { request: PermissionRequest }) => {
 
 const ToolUse = ({ use }: { use: PermissionRequest["toolUses"][number] }) => (
   <div className="flex flex-col gap-sm">
-    <div className="flex items-start gap-md overflow-x-auto rounded-sm bg-surface px-lg py-control font-mono text-xs leading-sm font-book">
-      <span className="shrink-0 text-text-tertiary">
-        {use.toolName === "Execute" ? "$" : use.toolName}
-      </span>
-      <span className="whitespace-pre-wrap text-text">{use.summary}</span>
-    </div>
+    <ScrollArea asChild axis="x">
+      <div className="flex items-start gap-md rounded-sm bg-surface px-lg py-control font-mono text-xs leading-sm font-book">
+        <span className="shrink-0 text-text-tertiary">
+          {use.toolName === "Execute" ? "$" : use.toolName}
+        </span>
+        <span className="whitespace-pre-wrap text-text select-text">
+          {use.summary}
+        </span>
+      </div>
+    </ScrollArea>
     {use.diff ? (
-      <pre className="max-h-60 overflow-auto rounded-sm bg-surface px-lg py-control font-mono text-xs leading-md text-text-secondary">
-        {use.diff}
-      </pre>
+      <ScrollArea asChild axis="both">
+        <pre className="max-h-60 rounded-sm bg-surface px-lg py-control font-mono text-xs leading-md text-text-secondary select-text">
+          {use.diff}
+        </pre>
+      </ScrollArea>
     ) : null}
   </div>
 );

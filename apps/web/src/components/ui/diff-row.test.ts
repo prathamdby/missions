@@ -24,7 +24,7 @@ const rowClasses = (markup: string) =>
 const gutterClasses =
   "flex h-5 w-9.5 shrink-0 items-center justify-end pr-md font-mono text-2xs leading-lg select-none";
 const textClasses =
-  "pl-lg font-mono text-2xs leading-lg whitespace-pre text-syntax-text";
+  "pl-lg font-mono text-2xs leading-lg whitespace-pre text-syntax-text select-text";
 
 describe("numbered file diff rows", () => {
   it.each([

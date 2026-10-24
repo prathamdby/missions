@@ -130,7 +130,7 @@ export const Callout = ({
             {title}
           </p>
           {children ? (
-            <div className="text-xs leading-md tracking-tight text-text-secondary">
+            <div className="text-xs leading-md tracking-tight text-text-secondary select-text">
               {children}
             </div>
           ) : null}
@@ -159,7 +159,9 @@ export const Callout = ({
       <div className="flex min-w-0 flex-1 flex-col gap-xs">
         <p className="type-label text-text">{title}</p>
         {children ? (
-          <div className="type-caption text-text-secondary">{children}</div>
+          <div className="type-caption text-text-secondary select-text">
+            {children}
+          </div>
         ) : null}
         {actions ? (
           <div className="mt-sm flex flex-wrap items-center gap-md">

@@ -152,7 +152,7 @@ test("a new mission starts with the picked models and the default workspace", as
   }
 });
 
-test("sidebar actions rename and delete a stopped mission but keep its files", async ({
+test("sidebar actions rename and delete an owned worktree, not the project", async ({
   page,
   request,
 }) => {
@@ -161,7 +161,8 @@ test("sidebar actions rename and delete a stopped mission but keep its files", a
   const mission = await createMission(
     request,
     project.id,
-    "Describe the sidebar project"
+    "Describe the sidebar project",
+    { workspace: "new_worktree" }
   );
   await expect
     .poll(() => missionStatus(request, mission.id), { timeout: 30_000 })
@@ -171,7 +172,7 @@ test("sidebar actions rename and delete a stopped mission but keep its files", a
     .poll(() => missionStatus(request, mission.id), { timeout: 30_000 })
     .toBe("paused");
   const { mission: current } = (await missionSnapshot(request, mission.id)) as {
-    mission: { title: string };
+    mission: { title: string; workspace: { path: string } };
   };
 
   await page.goto(`/missions/${mission.id}`);
@@ -191,13 +192,14 @@ test("sidebar actions rename and delete a stopped mission but keep its files", a
   await link.click({ button: "right" });
   await page.getByTestId("mission-action-delete").click();
   await expect(page.getByTestId("delete-mission-dialog")).toContainText(
-    "stay on disk"
+    current.workspace.path
   );
   await page.getByTestId("delete-mission-confirm").click();
   await expect(page).toHaveURL(/\/$/u);
   await expect(link).toHaveCount(0);
   await expect(missionSnapshot(request, mission.id)).rejects.toThrow("404");
   expect(existsSync(`${repo}/README.md`)).toBe(true);
+  expect(existsSync(current.workspace.path)).toBe(false);
 });
 
 const stoppedMission = async (

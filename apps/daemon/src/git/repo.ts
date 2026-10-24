@@ -129,16 +129,11 @@ export const branchExists = async (dir: string, name: string) => {
   return result.ok;
 };
 
-export const worktrees = async (dir: string): Promise<WorktreeInfo[]> => {
-  const raw = await out(dir, ["worktree", "list", "--porcelain"]);
-  if (!raw) {
-    return [];
-  }
-  const blocks = raw.split(/\n\n+/u).filter(Boolean);
-  const parsed = blocks.map((block, position) => {
-    const info: WorktreeInfo = {
+export const parseWorktrees = (raw: string): Omit<WorktreeInfo, "dirty">[] => {
+  const blocks = raw.trim().split(/\n\n+/u).filter(Boolean);
+  return blocks.map((block, position) => {
+    const info: Omit<WorktreeInfo, "dirty"> = {
       branch: null,
-      dirty: false,
       head: null,
       isMain: position === 0,
       path: "",
@@ -156,8 +151,12 @@ export const worktrees = async (dir: string): Promise<WorktreeInfo[]> => {
     }
     return info;
   });
+};
+
+export const worktrees = async (dir: string): Promise<WorktreeInfo[]> => {
+  const raw = await out(dir, ["worktree", "list", "--porcelain"]);
   return await Promise.all(
-    parsed.map(async (info) => {
+    parseWorktrees(raw ?? "").map(async (info) => {
       const entries = await status(info.path);
       if (entries === null) {
         throw conflict(`Could not read the worktree status at ${info.path}`);

@@ -48,7 +48,7 @@ export const DiffRow = (props: DiffRowProps) => (
     ) : null}
     <span
       className={cn(
-        "pl-lg font-mono text-2xs leading-lg whitespace-pre text-syntax-text",
+        "pl-lg font-mono text-2xs leading-lg whitespace-pre text-syntax-text select-text",
         props.variant === "file" && "pr-lg"
       )}
     >

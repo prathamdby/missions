@@ -8,6 +8,7 @@ import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
 import { useDiffHighlight } from "@/components/mission/use-diff-highlight";
 import { DiffRow } from "@/components/ui/diff-row";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { HighlightedLine } from "@/components/ui/syntax-highlight";
 import { languageForPath } from "@/lib/code-language";
 import type { ToolCall } from "@/lib/mission/timeline";
@@ -84,21 +85,23 @@ export const CommandCard = ({ call }: { call: ToolCall }) => {
         )}
       </header>
       {lines.length > 0 ? (
-        <div className="flex flex-col overflow-x-auto bg-surface px-lg py-control">
-          {lines.map((line, index) => (
-            <span
-              className={cn(
-                "font-mono text-2xs leading-md whitespace-pre",
-                TONES[lineTone(line)]
-              )}
-              // Output lines can repeat; their order is their identity.
-              // oxlint-disable-next-line no-array-index-key
-              key={index}
-            >
-              {line}
-            </span>
-          ))}
-        </div>
+        <ScrollArea asChild axis="x">
+          <div className="flex flex-col bg-surface px-lg py-control select-text">
+            {lines.map((line, index) => (
+              <span
+                className={cn(
+                  "font-mono text-2xs leading-md whitespace-pre",
+                  TONES[lineTone(line)]
+                )}
+                // Output lines can repeat; their order is their identity.
+                // oxlint-disable-next-line no-array-index-key
+                key={index}
+              >
+                {line}
+              </span>
+            ))}
+          </div>
+        </ScrollArea>
       ) : null}
     </ChatCard>
   );
@@ -171,24 +174,26 @@ export const EditCard = ({ call }: { call: ToolCall }) => {
           {removed > 0 ? <span className="text-danger">−{removed}</span> : null}
         </span>
       </header>
-      <div className="flex flex-col overflow-x-auto bg-surface py-xs">
-        {shown.map((line, index) => (
-          <DiffRow
-            kind={line.kind}
-            // Diff lines can repeat; their order is their identity.
-            // oxlint-disable-next-line no-array-index-key
-            key={index}
-            variant="tool"
-          >
-            <HighlightedLine text={line.text} tokens={tokens?.[index]} />
-          </DiffRow>
-        ))}
-        {diff.length > shown.length ? (
-          <span className="pt-xs pl-lg font-mono text-2xs leading-lg text-text-tertiary">
-            {diff.length - shown.length} more lines
-          </span>
-        ) : null}
-      </div>
+      <ScrollArea asChild axis="x">
+        <div className="flex flex-col bg-surface py-xs">
+          {shown.map((line, index) => (
+            <DiffRow
+              kind={line.kind}
+              // Diff lines can repeat; their order is their identity.
+              // oxlint-disable-next-line no-array-index-key
+              key={index}
+              variant="tool"
+            >
+              <HighlightedLine text={line.text} tokens={tokens?.[index]} />
+            </DiffRow>
+          ))}
+          {diff.length > shown.length ? (
+            <span className="pt-xs pl-lg font-mono text-2xs leading-lg text-text-tertiary">
+              {diff.length - shown.length} more lines
+            </span>
+          ) : null}
+        </div>
+      </ScrollArea>
     </ChatCard>
   );
 };

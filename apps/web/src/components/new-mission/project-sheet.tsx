@@ -28,6 +28,7 @@ import {
   ListRow,
   Listbox,
 } from "@/components/ui/list-row";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
   SheetClose,
@@ -147,37 +148,41 @@ export const ProjectSheet = ({
             value={search}
           />
         </div>
-        <div className="flex min-h-0 flex-col overflow-y-auto">
-          <ListLabel size="sheet">Recent</ListLabel>
-          <Listbox aria-label="Projects">
-            {list.map((project) => {
-              const isSelected = project.id === value;
-              return (
-                <ListOption
-                  key={project.id}
-                  onClick={() => {
-                    onChange(project.id);
-                    setOpen(false);
-                  }}
-                  selected={isSelected}
-                  size="sheet"
-                >
-                  <FolderIcon />
-                  <span className="flex min-w-0 flex-1 flex-col gap-2xs">
-                    <span className="truncate font-medium">{project.name}</span>
-                    <span className="truncate font-mono text-xs leading-sm text-text-tertiary">
-                      {tildePath(project.path, home)}
+        <ScrollArea asChild axis="y">
+          <div className="flex min-h-0 flex-col">
+            <ListLabel size="sheet">Recent</ListLabel>
+            <Listbox aria-label="Projects">
+              {list.map((project) => {
+                const isSelected = project.id === value;
+                return (
+                  <ListOption
+                    key={project.id}
+                    onClick={() => {
+                      onChange(project.id);
+                      setOpen(false);
+                    }}
+                    selected={isSelected}
+                    size="sheet"
+                  >
+                    <FolderIcon />
+                    <span className="flex min-w-0 flex-1 flex-col gap-2xs">
+                      <span className="truncate font-medium">
+                        {project.name}
+                      </span>
+                      <span className="truncate font-mono text-xs leading-sm text-text-tertiary">
+                        {tildePath(project.path, home)}
+                      </span>
                     </span>
-                  </span>
-                  <span className="shrink-0 text-xs leading-sm text-text-tertiary">
-                    {projectMeta(project, missions, now)}
-                  </span>
-                  {isSelected ? <CheckIcon tone="text" /> : null}
-                </ListOption>
-              );
-            })}
-          </Listbox>
-        </div>
+                    <span className="shrink-0 text-xs leading-sm text-text-tertiary">
+                      {projectMeta(project, missions, now)}
+                    </span>
+                    {isSelected ? <CheckIcon tone="text" /> : null}
+                  </ListOption>
+                );
+              })}
+            </Listbox>
+          </div>
+        </ScrollArea>
         <hr className="-mx-md my-md h-px shrink-0 border-0 bg-border-subtle" />
         <ListLabel size="sheet">Add project</ListLabel>
         <SourceRow
