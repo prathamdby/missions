@@ -21,6 +21,8 @@ export const routes = {
   mission: (missionId: string) => apiPath(`/missions/${missionId}`),
   missionArchive: (missionId: string) =>
     apiPath(`/missions/${missionId}/archive`),
+  missionFileSearch: (missionId: string) =>
+    apiPath(`/missions/${missionId}/file-search`),
   missionMessages: (missionId: string) =>
     apiPath(`/missions/${missionId}/messages`),
   missionPause: (missionId: string) => apiPath(`/missions/${missionId}/pause`),
@@ -40,6 +42,8 @@ export const routes = {
     apiPath(`/projects/${projectId}/branches`),
   projectCheckout: (projectId: string) =>
     apiPath(`/projects/${projectId}/checkout`),
+  projectFileSearch: (projectId: string) =>
+    apiPath(`/projects/${projectId}/file-search`),
   projectWorktrees: (projectId: string) =>
     apiPath(`/projects/${projectId}/worktrees`),
   projects: () => apiPath("/projects"),

@@ -19,6 +19,7 @@ import {
   EditQueueItemResponseSchema,
 } from "@missions/protocol/commands";
 import { PageSchema } from "@missions/protocol/common";
+import { FileMatchListSchema } from "@missions/protocol/composer";
 import type { ComparisonMode } from "@missions/protocol/files";
 import {
   ChangesSchema,
@@ -174,6 +175,18 @@ export const api = {
       query: { path },
       signal,
     }),
+  fileSearch: (
+    scope: { kind: "mission" | "project"; id: string },
+    q: string,
+    signal?: AbortSignal
+  ) =>
+    apiRequest(
+      scope.kind === "mission"
+        ? routes.missionFileSearch(scope.id)
+        : routes.projectFileSearch(scope.id),
+      FileMatchListSchema,
+      { query: { q }, signal }
+    ),
   files: (missionId: string, dir: string, signal?: AbortSignal) =>
     apiRequest(routes.files(missionId), FileTreeSchema, {
       query: { dir },

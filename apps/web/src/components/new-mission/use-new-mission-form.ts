@@ -2,7 +2,7 @@
 
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import type { Settings } from "@missions/protocol/settings";
-import { useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 import { useAddProject } from "@/components/projects/add-project-context";
 import { useShell } from "@/components/shell/shell-context";
@@ -14,6 +14,7 @@ import {
   useSettings,
   useWorktrees,
 } from "@/lib/api/queries";
+import { MessageDraft } from "@/lib/mission/message-draft";
 
 import {
   chooseModels,
@@ -131,7 +132,13 @@ export const useNewMissionForm = () => {
   const [workspaceChoice, setWorkspaceChoice] =
     useState<PerProject<WorkspaceChoice> | null>(null);
   const [acknowledged, setAcknowledged] = useState<string | null>(null);
-  const [goal, setGoal] = useState("");
+  const messageDraft = useMemo(() => new MessageDraft(), []);
+  const goal = useSyncExternalStore(
+    messageDraft.subscribe,
+    messageDraft.snapshot,
+    messageDraft.snapshot
+  );
+  const setGoal = messageDraft.change.bind(messageDraft);
   const defaults = useDraftDefaults(evidence(settings));
   const [models, handleModelChange] = useModelChoices(defaults);
 
@@ -191,6 +198,7 @@ export const useNewMissionForm = () => {
       }
     },
     isGit,
+    messageDraft,
     missions: missions.data ?? [],
     models,
     newBranch,

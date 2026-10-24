@@ -4,12 +4,10 @@ import type { DeliveryMode } from "@missions/protocol/common";
 import type { MissionStatus } from "@missions/protocol/missions";
 import { useMutation } from "@tanstack/react-query";
 import { useMemo, useSyncExternalStore } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
 
+import { ComposerField } from "@/components/composer/composer-field";
 import {
   ArrowUpIcon,
-  AtIcon,
-  PaperclipIcon,
   PauseIcon,
   PlayIcon,
   RepeatIcon,
@@ -18,7 +16,6 @@ import { useMission } from "@/components/mission/mission-context";
 import { QueueTray } from "@/components/mission/queue-tray";
 import { reportMutationError } from "@/components/mission/report-error";
 import { useMissionControl } from "@/components/mission/use-mission-control";
-import { Textarea } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Hint } from "@/components/ui/tooltip";
 import { canResume, isMissionActive } from "@/lib/format";
@@ -29,20 +26,6 @@ import { modeStatus } from "@/lib/mission/execution-mode";
 import { MessageDraft } from "@/lib/mission/message-draft";
 import type { MessageDelivery } from "@/lib/mission/message-draft";
 import { markReceipt, markSubmit } from "@/lib/perf-marks";
-
-const UNSUPPORTED = "Attachments and mentions are not supported yet.";
-
-const ToolbarIcon = ({ icon, label }: { icon: ReactNode; label: string }) => (
-  <button
-    aria-disabled="true"
-    aria-label={`${label} (not available yet)`}
-    className="flex size-7 cursor-not-allowed items-center justify-center rounded-sm text-text-secondary"
-    title={UNSUPPORTED}
-    type="button"
-  >
-    {icon}
-  </button>
-);
 
 const placeholderFor = (status: MissionStatus) => {
   if (status === "archived") {
@@ -195,39 +178,24 @@ export const MissionComposer = () => {
     }
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) {
-      return;
-    }
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      submit(event.altKey && working ? "queue" : "steer");
-    }
-  };
-
   return (
     <div className="flex w-full max-w-chat flex-col gap-sm">
       <QueueTray />
-      <div className="flex flex-col gap-md rounded-2xl bg-surface-raised pt-lg pr-md pb-md pl-card shadow-md">
-        <Textarea
-          aria-label="Message the Orchestrator"
-          data-composer-input=""
-          data-testid="composer-input"
-          disabled={mission.status === "archived"}
-          onChange={(event) => draft.change(event.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={placeholderFor(mission.status)}
-          rows={1}
-          value={text}
-          variant="bare"
-        />
-        <div className="-ml-sm flex items-center gap-xs">
-          <ToolbarIcon icon={<PaperclipIcon />} label="Attach files" />
-          <ToolbarIcon icon={<AtIcon />} label="Mention a file" />
-          <span className="flex-1" />
+      <ComposerField
+        action={
           <ComposerActionButton onSend={() => submit("steer")} text={text} />
-        </div>
-      </div>
+        }
+        disabled={mission.status === "archived"}
+        draft={draft}
+        label="Message the Orchestrator"
+        onSubmit={(mode) =>
+          submit(mode === "queue" && working ? "queue" : "steer")
+        }
+        placeholder={placeholderFor(mission.status)}
+        scope={{ id: mission.id, kind: "mission" }}
+        size="touch"
+        testId="composer-input"
+      />
       {status ? (
         <p
           className="px-card text-xs leading-sm font-book tracking-tight text-info md:hidden"

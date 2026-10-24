@@ -9,8 +9,10 @@ import { OperationJournal } from "./db/journal";
 import { Store } from "./db/store";
 import { EventLog } from "./events/event-log";
 import { ArtifactStore } from "./files/artifact-store";
+import { FileSearch } from "./files/file-search";
 import { SharedFiles } from "./files/shared-files";
 import { GitService } from "./git/git-service";
+import { registerComposerRoutes } from "./http/composer-routes";
 import { registerFileRoutes } from "./http/file-routes";
 import { registerMissionRoutes } from "./http/mission-routes";
 import { registerProjectRoutes } from "./http/project-routes";
@@ -189,6 +191,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
           version,
         });
         registerProjectRoutes(hono, projects);
+        registerComposerRoutes(hono, missions, projects, new FileSearch());
         registerPullRequestRoutes(hono, store);
         registerMissionRoutes(hono, missions);
         registerFileRoutes(hono, missions, artifacts, sharedFiles);
