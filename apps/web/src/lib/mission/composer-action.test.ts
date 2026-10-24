@@ -34,10 +34,15 @@ describe(composerAction, () => {
   it("picks one action for every status and draft while agents work", () => {
     for (const status of MissionStatusSchema.options) {
       expect([
-        composerAction({ agents: working, draft: "", pending: null, status }),
         composerAction({
           agents: working,
-          draft: "Check the tests",
+          hasDraft: false,
+          pending: null,
+          status,
+        }),
+        composerAction({
+          agents: working,
+          hasDraft: true,
           pending: null,
           status,
         }),
@@ -52,13 +57,13 @@ describe(composerAction, () => {
       "awaiting_approval",
     ] as const) {
       expect(
-        composerAction({ agents: idle, draft: "", pending: null, status })
+        composerAction({ agents: idle, hasDraft: false, pending: null, status })
       ).toStrictEqual(DISABLED);
     }
     expect(
       composerAction({
         agents: [],
-        draft: "",
+        hasDraft: false,
         pending: null,
         status: "running",
       })
@@ -66,7 +71,7 @@ describe(composerAction, () => {
     expect(
       composerAction({
         agents: [{ status: "starting" }],
-        draft: "",
+        hasDraft: false,
         pending: null,
         status: "running",
       })
@@ -74,18 +79,18 @@ describe(composerAction, () => {
     expect(
       composerAction({
         agents: [],
-        draft: "",
+        hasDraft: false,
         pending: null,
         status: "setting_up",
       })
     ).toStrictEqual(PAUSE);
   });
 
-  it("whitespace is an empty draft", () => {
+  it("keeps Pause available with no draft content", () => {
     expect(
       composerAction({
         agents: working,
-        draft: "  \n ",
+        hasDraft: false,
         pending: null,
         status: "running",
       })
@@ -103,9 +108,9 @@ describe(composerAction, () => {
       ["delete", "completed", "Deleting…"],
     ];
     for (const [pending, status, label] of cases) {
-      for (const draft of ["", "typed"]) {
+      for (const hasDraft of [false, true]) {
         expect(
-          composerAction({ agents: working, draft, pending, status })
+          composerAction({ agents: working, hasDraft, pending, status })
         ).toStrictEqual({ kind: "progress", label });
       }
     }

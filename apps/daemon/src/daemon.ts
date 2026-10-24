@@ -9,9 +9,11 @@ import { OperationJournal } from "./db/journal";
 import { Store } from "./db/store";
 import { EventLog } from "./events/event-log";
 import { ArtifactStore } from "./files/artifact-store";
+import { AttachmentStore } from "./files/attachment-store";
 import { FileSearch } from "./files/file-search";
 import { SharedFiles } from "./files/shared-files";
 import { GitService } from "./git/git-service";
+import { registerAttachmentRoutes } from "./http/attachment-routes";
 import { registerComposerRoutes } from "./http/composer-routes";
 import { registerFileRoutes } from "./http/file-routes";
 import { registerMissionRoutes } from "./http/mission-routes";
@@ -134,6 +136,8 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
       onRecord: (record, agentId) => processRecords.save(record, agentId),
     });
     const artifacts = new ArtifactStore(config.artifactsDir);
+    const attachments = new AttachmentStore(config.attachmentsDir, now);
+    await attachments.sweepPending();
     const sharedFiles = new SharedFiles(path.join(config.home, "shared"));
     const models = new ModelCatalog(config.droidPath, options.loadModels);
     const composerCatalog = new ComposerCatalog(config.droidPath);
@@ -147,6 +151,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
     }
     const missions = new MissionService({
       artifacts,
+      attachments,
       createRuntime: options.createRuntime,
       journal,
       log,
@@ -205,6 +210,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
         );
         registerPullRequestRoutes(hono, store);
         registerMissionRoutes(hono, missions);
+        registerAttachmentRoutes(hono, attachments, missions);
         registerFileRoutes(hono, missions, artifacts, sharedFiles);
         registerPublishRoutes(hono, publish);
       },

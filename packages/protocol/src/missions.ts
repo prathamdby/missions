@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { AttachmentRefSchema } from "./attachments";
 import {
   DeliveryModeSchema,
   ExecutionModeSchema,
@@ -325,6 +326,7 @@ export type MessageParty = z.infer<typeof MessagePartySchema>;
 export const QueueItemSchema = z.object({
   /** The recipient agent. */
   agentId: IdSchema,
+  attachments: z.array(AttachmentRefSchema).default([]),
   createdAt: TimestampSchema,
   error: z.string().nullable(),
   /** Stable correlation ID, also used as the SDK request ID. */

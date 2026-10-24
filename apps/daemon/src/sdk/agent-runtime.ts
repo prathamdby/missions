@@ -22,6 +22,7 @@ import type {
   StopResult,
 } from "../processes/process-supervisor";
 import { toModelOption } from "../settings/models";
+import type { SdkAttachments } from "./attachments";
 import { listCommands, listSkills } from "./composer-catalog";
 import { NativeQueueTracker } from "./native-queue";
 import type { NativeQueueEntry } from "./native-queue";
@@ -68,7 +69,7 @@ export type RuntimeSender =
   | { kind: "orchestrator"; sessionId: string }
   | { kind: "agent"; sessionId: string; title: string };
 
-export interface SubmitOptions {
+export interface SubmitOptions extends SdkAttachments {
   /** Server-bound sender identity; absent for user and daemon messages. */
   sender?: RuntimeSender;
 }
@@ -896,6 +897,8 @@ export class AgentRuntime {
     try {
       await client.addUserMessage(
         {
+          files: options.files,
+          images: options.images,
           queuePlacement: PLACEMENT[mode] as never,
           text,
           ...(options.sender ? { sender: options.sender as never } : {}),
@@ -990,7 +993,8 @@ export class AgentRuntime {
   async edit(
     id: string,
     replacementId: string,
-    text: string
+    text: string,
+    options: SubmitOptions = {}
   ): Promise<EditOutcome> {
     const release = this.queue.retain(id);
     try {
@@ -1002,7 +1006,7 @@ export class AgentRuntime {
       if (removed === "unconfirmed") {
         return "delete_unconfirmed";
       }
-      await this.submit(replacementId, text, mode);
+      await this.submit(replacementId, text, mode, options);
       return "replaced";
     } finally {
       release();

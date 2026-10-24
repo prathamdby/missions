@@ -8,6 +8,8 @@ export type Query = Record<string, number | string | null | undefined>;
 
 export interface RequestOptions {
   body?: unknown;
+  rawBody?: Blob;
+  headers?: HeadersInit;
   method?: "DELETE" | "GET" | "PATCH" | "POST";
   query?: Query;
   signal?: AbortSignal;
@@ -51,8 +53,9 @@ const operationOf = (body: unknown) => {
 };
 
 const send = async (path: string, options: RequestOptions) => {
-  const headers = new Headers({ accept: "application/json" });
-  let body: string | undefined;
+  const headers = new Headers(options.headers);
+  headers.set("accept", "application/json");
+  let body: string | Blob | undefined = options.rawBody;
   if (options.body !== undefined) {
     headers.set("content-type", "application/json");
     body = JSON.stringify(options.body);

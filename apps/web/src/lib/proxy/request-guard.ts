@@ -1,3 +1,4 @@
+import { ATTACHMENT_NAME_HEADER } from "@missions/protocol/attachments";
 import { AUTH_SCHEME, OPERATION_HEADER } from "@missions/protocol/http";
 import { API_PREFIX } from "@missions/protocol/version";
 
@@ -47,6 +48,7 @@ export const checkProxyRequest = ({
 /** Allowlist: cookies, auth, and x-forwarded-* never reach the daemon. */
 const FORWARDED_REQUEST_HEADERS = [
   "accept",
+  ATTACHMENT_NAME_HEADER,
   "cache-control",
   "content-type",
   "last-event-id",

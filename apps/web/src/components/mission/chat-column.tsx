@@ -22,7 +22,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { errorMessage } from "@/lib/api/api-error";
 import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration, isMissionActive } from "@/lib/format";
-import { deliveredRequestIds, showGoalBubble } from "@/lib/mission/queue";
+import {
+  deliveredRequestIds,
+  goalRequestId,
+  showGoalBubble,
+} from "@/lib/mission/queue";
 import { buildTimeline } from "@/lib/mission/timeline";
 import { WAITING, waitingOf } from "@/lib/mission/waiting";
 import { useNow } from "@/lib/use-now";
@@ -252,7 +256,12 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
                 }}
               />
             ) : null}
-            {goalBubble ? <UserMessage text={live.mission.goal} /> : null}
+            {goalBubble ? (
+              <UserMessage
+                requestId={goalRequestId(missionId)}
+                text={live.mission.goal}
+              />
+            ) : null}
             {goalBubble ? <WorkspaceLine /> : null}
             <Transcript entries={entries} running={running} />
             <WorkingLine agentId={agentId} transcript={transcript} />
