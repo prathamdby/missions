@@ -32,6 +32,7 @@ import {
   PopoverSeparator,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { tildePath } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -150,30 +151,32 @@ export const ProjectPicker = ({
             value={search}
           />
         </PopoverSearch>
-        <div className="flex min-h-0 flex-col gap-hairline overflow-y-auto">
-          <ListLabel>Recent</ListLabel>
-          {filtered.length === 0 ? (
-            <p className="px-md py-sm text-xs leading-sm text-text-tertiary">
-              No matching projects
-            </p>
-          ) : (
-            <Listbox aria-label="Projects">
-              {filtered.map((project) => (
-                <ProjectOption
-                  home={home}
-                  key={project.id}
-                  meta={projectMeta(project, missions, now)}
-                  onPick={() => {
-                    onChange(project.id);
-                    setOpen(false);
-                  }}
-                  project={project}
-                  selected={project.id === value}
-                />
-              ))}
-            </Listbox>
-          )}
-        </div>
+        <ScrollArea asChild axis="y">
+          <div className="flex min-h-0 flex-col gap-hairline">
+            <ListLabel>Recent</ListLabel>
+            {filtered.length === 0 ? (
+              <p className="px-md py-sm text-xs leading-sm text-text-tertiary">
+                No matching projects
+              </p>
+            ) : (
+              <Listbox aria-label="Projects">
+                {filtered.map((project) => (
+                  <ProjectOption
+                    home={home}
+                    key={project.id}
+                    meta={projectMeta(project, missions, now)}
+                    onPick={() => {
+                      onChange(project.id);
+                      setOpen(false);
+                    }}
+                    project={project}
+                    selected={project.id === value}
+                  />
+                ))}
+              </Listbox>
+            )}
+          </div>
+        </ScrollArea>
         <PopoverSeparator />
         <ListLabel>Add project</ListLabel>
         <ListRow onClick={() => add("browse")}>

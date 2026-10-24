@@ -25,7 +25,9 @@ export const designPlugin = {
 
 // Enabled by UI configs (apps/web): tooling under design/ legitimately builds variable names.
 export const designRules = {
+  "missions-design/no-feature-tabindex": "error",
   "missions-design/no-off-scale-spacing": "error",
+  "missions-design/no-raw-scroll": "error",
   "missions-design/no-unauthorized-variables": "error",
 } as const;
 

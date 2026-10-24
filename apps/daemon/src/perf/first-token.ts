@@ -4,6 +4,7 @@ import path from "node:path";
 import { createDaemon } from "../daemon";
 import { pollUntil } from "../lib/async";
 import type { TimingRecord } from "../lib/timing";
+import { TitleGenerator } from "../missions/title-generator";
 import { ProcessSupervisor } from "../processes/process-supervisor";
 import { AgentRuntime } from "../sdk/agent-runtime";
 import type { AgentEvent } from "../sdk/agent-runtime";
@@ -16,6 +17,7 @@ import { gitRepo, testConfig } from "../test/fixtures";
  * and first thinking text is kept apart from first assistant text.
  *
  *   pnpm perf:first-token -- --samples 3 --model glm-5.3-flash
+ * Set MISSIONS_PERF_TITLES=0 for a baseline without background titles.
  *
  * Opt-in only: it spawns real Droid sessions and spends model tokens.
  */
@@ -24,6 +26,7 @@ const MAX_SAMPLES = 10;
 const TURN_MS = 120_000;
 const COLD_PROMPT = "Reply with the single word: ready";
 const WARM_PROMPT = "Reply with the single word: again";
+const TITLES = process.env.MISSIONS_PERF_TITLES !== "0";
 
 interface Sample {
   path: "direct" | "app";
@@ -156,6 +159,7 @@ const appSample = async (cwd: string, index: number): Promise<Sample[]> => {
   const daemon = await createDaemon({
     config,
     timingSinks: [(record) => records.push(record)],
+    titleGenerator: TITLES ? new TitleGenerator({ droidPath: DROID }) : null,
     version: "perf",
   });
   try {
@@ -264,7 +268,7 @@ const main = async () => {
     samples.push(...direct, ...app);
   }
   process.stdout.write(
-    `${JSON.stringify({ droid: DROID, model: MODEL, samples, summary: summarize(samples) }, null, 2)}\n`
+    `${JSON.stringify({ droid: DROID, model: MODEL, samples, summary: summarize(samples), titles: TITLES }, null, 2)}\n`
   );
 };
 

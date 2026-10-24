@@ -9,6 +9,7 @@ import {
 import type { Components, StreamdownProps } from "streamdown";
 
 import { CodeBlock, InlineCode } from "@/components/ui/code-block";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   codePlugin,
   HighlightedCode,
@@ -89,9 +90,9 @@ const Quote = ({ node: _node, ...props }: Props<"blockquote">) => (
   />
 );
 const Table = ({ node: _node, ...props }: Props<"table">) => (
-  <div className="overflow-x-auto">
+  <ScrollArea axis="x">
     <table className="w-full border-collapse type-caption" {...props} />
-  </div>
+  </ScrollArea>
 );
 const TableHead = ({ node: _node, ...props }: Props<"th">) => (
   <th
@@ -285,7 +286,7 @@ export const Markdown = ({
   <Streamdown
     className={cn(
       // space-y-0 replaces Streamdown's root spacing; blocks use our gap instead.
-      "flex min-w-0 flex-col space-y-0 break-words",
+      "flex min-w-0 flex-col space-y-0 break-words select-text",
       appearance === "panel" ? "gap-sm" : "gap-md",
       className
     )}

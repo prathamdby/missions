@@ -15,6 +15,7 @@ interface Node {
 }
 
 interface Context {
+  filename: string;
   report: (diagnostic: { node: Node; message: string }) => void;
 }
 
@@ -197,13 +198,17 @@ const stringsIn = (
   return out;
 };
 
-const checkClassStrings = (context: Context, root: Node) => {
+const checkClassStrings = (
+  context: Context,
+  root: Node,
+  problem = (cls: string) => spacingProblem(cls) ?? sizingProblem(cls)
+) => {
   for (const { node, text } of stringsIn(root, [])) {
     for (const cls of text.split(WHITESPACE)) {
       if (!cls) {
         continue;
       }
-      const message = spacingProblem(cls) ?? sizingProblem(cls);
+      const message = problem(cls);
       if (message) {
         context.report({ message, node });
       }
@@ -211,33 +216,78 @@ const checkClassStrings = (context: Context, root: Node) => {
   }
 };
 
-const noOffScaleSpacing = {
-  create(context: Context) {
-    return {
-      CallExpression(node: Node) {
-        const callee = node.callee as Node;
-        if (
-          callee.type === "Identifier" &&
-          CLASS_FUNCTIONS.has(callee.name as string)
-        ) {
-          for (const arg of node.arguments as Node[]) {
-            checkClassStrings(context, arg);
-          }
-        }
-      },
-      JSXAttribute(node: Node) {
-        const name = node.name as Node;
-        if (
-          name.type === "JSXIdentifier" &&
-          CLASS_ATTRIBUTES.has(name.name as string)
-        ) {
-          checkClassStrings(context, node.value as Node);
-        }
-      },
-    };
+const classVisitors = (
+  context: Context,
+  problem?: (cls: string) => string | null
+) => ({
+  CallExpression(node: Node) {
+    const callee = node.callee as Node;
+    if (
+      callee.type === "Identifier" &&
+      CLASS_FUNCTIONS.has(callee.name as string)
+    ) {
+      for (const arg of node.arguments as Node[]) {
+        checkClassStrings(context, arg, problem);
+      }
+    }
   },
+  JSXAttribute(node: Node) {
+    const name = node.name as Node;
+    if (
+      name.type === "JSXIdentifier" &&
+      CLASS_ATTRIBUTES.has(name.name as string)
+    ) {
+      checkClassStrings(context, node.value as Node, problem);
+    }
+  },
+});
+
+const noOffScaleSpacing = {
+  create: classVisitors,
   meta: {
     docs: { description: "Spacing must use the named Paper scale." },
+    type: "problem",
+  },
+};
+
+const inUi = (context: Context) =>
+  context.filename.replaceAll("\\", "/").includes("/components/ui/");
+const SCROLL_UTILITY = /^overflow(?:-[xy])?-(?:auto|scroll)$/u;
+
+const noRawScroll = {
+  create(context: Context) {
+    return inUi(context)
+      ? {}
+      : classVisitors(context, (cls) =>
+          SCROLL_UTILITY.test(baseUtility(cls))
+            ? `"${cls}" creates a raw scroll container. Use ScrollArea from components/ui.`
+            : null
+        );
+  },
+  meta: {
+    docs: { description: "Only UI primitives may create scroll containers." },
+    type: "problem",
+  },
+};
+
+const noFeatureTabindex = {
+  create(context: Context) {
+    return inUi(context)
+      ? {}
+      : {
+          JSXAttribute(node: Node) {
+            const name = node.name as Node;
+            if (name.type === "JSXIdentifier" && name.name === "tabIndex") {
+              context.report({
+                message: "Only components/ui primitives may set tabIndex.",
+                node,
+              });
+            }
+          },
+        };
+  },
+  meta: {
+    docs: { description: "Only UI primitives own focus policy." },
     type: "problem",
   },
 };
@@ -277,7 +327,9 @@ const noUnauthorizedVariables = {
 export default {
   meta: { name: "missions-design" },
   rules: {
+    "no-feature-tabindex": noFeatureTabindex,
     "no-off-scale-spacing": noOffScaleSpacing,
+    "no-raw-scroll": noRawScroll,
     "no-unauthorized-variables": noUnauthorizedVariables,
   },
 };

@@ -13,6 +13,8 @@ const RULE_CODE = /^(?<plugin>[\w-]+)\((?<rule>[\w-]+)\)$/u;
 
 /** Every enforced design rule must have a fixture that trips it. */
 const REQUIRED_RULES = [
+  "missions-design/no-feature-tabindex",
+  "missions-design/no-raw-scroll",
   "shadcn/no-arbitrary-values",
   "shadcn/no-inline-styles",
   "shadcn/no-raw-colors",

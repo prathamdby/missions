@@ -25,7 +25,7 @@ import { markFirstOutput } from "@/lib/perf-marks";
 /** Paper user bubble: right-aligned, 480px max, overlay surface. */
 export const UserMessage = ({ text }: { text: string }) => (
   <div className="max-w-120 self-end rounded-md bg-surface-overlay px-card py-control">
-    <p className="max-w-prose text-sm leading-chat font-book tracking-tight text-pretty break-words whitespace-pre-wrap text-text">
+    <p className="max-w-prose text-sm leading-chat font-book tracking-tight text-pretty break-words whitespace-pre-wrap text-text select-text">
       {text}
     </p>
   </div>

@@ -26,6 +26,7 @@ import {
   PopoverSeparator,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/api-error";
 import { useBranches } from "@/lib/api/queries";
@@ -208,35 +209,37 @@ export const BranchPicker = ({
             value={search}
           />
         </PopoverSearch>
-        <div className="flex min-h-0 flex-col gap-hairline overflow-y-auto">
-          {branches.isPending ? (
-            <div className="flex flex-col gap-md p-md">
-              <Skeleton className="w-1/2" />
-              <Skeleton className="w-2/3" />
-            </div>
-          ) : null}
-          {branches.isError ? (
-            <p className="p-md text-xs leading-sm text-danger">
-              {errorMessage(branches.error)}
-            </p>
-          ) : null}
-          <BranchGroup
-            branches={filtered.filter((branch) => !branch.remote)}
-            busy={busy}
-            defaultBranch={defaultBranch}
-            label="Local"
-            onPick={pick}
-            value={newBranch ? null : value}
-          />
-          <BranchGroup
-            branches={filtered.filter((branch) => branch.remote)}
-            busy={busy}
-            defaultBranch={defaultBranch}
-            label="Remote"
-            onPick={pick}
-            value={newBranch ? null : value}
-          />
-        </div>
+        <ScrollArea asChild axis="y">
+          <div className="flex min-h-0 flex-col gap-hairline">
+            {branches.isPending ? (
+              <div className="flex flex-col gap-md p-md">
+                <Skeleton className="w-1/2" />
+                <Skeleton className="w-2/3" />
+              </div>
+            ) : null}
+            {branches.isError ? (
+              <p className="p-md text-xs leading-sm text-danger">
+                {errorMessage(branches.error)}
+              </p>
+            ) : null}
+            <BranchGroup
+              branches={filtered.filter((branch) => !branch.remote)}
+              busy={busy}
+              defaultBranch={defaultBranch}
+              label="Local"
+              onPick={pick}
+              value={newBranch ? null : value}
+            />
+            <BranchGroup
+              branches={filtered.filter((branch) => branch.remote)}
+              busy={busy}
+              defaultBranch={defaultBranch}
+              label="Remote"
+              onPick={pick}
+              value={newBranch ? null : value}
+            />
+          </div>
+        </ScrollArea>
         <PopoverSeparator />
         <ListRow onClick={create}>
           <PlusIcon />

@@ -21,6 +21,7 @@ import { TimingLog, timingSinksFromEnv } from "./lib/timing";
 import type { TimingSink } from "./lib/timing";
 import { MissionService } from "./missions/mission-service";
 import type { RuntimeFactory } from "./missions/mission-service";
+import type { MissionTitleGenerator } from "./missions/title-generator";
 import { ProcessRecordRepository } from "./processes/process-record-repository";
 import { ProcessSupervisor } from "./processes/process-supervisor";
 import { ProjectService } from "./projects/project-service";
@@ -62,6 +63,8 @@ export interface DaemonOptions {
   ghPath?: string;
   /** Test seam: model discovery without spawning Droid. */
   loadModels?: ModelLoader;
+  /** Opt-in: only the real entry point creates background Auto title runs. */
+  titleGenerator?: MissionTitleGenerator | null;
   /** Events kept per stream before the oldest are pruned. */
   retainEventsPerStream?: number;
 }
@@ -131,6 +134,10 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
     const sharedFiles = new SharedFiles(path.join(config.home, "shared"));
     const models = new ModelCatalog(config.droidPath, options.loadModels);
     owners.push(() => models.close());
+    const titleGenerator = options.titleGenerator ?? null;
+    if (titleGenerator) {
+      owners.push(() => titleGenerator.close());
+    }
     const missions = new MissionService({
       artifacts,
       createRuntime: options.createRuntime,
@@ -148,6 +155,7 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
         ...timingSinksFromEnv(options.env),
         ...(options.timingSinks ?? []),
       ]),
+      titleGenerator,
       workspaces,
     });
     owners.push(() => missions.shutdown());

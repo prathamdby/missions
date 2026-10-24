@@ -70,7 +70,10 @@ export const createMission = async (
   projectId: string,
   goal = "Write a NOTES.md file summarizing the project",
   // Most flows exercise plan approval; Work mode is covered explicitly.
-  { plan = true }: { plan?: boolean } = {}
+  {
+    plan = true,
+    workspace = "current_checkout",
+  }: { plan?: boolean; workspace?: "current_checkout" | "new_worktree" } = {}
 ) => {
   const snapshot = await call(request, "POST", "/missions", {
     goal: plan ? `${goal} Plan it first.` : goal,
@@ -78,7 +81,10 @@ export const createMission = async (
     orchestrator: MODEL,
     projectId,
     worker: MODEL,
-    workspace: { acknowledgeDirty: true, mode: "current_checkout" },
+    workspace:
+      workspace === "new_worktree"
+        ? { baseBranch: "main", mode: workspace }
+        : { acknowledgeDirty: true, mode: workspace },
   });
   return (snapshot as { mission: { id: string } }).mission;
 };

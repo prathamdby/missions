@@ -17,6 +17,7 @@ import { useMission } from "@/components/mission/mission-context";
 import { useDiffHighlight } from "@/components/mission/use-diff-highlight";
 import type { RowTokens } from "@/components/mission/use-diff-highlight";
 import { DiffRow } from "@/components/ui/diff-row";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -80,24 +81,25 @@ const Hunks = ({
     languageForPath(path) ?? (oldPath ? languageForPath(oldPath) : null);
   const tokens = useDiffHighlight(hunks, language);
   return (
-    // Chrome makes an overflowing scroller a tab stop, so it needs a name.
-    <section
-      aria-label={`Diff of ${path}`}
-      className="flex flex-col overflow-x-auto overscroll-x-contain pb-xs"
-    >
-      {hunks.map((hunk, index) => (
-        <div className="flex flex-col" key={`${hunk.header}-${String(index)}`}>
-          {gaps[index] ? <Gap lines={gaps[index]} /> : null}
-          {hunk.lines.map((line, lineIndex) => (
-            <Line
-              key={`${String(line.oldNumber)}-${String(line.newNumber)}-${String(lineIndex)}`}
-              line={line}
-              tokens={tokens?.[index]?.[lineIndex]}
-            />
-          ))}
-        </div>
-      ))}
-    </section>
+    <ScrollArea asChild axis="x" overscroll="contain">
+      <section aria-label={`Diff of ${path}`} className="flex flex-col pb-xs">
+        {hunks.map((hunk, index) => (
+          <div
+            className="flex flex-col"
+            key={`${hunk.header}-${String(index)}`}
+          >
+            {gaps[index] ? <Gap lines={gaps[index]} /> : null}
+            {hunk.lines.map((line, lineIndex) => (
+              <Line
+                key={`${String(line.oldNumber)}-${String(line.newNumber)}-${String(lineIndex)}`}
+                line={line}
+                tokens={tokens?.[index]?.[lineIndex]}
+              />
+            ))}
+          </div>
+        ))}
+      </section>
+    </ScrollArea>
   );
 };
 
@@ -197,7 +199,7 @@ const ChangeResults = ({
   }
   if (changes.isError) {
     return (
-      <p className="text-xs leading-sm text-danger" role="alert">
+      <p className="text-xs leading-sm text-danger select-text" role="alert">
         Could not load changes. {errorMessage(changes.error)}
       </p>
     );
