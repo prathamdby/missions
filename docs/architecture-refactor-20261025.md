@@ -15,7 +15,7 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - [x] P4: Reject lifecycle extraction under the approved benefit rule.
 - [x] P5: Subtract unreachable permission completion machinery.
 - [x] P6: Hide mount-scoped command/sink assembly.
-- [ ] P7: Extract pure conversation projection at existing memo boundaries.
+- [x] P7: Extract pure conversation projection at existing memo boundaries.
 - [ ] P8: Final equivalence, structural restrictions, rollback and tool report.
 
 ## Baseline provenance
@@ -104,6 +104,18 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - Deletion: command/sink assembly and its registry import from MissionView. applyLocal, refresh, mount-owned Files/drafts and existing rendering remain.
 - Revert: the hook/import commit; no persisted representation or external effect.
 - Delivery procedure: scoped commits use the prath-mode commit leaf, hooks on, conventional messages, denied identity/harness trailers and verified diffs. Final delivery uses ship (implementation, deslop, commit, make-pr), with one normally pushed PR to main and immediate T3 linking.
+
+### P7, pure conversation projection
+
+- Base: `2bdaff2`. Action: move participant transcript selection, inline timeline assembly/visibility and turn assembly into three pure stages in conversation.ts.
+- Reason: ChatColumn no longer owns the participant, inline-card, Worker-output or sent-delivery projection policies. Its existing scalar goal fallback, current-agent/running and work-timing calculations remain at their exact original positions, rather than creating trivial forwarding helpers.
+- Proof: all three memo boundaries and dependency lists remain exact. Passing the whole live object initially triggered the existing dependency lint; explicit shallow input records preserve the original dependencies. Those records are made only when the existing memos evaluate. No additional full scan, retained cache, effect, timer, query or I/O was added.
+- Proof: the P0 test adapter now calls the actual production stages. The entire original tuple snapshot remains unchanged, including every nested entry/part, IDs, ties, role/tool failures, previews, history gaps and both message parties. The core buildTimeline/turnParts/transcriptRows implementations are untouched.
+- Proof: 175 focused tests pass; gate passes 105 files / 1,099 tests; complete desktop/mobile E2E passes 62/62, including original exact pixels, geometry, remount resets, keyboard/focus, collapse and scrolling checks. Logs: `p7-projection.log`, `p7-focused.log`, `p7-gate.log`, `p7-e2e.log`.
+- Workload: seven focused 2,000-message samples ranged from 1.27ms to 7.30ms, within the observed old-build variation (1.08ms–9.13ms). This is not a claimed speedup or a replacement budget. The existing replay benchmark also passes.
+- Deletion: caller/test-only copies of those three projection stages. Renderer JSX/keys, clocks, refs/state, ResizeObserver, 96px pin threshold, WorkingLine's distinct predicate and Digest animation-frame logic are unchanged.
+- Restrictions: forbidden/allowed fixtures cover direct ChatColumn→timeline coupling and prohibit projection imports of React, rendering, daemon/SDK, command ownership or I/O. Type-only live-state/protocol inputs are allowed.
+- Revert: pure module/import commit; it changes no persisted representation.
 
 ### Deferred observations and blockers
 
