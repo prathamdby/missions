@@ -25,7 +25,6 @@ import {
 import { workspaceChanges } from "../files/workspace-files";
 import { AppError, conflict, stale } from "../lib/app-error";
 import { git, redactUrl, run } from "../lib/exec";
-import type { MissionService } from "../missions/mission-service";
 import type { SettingsService } from "../settings/settings-service";
 import {
   cleanupBinding,
@@ -33,6 +32,7 @@ import {
   verifyBinding,
 } from "../workspaces/workspace-service";
 import { observeCleanup } from "./cleanup-recovery";
+import type { PublishMissionAccess } from "./mission-access";
 import * as repo from "./repo";
 import { createReviewedCandidate } from "./reviewed-candidate";
 import {
@@ -44,7 +44,7 @@ import {
 import type { ReviewedCommitIntent } from "./reviewed-commit";
 
 export interface GitServiceOptions {
-  missions: MissionService;
+  missions: PublishMissionAccess;
   journal: OperationJournal;
   settings: SettingsService;
   ghPath?: string;
@@ -167,7 +167,7 @@ const PR_FIELDS =
  * against git or GitHub before anything is attempted again.
  */
 export class GitService {
-  readonly #missions: MissionService;
+  readonly #missions: PublishMissionAccess;
   readonly #journal: OperationJournal;
   readonly #settings: SettingsService;
   readonly #gh: string;

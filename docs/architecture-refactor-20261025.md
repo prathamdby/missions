@@ -10,7 +10,7 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 
 - [x] P0: Characterize the old build and preserve equivalence oracles.
 - [x] P1: Move unchanged runtime declarations.
-- [ ] P2: Narrow publishing access.
+- [x] P2: Narrow publishing access.
 - [ ] P3: Delivery extraction or evidence-backed rejection.
 - [ ] P4: Lifecycle extraction or evidence-backed rejection.
 - [ ] P5: Subtract unreachable permission completion machinery.
@@ -51,6 +51,15 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - Proof: all 12 old executable-module hashes match exactly. Focused runtime, process, role-tool, scripted-runtime and durable parity checks pass, 89 tests. `pnpm gate`: 102 files / 1,091 tests. Affected browser cases: 8/8. Logs: `p1-focused-fixed.log`, `p1-gate.log`, `p1-e2e.log`.
 - Deletion: old declaration definitions and reverse type imports; no compatibility re-export. No construction, native operation, prompt or scheduling code changed.
 - Revert: this type/import-only commit; no external effect to undo.
+
+### P2, publishing access
+
+- Base: `92250d7`. Action: GitService accepts `PublishMissionAccess`, containing exactly get, patch, notify, withWorkspaceMutation and withWorkspaceRecovery.
+- Reason: publishing no longer imports the broad MissionService type or has access to unrelated orchestration capabilities.
+- Proof: compile-time equality with the five existing signatures, allowed/denied import fixtures and an old-structure failure. The exact executable hashes remain unchanged, including GitService and daemon composition.
+- Proof: 102 focused Git/hook/signing/index/ref/recovery/workspace/deletion and parity tests pass; gate passes 103 files / 1,093 tests; 15 affected browser cases pass. Logs: `p2-focused.log`, `p2-gate.log`, `p2-e2e.log`.
+- Deletion: GitService's broad type dependency. The original MissionService instance, synchronous patch callbacks, constructor order, observer setter, WorkspaceOperationGate and WriteLeaseRegistry allocation are untouched.
+- Revert: interface/import-only commit; no external action to undo.
 
 ### Deferred observations and blockers
 
