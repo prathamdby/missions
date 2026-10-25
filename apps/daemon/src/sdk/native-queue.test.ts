@@ -102,10 +102,12 @@ describe(NativeQueueTracker, () => {
       expect(tracker.get("late")?.state).toBe(
         state === "submitting" ? "unknown" : state
       );
+      const previousError = tracker.get("late")?.error;
       tracker.admitted("late");
-      expect(tracker.get("late")?.state).toBe(
-        state === "submitting" ? "queued" : state
-      );
+      expect(tracker.get("late")).toMatchObject({
+        error: state === "submitting" ? null : previousError,
+        state: state === "submitting" ? "queued" : state,
+      });
     }
   );
 

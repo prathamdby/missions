@@ -123,6 +123,30 @@ describe(classifyToolUse, () => {
 });
 
 describe(PermissionBroker, () => {
+  it.each(["propose_mission", "start_mission_run", "recommend_mission"])(
+    "denies the built-in %s confirmation before YOLO approval",
+    async (type) => {
+      const { broker, leases, requests } = setup();
+      const use: PermissionToolUse = {
+        confirmationType: "custom",
+        details: { type },
+        input: {},
+        toolName: type,
+        toolUseId: "built-in-mission",
+      };
+      const classified = classifyToolUse(use, "/w", "missions");
+      expect(classified.category).toBe("blocked");
+      expect(autoApproves(classified)).toBeFalsy();
+      await expect(broker.ask("a", [use])).resolves.toMatchObject({
+        approved: false,
+        attribution: "policy",
+        reason: expect.stringContaining("disabled"),
+      });
+      expect(leases).toStrictEqual([]);
+      expect(requests).toStrictEqual([]);
+    }
+  );
+
   it("keeps exact command identity for quoted whitespace and excludes legacy keys", () => {
     const first = classifyToolUse(
       exec('printf "%s" "two  spaces"'),
@@ -387,9 +411,14 @@ describe(PermissionBroker, () => {
         }
         const expected = {
           grant: { approved: true },
-          pause: { approved: false, reason: expect.stringContaining("paused") },
+          pause: {
+            approved: false,
+            attribution: "lifecycle",
+            reason: expect.stringContaining("paused"),
+          },
           timeout: {
             approved: false,
+            attribution: "runtime",
             reason: expect.stringContaining("timed out"),
           },
         };
