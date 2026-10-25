@@ -4,10 +4,15 @@ import { ProcessTransport } from "@factory/droid-sdk/node";
 import type { DaemonEvent } from "@missions/protocol/events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { createDaemon } from "../daemon";
 import type { Daemon } from "../daemon";
+import type { TimingRecord } from "../lib/timing";
+import { FakeRuntime } from "../test/fake-runtime";
+import { gitRepo, testConfig } from "../test/fixtures";
 import {
   bootDaemon,
   control,
+  MODEL,
   startMission,
   waitFor,
 } from "../test/mission-harness";
@@ -33,6 +38,88 @@ describe("mission Auto titles", () => {
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
     vi.restoreAllMocks();
   });
+
+  it.each([
+    { calls: 1, outcome: "ready", title: "Add project greetings" },
+    { calls: 0, outcome: "failure", title: "Add a greeting file" },
+    { calls: 0, outcome: "rename", title: "User title before ready" },
+  ])(
+    "waits for orchestrator startup before title generation ($outcome)",
+    async ({ outcome, calls, title }) => {
+      const release = Promise.withResolvers<undefined>();
+      const entered = Promise.withResolvers<FakeRuntime>();
+      const records: TimingRecord[] = [];
+      const generate = vi.fn<MissionTitleGenerator["generate"]>(() => {
+        expect(
+          records.some((record) => record.stage === "startup.ready")
+        ).toBeTruthy();
+        return Promise.resolve("Add project greetings");
+      });
+      const daemon = await createDaemon({
+        config: await testConfig(),
+        createRuntime: (options) => {
+          const runtime = new FakeRuntime(options);
+          const start = runtime.start.bind(runtime);
+          vi.spyOn(runtime, "start").mockImplementation(async () => {
+            entered.resolve(runtime);
+            await release.promise;
+            return await start();
+          });
+          return runtime;
+        },
+        loadModels: () => Promise.resolve([]),
+        timingSinks: [(record) => records.push(record)],
+        titleGenerator: { close: () => Promise.resolve(), generate },
+        version: "test",
+      });
+      opened.push(daemon);
+      const added = await daemon.projects.addLocal({
+        operationId: "title-project",
+        path: await gitRepo(),
+      });
+      if (added.status !== "added") {
+        throw new Error("project not added");
+      }
+      const request = {
+        goal: "Add a greeting file",
+        operationId: "title-mission",
+        orchestrator: MODEL,
+        projectId: added.project.id,
+        worker: MODEL,
+        workspace: { mode: "current_checkout" as const },
+      };
+      const created = await daemon.missions.create(request);
+      const runtime = await entered.promise;
+      expect(generate).not.toHaveBeenCalled();
+      if (outcome === "rename") {
+        await daemon.missions.update(created.mission.id, {
+          expectedRevision: daemon.missions.get(created.mission.id).revision,
+          title: "User title before ready",
+        });
+      }
+      if (outcome === "failure") {
+        release.reject(new Error("startup failed"));
+      } else {
+        release.resolve(undefined);
+      }
+      const settled = await waitFor(
+        () =>
+          outcome === "failure"
+            ? runtime.closed
+            : records.some((record) => record.stage === "startup.ready"),
+        Boolean
+      );
+      expect(settled).toBeTruthy();
+      await tick();
+      if (outcome === "ready") {
+        await daemon.missions.create(request);
+        await tick();
+      }
+      expect(generate).toHaveBeenCalledTimes(calls);
+      expect(daemon.missions.get(created.mission.id).title).toBe(title);
+      expect(runtime.closed).toBe(outcome === "failure");
+    }
+  );
 
   it("returns the placeholder first, then emits the generated title", async () => {
     const { booted, generator, title } = await setup();

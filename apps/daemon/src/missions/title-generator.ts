@@ -8,7 +8,7 @@ import type { DroidResult, RunOptions } from "@factory/droid-sdk/node";
 
 import { ProcessSupervisor } from "../processes/process-supervisor";
 import { withDeadline } from "../sdk/startup";
-import { ModelCatalog } from "../settings/models";
+import type { ModelCatalog } from "../settings/models";
 
 export const TITLE_TIMEOUT_MS = 20_000;
 const MAX_RUNS = 2;
@@ -66,7 +66,7 @@ export type TitleRunner = (
 
 interface TitleGeneratorOptions {
   droidPath: string;
-  models?: Pick<ModelCatalog, "list">;
+  models: Pick<ModelCatalog, "list">;
   runner?: TitleRunner;
 }
 
@@ -90,7 +90,6 @@ const SYSTEM_PROMPT =
 export class TitleGenerator implements MissionTitleGenerator {
   readonly #options: TitleGeneratorOptions;
   readonly #models: Pick<ModelCatalog, "list">;
-  readonly #catalog: ModelCatalog | null;
   readonly #cancel = new AbortController();
   readonly #tasks = new Set<Promise<string | null>>();
   readonly #waiting: ((admitted: boolean) => void)[] = [];
@@ -100,13 +99,7 @@ export class TitleGenerator implements MissionTitleGenerator {
 
   constructor(options: TitleGeneratorOptions) {
     this.#options = options;
-    if (options.models) {
-      this.#models = options.models;
-      this.#catalog = null;
-    } else {
-      this.#catalog = new ModelCatalog(options.droidPath);
-      this.#models = this.#catalog;
-    }
+    this.#models = options.models;
   }
 
   generate(input: TitleInput): Promise<string | null> {
@@ -244,7 +237,7 @@ export class TitleGenerator implements MissionTitleGenerator {
       for (const wake of this.#waiting.splice(0)) {
         wake(false);
       }
-      await Promise.all([this.#catalog?.close(), ...this.#tasks]);
+      await Promise.all(this.#tasks);
       if (this.#cleanupFailures.size > 0) {
         throw new AggregateError(
           [...this.#cleanupFailures],
