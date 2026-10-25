@@ -172,6 +172,85 @@ const fixture = () => {
 };
 
 describe("conversation projection, eafc235 corpus", () => {
+  it("keeps each role's output and shared messages without leaking the other role's work", () => {
+    const live = fixture();
+    live.transcript["t-10"] = { ...transcriptItem(10), kind: "thinking" };
+    live.transcript["t-11"] = {
+      ...transcriptItem(11),
+      agentId: "worker-1",
+      kind: "tool_call",
+      toolName: "Execute",
+      toolUseId: "worker-command",
+    };
+    live.transcript["t-12"] = {
+      ...transcriptItem(12),
+      agentId: "worker-1",
+      kind: "tool_result",
+      toolUseId: "worker-command",
+    };
+    const main = project(live, "a-1").parts.flatMap((part) => part.entries);
+    const worker = project(live, "worker-1").parts.flatMap(
+      (part) => part.entries
+    );
+    for (const kind of ["assistant", "preview", "thinking", "tools"]) {
+      expect(main).toStrictEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ agentId: "a-1", kind }),
+        ])
+      );
+      expect(worker).toStrictEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ agentId: "worker-1", kind }),
+        ])
+      );
+      expect(
+        main.some(
+          (entry) => entry.agentId === "worker-1" && entry.kind === kind
+        )
+      ).toBeFalsy();
+      expect(
+        worker.some((entry) => entry.agentId === "a-1" && entry.kind === kind)
+      ).toBeFalsy();
+    }
+    const message = expect.objectContaining({
+      id: "t-6",
+      kind: "agent_message",
+    });
+    expect([main, worker]).toStrictEqual([
+      expect.arrayContaining([message]),
+      expect.arrayContaining([message]),
+    ]);
+  });
+
+  it("keeps missing-agent global cards and empty conversations well-defined", () => {
+    const missing = project(fixture(), "missing");
+    const visible = missing.parts.flatMap((part) => part.entries);
+    expect(missing.transcript).toStrictEqual([]);
+    expect(missing.running).toBeFalsy();
+    expect(visible).toStrictEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "assignment" }),
+        expect.objectContaining({ kind: "plan" }),
+      ])
+    );
+    expect(
+      visible.every(
+        (entry) =>
+          entry.agentId === null ||
+          entry.kind === "permission" ||
+          entry.kind === "question"
+      )
+    ).toBeTruthy();
+    expect(project(fromSnapshot(snapshot({ transcript: [] })))).toMatchObject({
+      currentAgentId: "",
+      entries: [],
+      parts: [],
+      running: false,
+      transcript: [],
+      worker: false,
+    });
+  });
+
   it("freezes complete structures, ties, participants, history and running state", () => {
     const mixed = fixture();
     const cases = {
