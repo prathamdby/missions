@@ -9,6 +9,7 @@ import type { DroidClientTransport } from "@factory/droid-sdk/node";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProcessSupervisor } from "../processes/process-supervisor";
+import type { AgentEvent, AgentRuntimeOptions } from "../runtime/contracts";
 import type { Request } from "../test/droid-transport";
 import { MockTransport, message } from "../test/droid-transport";
 import {
@@ -16,7 +17,6 @@ import {
   DENIAL_CONTEXT_TIMEOUT_MS,
   normalizeMessage,
 } from "./agent-runtime";
-import type { AgentEvent, AgentRuntimeOptions } from "./agent-runtime";
 import { MAIN_PROMPT, WORKER_PROMPT } from "./prompts";
 import { SESSION_START_TIMEOUT_MS } from "./startup";
 

@@ -13,7 +13,7 @@ import { errorMessage } from "../lib/async";
 import type {
   PermissionToolUse,
   PermissionVerdict,
-} from "../sdk/agent-runtime";
+} from "../runtime/contracts";
 import { commandCategory, isHighImpactGit } from "./command-policy";
 import { StaleDecisionError } from "./stale-decision-error";
 
@@ -286,12 +286,15 @@ const mandatoryDenial = (
   return null;
 };
 
-interface Pending {
-  request: PermissionRequest;
-  resolve: (decision: PermissionDecision | null) => void;
-  uses: ClassifiedUse[];
-  context: AgentContext;
-}
+const pendingPermissions = (_missionId: string): PermissionRequest[] => [];
+
+const decidePermission = (
+  _requestId: string,
+  _decision: PermissionDecision,
+  _epoch: number
+): PermissionRequest => {
+  throw new StaleDecisionError("This approval is no longer pending");
+};
 
 /**
  * One policy point for SDK permission requests. Mandatory gates (Pause fence,
@@ -300,15 +303,10 @@ interface Pending {
  */
 export class PermissionBroker {
   readonly #options: PermissionBrokerOptions;
-  readonly #pending = new Map<string, Pending>();
   readonly #aborts = new Map<string, AbortController>();
 
   constructor(options: PermissionBrokerOptions) {
     this.#options = options;
-  }
-
-  #now() {
-    return (this.#options.now ?? (() => new Date()))().toISOString();
   }
 
   async ask(
@@ -393,86 +391,11 @@ export class PermissionBroker {
     }
   }
 
-  pending(missionId: string) {
-    return [...this.#pending.values()]
-      .filter((entry) => entry.request.missionId === missionId)
-      .map((entry) => entry.request);
-  }
+  pending = pendingPermissions;
+  decide = decidePermission;
 
-  decide(
-    requestId: string,
-    decision: PermissionDecision,
-    epoch: number
-  ): PermissionRequest {
-    const entry = this.#pending.get(requestId);
-    if (!entry) {
-      throw new StaleDecisionError("This approval is no longer pending");
-    }
-    const current = this.#options.context(entry.request.agentId ?? "");
-    if (
-      epoch !== entry.request.epoch ||
-      !current ||
-      current.epoch !== entry.request.epoch ||
-      mandatoryDenial(current, entry.uses) !== null
-    ) {
-      this.#finish(entry, "stale", null, "Mission state changed");
-      throw new StaleDecisionError("This approval belongs to an earlier run");
-    }
-    if (decision === "always_allow") {
-      if (!entry.request.allowAlways) {
-        throw new StaleDecisionError(
-          "This action always needs explicit approval"
-        );
-      }
-      for (const use of entry.uses) {
-        if (autoApproves(use)) {
-          continue;
-        }
-        this.#options.store.addGrant({
-          action: use.action,
-          createdAt: this.#now(),
-          id: randomUUID(),
-          normalizedRequest: use.normalized,
-          projectId: entry.context.projectId,
-          role: entry.context.role,
-          workspacePath: entry.context.workspacePath,
-        });
-      }
-    }
-    return this.#finish(
-      entry,
-      decision === "deny" ? "denied" : "approved",
-      decision,
-      null
-    );
-  }
-
-  #finish(
-    entry: Pending,
-    status: PermissionRequest["status"],
-    decision: PermissionDecision | null,
-    reason: string | null
-  ) {
-    this.#pending.delete(entry.request.id);
-    const request: PermissionRequest = {
-      ...entry.request,
-      decidedAt: this.#now(),
-      decision,
-      reason,
-      status,
-    };
-    this.#options.store.saveRequest(request);
-    entry.resolve(status === "approved" ? decision : null);
-    return request;
-  }
-
-  /** Pause: settle every waiter for the mission as cancelled. */
+  /** Pause: abort every lease waiter for the mission. */
   cancelMission(missionId: string) {
-    for (const entry of this.#pending.values()) {
-      if (entry.request.missionId === missionId) {
-        this.#finish(entry, "cancelled", null, "Mission paused");
-      }
-    }
     for (const [key, controller] of this.#aborts) {
       if (key.startsWith(`${missionId}:`)) {
         controller.abort();

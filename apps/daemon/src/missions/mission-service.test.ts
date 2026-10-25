@@ -15,7 +15,7 @@ import { createDaemon } from "../daemon";
 import type { Daemon } from "../daemon";
 import { pollUntil } from "../lib/async";
 import { ProcessRecordRepository } from "../processes/process-record-repository";
-import type { AgentEvent, PermissionToolUse } from "../sdk/agent-runtime";
+import type { AgentEvent, PermissionToolUse } from "../runtime/contracts";
 import { SUBMIT_ACK_TIMEOUT_MS } from "../sdk/submit-ack-timeout";
 import type { ModelLoader } from "../settings/models";
 import { FakeRuntime } from "../test/fake-runtime";

@@ -1,0 +1,19 @@
+{
+  "composer": {
+    "x": 286,
+    "y": 797,
+    "width": 586,
+    "height": 24
+  },
+  "conversation": {
+    "x": 240,
+    "y": 112,
+    "width": 672,
+    "height": 673
+  },
+  "scroll": {
+    "height": 673,
+    "scrollHeight": 673,
+    "top": 0
+  }
+}
