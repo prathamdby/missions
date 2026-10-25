@@ -63,22 +63,23 @@ import type {
   StopResult,
 } from "../processes/process-supervisor";
 import type { ProjectService } from "../projects/project-service";
-import { AgentRuntime } from "../sdk/agent-runtime";
 import type {
   AgentEvent,
-  AgentRuntimeOptions,
   AskUserAnswer,
   AskUserAsk,
   EditOutcome,
   PermissionToolUse,
   PermissionVerdict,
   RemoveOutcome,
+  RuntimeFactory,
+  RuntimeHandle,
   RuntimeStartResult,
   SubmitOptions,
-} from "../sdk/agent-runtime";
+} from "../runtime/contracts";
+import { AgentRuntime } from "../sdk/agent-runtime";
 import { attachmentPayload } from "../sdk/attachments";
 import type { ComposerRuntime } from "../sdk/composer-catalog";
-import type { NativeQueueEntry, NativeQueueTracker } from "../sdk/native-queue";
+import type { NativeQueueEntry } from "../sdk/native-queue";
 import { nativeTodos } from "../sdk/native-todos";
 import { PLAN_GUIDANCE, PLAN_GUIDANCE_VERSION } from "../sdk/plan-guidance";
 import { PROMPT_VERSION, promptFor } from "../sdk/prompts";
@@ -174,38 +175,6 @@ import {
 import type { WorkerEpisode } from "./worker-turns";
 
 const NOTICE_WITHDRAW_TIMEOUT_MS = 5000;
-
-/** The subset of `AgentRuntime` the service drives; tests substitute a scripted runtime. */
-export interface RuntimeHandle extends ComposerRuntime {
-  readonly queue: NativeQueueTracker;
-  readonly sessionId: string | null;
-  readonly model: AgentModelSettings | null;
-  updateModel: (choice: AgentModelSettings) => Promise<AgentModelSettings>;
-  /** Raw model metadata reported at session start; seeds the shared catalog. */
-  readonly availableModels?: readonly unknown[];
-  start: (resumeSessionId?: string) => Promise<RuntimeStartResult>;
-  submit: (
-    id: string,
-    text: string,
-    mode: DeliveryMode,
-    options?: SubmitOptions
-  ) => Promise<void>;
-  /** Model-only context that does not start an agent loop. */
-  addContext: (id: string, text: string) => Promise<void>;
-  setInteractionMode: (mode: "auto" | "spec") => Promise<void>;
-  changeMode: (id: string, mode: DeliveryMode) => Promise<void>;
-  remove: (id: string) => Promise<RemoveOutcome>;
-  edit: (
-    id: string,
-    replacementId: string,
-    text: string,
-    options?: SubmitOptions
-  ) => Promise<EditOutcome>;
-  interrupt: () => Promise<void>;
-  close: () => Promise<StopResult>;
-}
-
-export type RuntimeFactory = (options: AgentRuntimeOptions) => RuntimeHandle;
 
 export interface MissionServiceOptions {
   store: Store;

@@ -1,6 +1,6 @@
 import type { TranscriptItem } from "@missions/protocol/missions";
 
-import type { RuntimeMessage } from "../sdk/agent-runtime";
+import type { RuntimeMessage } from "../runtime/contracts";
 
 export type NewTranscriptItem = Omit<TranscriptItem, "seq">;
 

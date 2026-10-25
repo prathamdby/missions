@@ -6,8 +6,8 @@ import { pollUntil } from "../lib/async";
 import type { TimingRecord } from "../lib/timing";
 import { TitleGenerator } from "../missions/title-generator";
 import { ProcessSupervisor } from "../processes/process-supervisor";
+import type { AgentEvent } from "../runtime/contracts";
 import { AgentRuntime } from "../sdk/agent-runtime";
-import type { AgentEvent } from "../sdk/agent-runtime";
 import { gitRepo, testConfig } from "../test/fixtures";
 import { addHangingMcp } from "../test/hanging-mcp";
 

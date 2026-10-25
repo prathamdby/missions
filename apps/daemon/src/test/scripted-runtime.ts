@@ -6,14 +6,14 @@ import type { AgentModelSettings } from "@missions/protocol/missions";
 
 import { errorMessage, sleep } from "../lib/async";
 import { isSystemRequest } from "../missions/messages";
-import type { RuntimeHandle } from "../missions/mission-service";
 import type { StopResult } from "../processes/process-supervisor";
 import type {
+  RuntimeHandle,
   AgentEvent,
   AgentRuntimeOptions,
   RuntimeStartResult,
   SubmitOptions,
-} from "../sdk/agent-runtime";
+} from "../runtime/contracts";
 import type { ComposerSkill, SdkCommand } from "../sdk/composer-catalog";
 import { NativeQueueTracker } from "../sdk/native-queue";
 import {

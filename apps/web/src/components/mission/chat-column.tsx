@@ -22,13 +22,17 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { errorMessage } from "@/lib/api/api-error";
 import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration, isMissionActive } from "@/lib/format";
+import {
+  conversationEntries,
+  conversationParts,
+  conversationTranscript,
+} from "@/lib/mission/conversation";
 import { inlineIdleSubmissions } from "@/lib/mission/idle-send";
 import {
   deliveredRequestIds,
   goalRequestId,
   showGoalBubble,
 } from "@/lib/mission/queue";
-import { buildTimeline, turnParts } from "@/lib/mission/timeline";
 import { WAITING, waitingOf } from "@/lib/mission/waiting";
 import { useNow } from "@/lib/use-now";
 
@@ -153,42 +157,24 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
   const preserveFrom = useRef<number | null>(null);
   const observedHeight = useRef<number | null>(null);
 
-  // An agent message is one record shown in both participants' views.
   const transcript = useMemo(
-    () =>
-      Object.values(live.transcript).filter(
-        (item) =>
-          !agentId ||
-          item.agentId === agentId ||
-          (item.kind === "agent_message" &&
-            (item.sender?.agentId === agentId ||
-              item.recipient?.agentId === agentId))
-      ),
+    () => conversationTranscript(live.transcript, agentId),
     [agentId, live.transcript]
   );
   const entries = useMemo(
     () =>
-      buildTimeline({
-        assignments: worker ? [] : Object.values(live.assignments),
-        permissions: Object.values(live.permissions),
-        planAgentId: worker ? undefined : agentId,
-        planInFlight:
-          !worker &&
-          !!agentId &&
-          ["working", "starting"].includes(live.agents[agentId]?.status ?? ""),
-        plans: worker ? [] : Object.values(live.plans),
-        previews: Object.values(live.previews),
-        questions: Object.values(live.questions),
+      conversationEntries(
+        {
+          agents: live.agents,
+          assignments: live.assignments,
+          permissions: live.permissions,
+          plans: live.plans,
+          previews: live.previews,
+          questions: live.questions,
+        },
         transcript,
-      }).filter(
-        (entry) =>
-          !agentId ||
-          entry.agentId === agentId ||
-          entry.kind === "agent_message" ||
-          (!worker &&
-            (entry.agentId === null ||
-              entry.kind === "permission" ||
-              entry.kind === "question"))
+        agentId,
+        worker
       ),
     [
       live.assignments,
@@ -243,22 +229,17 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
     ["working", "starting"].includes(
       live.agents[currentAgentId]?.status ?? ""
     ) && isMissionActive(live.mission.status);
-  const parts = useMemo(() => {
-    const visible = worker
-      ? entries
-      : entries.filter(
-          (entry) =>
-            entry.agentId === null ||
-            live.agents[entry.agentId]?.role !== "worker" ||
-            !["assistant", "preview", "thinking", "tools"].includes(entry.kind)
-        );
-    const delivered = new Set(
-      Object.values(live.queue)
-        .filter((item) => item.state === "sent")
-        .map((item) => item.id)
-    );
-    return turnParts(visible, currentAgentId, running, delivered);
-  }, [entries, worker, live.agents, live.queue, currentAgentId, running]);
+  const parts = useMemo(
+    () =>
+      conversationParts(
+        { agents: live.agents, queue: live.queue },
+        entries,
+        worker,
+        currentAgentId,
+        running
+      ),
+    [entries, worker, live.agents, live.queue, currentAgentId, running]
+  );
   const timedByWork = parts.some(
     (part) => part.kind === "work" && part.running
   );
