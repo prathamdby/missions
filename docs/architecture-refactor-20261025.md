@@ -11,8 +11,8 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - [x] P0: Characterize the old build and preserve equivalence oracles.
 - [x] P1: Move unchanged runtime declarations.
 - [x] P2: Narrow publishing access.
-- [ ] P3: Delivery extraction or evidence-backed rejection.
-- [ ] P4: Lifecycle extraction or evidence-backed rejection.
+- [x] P3: Reject delivery extraction under the approved benefit rule.
+- [x] P4: Reject lifecycle extraction under the approved benefit rule.
 - [ ] P5: Subtract unreachable permission completion machinery.
 - [ ] P6: Hide mount-scoped command/sink assembly.
 - [ ] P7: Extract pure conversation projection at existing memo boundaries.
@@ -60,6 +60,28 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - Proof: 102 focused Git/hook/signing/index/ref/recovery/workspace/deletion and parity tests pass; gate passes 103 files / 1,093 tests; 15 affected browser cases pass. Logs: `p2-focused.log`, `p2-gate.log`, `p2-e2e.log`.
 - Deletion: GitService's broad type dependency. The original MissionService instance, synchronous patch callbacks, constructor order, observer setter, WorkspaceOperationGate and WriteLeaseRegistry allocation are untouched.
 - Revert: interface/import-only commit; no external action to undo.
+
+### P3, rejected after dependency assessment
+
+- Assessed at `eafc235`; unchanged executable implementation verified after P1/P2. Evidence anchors below refer to base `apps/daemon/src/missions/mission-service.ts`.
+- Action: retain scheduleDelivery → deliver → deliverPass → drainOutbox → submitAccepted (3304–3473) in MissionService, with NativeQueueTracker separate.
+- Reason: only the deliveries Map is exclusive to this cluster. Its other dependencies are shared lifecycle admission/currentness/execution/task drain, store/publication, worker assignment and notice validity, attachment loading, timing, reporting and mutable LiveAgent.awaitingText.
+- Caller map: lease change, launch, Plan decision, idle callback, assignment startup, agent/daemon/user acceptance, queue removal/retry/replacement and resume (807, 1166, 2302, 2443, 2683, 2866, 2922, 3909, 4000, 4092, 4201, 4679). The call sites already request only scheduling.
+- Proof: saveQueueItem (729–735), reviseAccepted (3940–3951), eventStillValid (3275–3299) and submitOptions (3515–3528) have other callers. Queue evidence arrives through onAgentEvent/syncQueue, not through submit success. Delivery mutates awaitingText (3424), consumed by streaming (1757–1764).
+- Rejection: moving the whole cluster would expose a broad callback interface with those same policies. Moving only the Map/loop exposes run-pass, closing and task-ownership callbacks while hiding no meaningful caller policy. Neither meets the selected benefit test. No forwarding module, scheduler, timeout adapter or ledger was added.
+- Boundaries retained: synchronous scheduling/map admission, sequential passes, pre-await submitting persistence, the existing 30-second deadline and native evidence precedence. Exact old executable hash plus independent native, process and mission suites remain the proof for this unchanged code.
+- Deletion/revert: none. The proposed extraction is rejected, not implemented. No new differential crash/interleaving harness is claimed for this rejected move.
+
+### P4, rejected after ownership assessment
+
+- Assessed at `eafc235`; anchors refer to the same base file as P3.
+- Action: retain ensureRuntime/startRuntime/finishStart/startFailed (1205–1399), current-owner/execute (1508–1518, 1692–1733) and closeRuntime/disposeRuntime (1556–1690) in their existing owner.
+- Reason: LiveAgent is also feature state, not an isolated runtime token. Its toolCalls serve tool events; awaitingText serves delivery/streaming; planGuidance serves mode/Plan synchronization; episode/counter/completedTurns serve Worker status/failure/stall logic. Retirement is reset by stop-failure recovery (4743–4747).
+- Caller map: startup serves launch, system messages, assignment startup, delivery and resume. Retirement serves Worker failure, failed assignment start, Worker retirement, stopping, stop confirmation and shutdown. execute/currentness additionally serve composer discovery, plans, questions, permission callbacks, role tools, artifacts, queue mutations and model updates.
+- Proof: the live Map also represents occupancy in composer/broker context, workspace quiescence, Worker capacity (2597–2624), handoff, model updates, deletion admission and shutdown. Retiring owners remain capacity occupants; an opaque ready-only registry would not preserve that responsibility.
+- Rejection: a registry-only module would expose the owner objects, iteration, phase, epoch, occupancy and retirement resetting. A full extraction requires callbacks for all these features and relocates workspace exclusion, synchronous fences, immediate-turn yields and service-wide joining. Neither hides more knowledge than its interface exposes.
+- Boundaries retained: runtime readiness is awaited outside the canonical workspace gate; closeRuntime remains synchronous before its returned promise; execute invokes the effect synchronously; leases/occupancy release only after confirmed shutdown. No LiveAgent split, duplicate owner or transition queue.
+- Deletion/revert: none. The proposed extraction is rejected, not implemented. Existing deferred-start/Pause/shutdown/model/Worker/question/Plan assertions and executable equivalence remain intact.
 
 ### Deferred observations and blockers
 
