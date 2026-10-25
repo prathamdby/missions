@@ -71,7 +71,16 @@ describe(ModelCatalog, () => {
         models: [{ id: "glm-5.3-flash" }, { id: "plain" }],
         source: "droid",
       });
-      await catalog.list();
+      const choice = { modelId: "glm-5.3-flash", reasoningEffort: null };
+      await expect(catalog.validate(choice, "Worker")).resolves.toBeUndefined();
+      await expect(catalog.resolve(choice, "Worker")).resolves.toStrictEqual({
+        ...choice,
+        reasoningEffort: "high",
+      });
+      catalog.remember([{ id: "refreshed" }]);
+      await expect(catalog.validate(choice, "Worker")).rejects.toThrow(
+        /model glm-5.3-flash is not available/u
+      );
       expect(load).toHaveBeenCalledOnce();
       await catalog.close();
     }

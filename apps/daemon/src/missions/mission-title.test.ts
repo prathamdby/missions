@@ -121,6 +121,65 @@ describe("mission Auto titles", () => {
     }
   );
 
+  it("does not generate a title when startup is cancelled before deletion", async () => {
+    const release = Promise.withResolvers<undefined>();
+    const entered = Promise.withResolvers<FakeRuntime>();
+    const { start } = FakeRuntime.prototype;
+    vi.spyOn(FakeRuntime.prototype, "start").mockImplementation(
+      async function delayedStart(this: FakeRuntime, resumeId) {
+        entered.resolve(this);
+        await release.promise;
+        return await start.call(this, resumeId);
+      }
+    );
+    const { booted, generator } = await setup();
+    const { daemon } = booted;
+    const added = await daemon.projects.addLocal({
+      operationId: "title-project",
+      path: await gitRepo(),
+    });
+    if (added.status !== "added") {
+      throw new Error("project not added");
+    }
+    const created = await daemon.missions.create({
+      goal: "Add a greeting file",
+      operationId: "title-mission",
+      orchestrator: MODEL,
+      projectId: added.project.id,
+      worker: MODEL,
+      workspace: { mode: "current_checkout" },
+    });
+    const runtime = await entered.promise;
+    const missionId = created.mission.id;
+    expect(generator.generate).not.toHaveBeenCalled();
+    const pausing = daemon.missions.pause(
+      missionId,
+      control(daemon, missionId, "pause-before-title-ready")
+    );
+    await waitFor(() => runtime.closed, Boolean);
+    await expect(
+      daemon.missions.remove(
+        missionId,
+        control(daemon, missionId, "delete-before-start-settles")
+      )
+    ).rejects.toMatchObject({ code: "conflict" });
+    release.resolve(undefined);
+    await pausing;
+    await daemon.missions.remove(
+      missionId,
+      control(daemon, missionId, "delete-before-title-ready")
+    );
+    const seen: DaemonEvent[] = [];
+    daemon.log.subscribe((event) => seen.push(event));
+    await tick();
+    expect(generator.generate).not.toHaveBeenCalled();
+    expect({
+      events: seen,
+      missions: daemon.missions.list(),
+      submitted: runtime.submitted,
+    }).toStrictEqual({ events: [], missions: [], submitted: [] });
+  });
+
   it("returns the placeholder first, then emits the generated title", async () => {
     const { booted, generator, title } = await setup();
     const seen: DaemonEvent[] = [];
