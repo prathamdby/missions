@@ -6,6 +6,7 @@ import type { RunOptions } from "@factory/droid-sdk/node";
 import type { ModelList } from "@missions/protocol/settings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ModelCatalog } from "../settings/models";
 import {
   normalizeTitle,
   TitleGenerator,
@@ -66,6 +67,26 @@ describe(TitleGenerator, () => {
   afterEach(async () => {
     await Promise.all(generators.splice(0).map((value) => value.close()));
     vi.useRealTimers();
+  });
+
+  it("uses the shared runtime catalog without probing or taking ownership of it", async () => {
+    const load = vi.fn<() => Promise<unknown[]>>();
+    const models = new ModelCatalog("/nonexistent/droid", load);
+    models.remember([{ id: "auto" }]);
+    const list = vi.spyOn(models, "list");
+    const close = vi.spyOn(models, "close");
+    const value = new TitleGenerator({
+      droidPath: "/nonexistent/droid",
+      models,
+      runner: () => Promise.resolve({ success: true, text: "Fix API errors" }),
+    });
+    generators.push(value);
+    await expect(value.generate(INPUT)).resolves.toBe("Fix API errors");
+    await value.close();
+    expect(list).toHaveBeenCalledOnce();
+    expect(load).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    await models.close();
   });
 
   it("uses Auto in an empty disposable folder and clips the goal", async () => {

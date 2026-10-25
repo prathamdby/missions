@@ -70,6 +70,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     send({ type: "response", id: request.id, result: {
       sessionId: "wire-session", session: { messages: [] }, settings, availableModels,
     } });
+  } else if (request.method === "droid.list_mcp_servers") {
+    send({ type: "response", id: request.id, result: {
+      servers: [], summary: { connected: 0, connecting: 0, failed: 0, total: 0 },
+    } });
   } else if (request.method === "droid.update_session_settings") {
     appendFileSync(process.env.WIRE_SETTINGS_RECORD, JSON.stringify(request.params) + "\\n");
     settings = request.params.modelId === "plain-model"
@@ -162,7 +166,7 @@ describe("ProcessTransport integration", () => {
         type: "text_delta",
       });
       await expect(readFile(record, "utf-8")).resolves.toBe(
-        "droid.initialize_session\ndroid.update_session_settings\ndroid.add_user_message\n"
+        "droid.initialize_session\ndroid.list_mcp_servers\ndroid.update_session_settings\ndroid.add_user_message\n"
       );
     } finally {
       await runtime.close();

@@ -334,7 +334,10 @@ export class MissionService {
   readonly #settings: SettingsService;
   readonly #models: ModelCatalog;
   readonly #titleGenerator: MissionTitleGenerator | null;
-  readonly #pendingTitles = new Set<string>();
+  readonly #pendingTitles = new Map<
+    string,
+    { placeholder: string; started: boolean }
+  >();
   readonly #modelUpdates = new Set<string>();
   readonly #supervisor: ProcessSupervisor;
   readonly #processRecords: ProcessRecordRepository;
@@ -1003,13 +1006,23 @@ export class MissionService {
     this.#timing.mark(`${missionId}:goal`, "message.accepted", {
       missionId,
     });
-    this.#own(this.#launch(missionId));
-    const snapshot = this.snapshot(missionId);
     if (!duplicate && request.title === undefined && this.#titleGenerator) {
-      this.#pendingTitles.add(missionId);
-      this.#own(this.#autoTitle(missionId, snapshot.mission.title));
+      this.#pendingTitles.set(missionId, {
+        placeholder: this.get(missionId).title,
+        started: false,
+      });
     }
-    return snapshot;
+    this.#own(this.#launch(missionId));
+    return this.snapshot(missionId);
+  }
+
+  #startTitle(missionId: string) {
+    const pending = this.#pendingTitles.get(missionId);
+    if (!pending || pending.started) {
+      return;
+    }
+    pending.started = true;
+    this.#own(this.#autoTitle(missionId, pending.placeholder));
   }
 
   async #autoTitle(missionId: string, placeholder: string) {
@@ -1319,6 +1332,9 @@ export class MissionService {
         agentId: agent.id,
         missionId: agent.missionId,
       });
+      if (agent.role === "orchestrator") {
+        this.#startTitle(agent.missionId);
+      }
       if (successor && latest.sessionId) {
         this.#continueLegacy(latest, latest.sessionId);
       }
