@@ -10,10 +10,10 @@ import { pollUntil, sleep } from "../lib/async";
 import { PermissionBroker } from "../permissions/permission-broker";
 import type { AgentContext } from "../permissions/permission-broker";
 import { ProcessSupervisor } from "../processes/process-supervisor";
+import type { AgentEvent, AgentRuntimeOptions } from "../runtime/contracts";
 import { addHangingMcp, HANGING_MCP_NAME } from "../test/hanging-mcp";
 import { WriteLeaseRegistry } from "../workspaces/write-lease";
 import { AgentRuntime } from "./agent-runtime";
-import type { AgentEvent, AgentRuntimeOptions } from "./agent-runtime";
 import { createRoleToolServer, ROLE_TOOL_SERVER } from "./role-tools";
 import type { RoleToolHandlers } from "./role-tools";
 

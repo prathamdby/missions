@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { AgentEvent } from "../sdk/agent-runtime";
+import type { AgentEvent } from "../runtime/contracts";
 
 const ACTIVITY_EVENTS = new Set([
   "text_delta",

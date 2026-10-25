@@ -1,7 +1,7 @@
 import type { Grant, PermissionRequest } from "@missions/protocol/missions";
 import { describe, expect, it, vi } from "vitest";
 
-import type { PermissionToolUse } from "../sdk/agent-runtime";
+import type { PermissionToolUse } from "../runtime/contracts";
 import { WriteLeaseRegistry } from "../workspaces/write-lease";
 import {
   autoApproves,

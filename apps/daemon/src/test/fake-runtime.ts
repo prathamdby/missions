@@ -1,15 +1,15 @@
 import type { DeliveryMode } from "@missions/protocol/common";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 
-import type { RuntimeHandle } from "../missions/mission-service";
 import type { StopResult } from "../processes/process-supervisor";
 import type {
+  RuntimeHandle,
   AgentEvent,
   AgentRuntimeOptions,
   RuntimeStartResult,
   RemoveOutcome,
   SubmitOptions,
-} from "../sdk/agent-runtime";
+} from "../runtime/contracts";
 import type { ComposerSkill, SdkCommand } from "../sdk/composer-catalog";
 import { NativeQueueTracker } from "../sdk/native-queue";
 

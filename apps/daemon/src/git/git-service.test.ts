@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDaemon } from "../daemon";
 import type { Daemon } from "../daemon";
 import * as execution from "../lib/exec";
-import type { RuntimeHandle } from "../missions/mission-service";
+import type { RuntimeHandle } from "../runtime/contracts";
 import { NativeQueueTracker } from "../sdk/native-queue";
 import { gitRepo, sh, tempDir, testConfig } from "../test/fixtures";
 import { githubRepository } from "./git-service";

@@ -5,10 +5,10 @@ import { createSdkMcpServer } from "@factory/droid-sdk/node";
 import { describe, expect, it } from "vitest";
 
 import { ProcessSupervisor } from "../processes/process-supervisor";
+import type { AgentEvent } from "../runtime/contracts";
 import { tempDir } from "../test/fixtures";
 import { PEER } from "../test/native-wire-peer";
 import { AgentRuntime } from "./agent-runtime";
-import type { AgentEvent } from "./agent-runtime";
 
 /**
  * A native-wire peer, not an AgentRuntime fake. The installed ProcessTransport

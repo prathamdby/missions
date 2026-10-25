@@ -9,7 +9,7 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 ## Checklist
 
 - [x] P0: Characterize the old build and preserve equivalence oracles.
-- [ ] P1: Move unchanged runtime declarations.
+- [x] P1: Move unchanged runtime declarations.
 - [ ] P2: Narrow publishing access.
 - [ ] P3: Delivery extraction or evidence-backed rejection.
 - [ ] P4: Lifecycle extraction or evidence-backed rejection.
@@ -42,6 +42,15 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - Proof: the complete projection corpus freezes ties, failed role tools, missing agents/history, previews, both roles and participant messages. Seven old 2,000-message projection samples ranged from 1.08ms to 9.13ms. This is observed variation, not a new pass budget. The existing replay benchmark also ran.
 - Proof: independent existing suites retain question/Plan decisions, duplicate clicks/admission, retry identity, sidebar/view controls, removal, native process, Git, recovery and concurrency assertions. No existing assertion, timeout, tolerance or test configuration changed.
 - Deletion: none. Do not replace expected outputs with candidate output.
+
+### P1, runtime declarations
+
+- Base: `4d0fdeb`. Action: move the unchanged runtime declarations into `apps/daemon/src/runtime/contracts.ts`; move type imports atomically.
+- Reason: FakeRuntime and ScriptedRuntime no longer depend on MissionService for their contract. Native, fake and scripted adapters and orchestration share the same declarations. Options intentionally remain SDK-shaped.
+- Proof: the import restriction rejected the old adapters and accepts the new imports, with forbidden/allowed fixtures (including the legitimate pure messages dependency). An initial import-rewrite error was caught by the executable hash/native tests and corrected before completion, without changing any expected result.
+- Proof: all 12 old executable-module hashes match exactly. Focused runtime, process, role-tool, scripted-runtime and durable parity checks pass, 89 tests. `pnpm gate`: 102 files / 1,091 tests. Affected browser cases: 8/8. Logs: `p1-focused-fixed.log`, `p1-gate.log`, `p1-e2e.log`.
+- Deletion: old declaration definitions and reverse type imports; no compatibility re-export. No construction, native operation, prompt or scheduling code changed.
+- Revert: this type/import-only commit; no external effect to undo.
 
 ### Deferred observations and blockers
 
