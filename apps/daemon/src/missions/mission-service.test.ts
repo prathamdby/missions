@@ -15,10 +15,12 @@ import { createDaemon } from "../daemon";
 import type { Daemon } from "../daemon";
 import { pollUntil } from "../lib/async";
 import { ProcessRecordRepository } from "../processes/process-record-repository";
-import type { PermissionToolUse } from "../sdk/agent-runtime";
+import type { AgentEvent, PermissionToolUse } from "../sdk/agent-runtime";
+import { SUBMIT_ACK_TIMEOUT_MS } from "../sdk/submit-ack-timeout";
 import type { ModelLoader } from "../settings/models";
 import { FakeRuntime } from "../test/fake-runtime";
 import { gitRepo, testConfig } from "../test/fixtures";
+import { workerEpisodeActivity } from "./worker-turns";
 
 const opened: Daemon[] = [];
 const MODEL: AgentModelSettings = {
@@ -143,7 +145,7 @@ const startMission = async (
     orchestrator.consume(`${created.missionId}:goal`);
     await orchestrator.tool("enter_plan", {});
     orchestrator.emit({
-      reason: "end_turn",
+      reason: "completed",
       turnId: null,
       type: "turn_completed",
     });
@@ -158,7 +160,7 @@ const startMission = async (
   return { ...created, orchestrator };
 };
 
-/** An unrecognized Droid permission the policy does not approve, so the user must decide. */
+/** Unknown tools are automatically approved after capability gates. */
 const UNCLASSIFIED: PermissionToolUse = {
   confirmationType: "custom",
   details: { type: "custom" },
@@ -173,18 +175,20 @@ const proposePlan = (
   title = "Greeting",
   toolUseId = "spec-1"
 ) =>
-  runtime.options.onPermission({
-    agentId: runtime.options.agentId,
-    toolUses: [
-      {
-        confirmationType: "exit_spec_mode",
-        details: { plan, title, type: "exit_spec_mode" },
-        input: {},
-        toolName: "ExitSpecMode",
-        toolUseId,
-      },
-    ],
-  });
+  runtime.options
+    .onPermission({
+      agentId: runtime.options.agentId,
+      toolUses: [
+        {
+          confirmationType: "exit_spec_mode",
+          details: { plan, title, type: "exit_spec_mode" },
+          input: {},
+          toolName: "ExitSpecMode",
+          toolUseId,
+        },
+      ],
+    })
+    .then((verdict) => verdict.approved);
 
 /** Waits until the outbox handed a message to the runner's native queue. */
 const nativelyQueued = async (daemon: Daemon, id: string) => {
@@ -260,20 +264,19 @@ const holdOrchestrator = async (ctx: Started) => {
   return () => release.resolve(undefined);
 };
 
-const askWorkerPermission = async (ctx: Started, worker: FakeRuntime) => {
-  const approved = worker.options.onPermission({
-    agentId: worker.options.agentId,
-    toolUses: [UNCLASSIFIED],
-  });
-  const request = await waitFor(
-    () =>
-      ctx.daemon.store.permissions
-        .list(ctx.missionId, ["pending"])
-        .find((entry) => entry.agentId === worker.options.agentId),
-    Boolean
-  );
+const askWorkerQuestion = (ctx: Started, worker: FakeRuntime) => {
+  const approved = worker.options
+    .onAskUser({
+      agentId: worker.options.agentId,
+      questions: [],
+      toolCallId: `ask-${ctx.daemon.store.questions.list(ctx.missionId).length}`,
+    })
+    .then((answer) => !answer.cancelled);
+  const request = ctx.daemon.store.questions
+    .list(ctx.missionId, ["pending"])
+    .find((entry) => entry.agentId === worker.options.agentId);
   if (!request) {
-    throw new Error("Permission was not requested");
+    throw new Error("Question was not requested");
   }
   return { approved, request };
 };
@@ -1010,8 +1013,8 @@ describe("mission service", () => {
       toolUses: [createEdit(`${repo}/a.txt`)],
     });
     expect([
-      before,
-      after,
+      before.approved,
+      after.approved,
       daemon.missions.get(missionId).status,
       daemon.missions.get(missionId).executionMode,
       daemon.store.getAgent(orchestrator.options.agentId)?.holdsWriteLease,
@@ -1685,8 +1688,12 @@ describe("mission service", () => {
       questions: [],
       toolCallId: "old-ask",
     });
-    current?.emit({ reason: "done", turnId: null, type: "turn_completed" });
-    expect(approved).toBeFalsy();
+    current?.emit({
+      reason: "completed",
+      turnId: null,
+      type: "turn_completed",
+    });
+    expect(approved.approved).toBeFalsy();
     expect(answer.cancelled).toBeTruthy();
     expect(daemon.log.replay(missionId, before)).toStrictEqual([]);
     expect(daemon.store.queue.get(`${missionId}:goal`)?.state).toBe("removed");
@@ -1736,8 +1743,8 @@ describe("mission service", () => {
     ).rejects.toThrow(/Plan mode is read-only/u);
     expect([
       superseded,
-      readOnlyWrite,
-      planWrite,
+      readOnlyWrite?.approved,
+      planWrite.approved,
       ctx.daemon.missions.get(ctx.missionId).status,
       ctx.daemon.missions
         .snapshot(ctx.missionId)
@@ -1820,7 +1827,7 @@ describe("mission service", () => {
       toolUses: [createEdit(`${second.repo}/a.txt`)],
     });
     first.orchestrator.emit({
-      reason: "done",
+      reason: "completed",
       turnId: null,
       type: "turn_completed",
     });
@@ -1930,10 +1937,7 @@ describe("mission service", () => {
       agentId: ctx.orchestrator.options.agentId,
       toolUses: [UNCLASSIFIED],
     });
-    await waitFor(
-      () => ctx.daemon.missions.snapshot(ctx.missionId).permissions.length,
-      (count) => count === 1
-    );
+    await permission;
     const closing = Promise.withResolvers<undefined>();
     const closeEntered = Promise.withResolvers<undefined>();
     const close = ctx.orchestrator.close.bind(ctx.orchestrator);
@@ -1951,10 +1955,10 @@ describe("mission service", () => {
       pendingQuestion,
       permission,
     ]);
-    expect([cancelledQuestion.cancelled, cancelledPermission]).toStrictEqual([
-      true,
-      false,
-    ]);
+    expect([
+      cancelledQuestion.cancelled,
+      cancelledPermission.approved,
+    ]).toStrictEqual([true, true]);
     const effect = vi.fn<() => Promise<string>>(() =>
       Promise.resolve("published")
     );
@@ -2591,6 +2595,636 @@ describe("mission service", () => {
     });
   });
 
+  it.each([
+    ["completed", "running"],
+    ["cancelled", "running"],
+    ["permission_rejected", "running"],
+    ["model_rate_limited", "running"],
+    ["no_approver_available", "running"],
+    ["spec_handoff", "running"],
+    ["future_sdk_reason", "running"],
+    ["error", "failed"],
+    ["process_exit", "failed"],
+    ["model_usage_exhausted", "failed"],
+    ["model_authentication_failed", "failed"],
+    ["model_request_rejected", "failed"],
+    ["model_provider_unreachable", "failed"],
+    ["model_provider_unavailable", "failed"],
+    ["prompt_rejected", "failed"],
+    ["completion_persistence_failed", "failed"],
+    ["structured_output_missing", "failed"],
+    ["structured_output_invalid", "failed"],
+    ["structured_output_schema_invalid", "failed"],
+  ])("classifies Worker completion %s as %s", async (reason, status) => {
+    const ctx = await startMission();
+    const { assignment, worker } = await startWorker(ctx);
+    worker.emit({ reason, turnId: "sdk-turn", type: "turn_completed" });
+    const [event] = agentEvents(ctx);
+    expect(ctx.daemon.store.assignments.get(assignment.id)?.status).toBe(
+      status
+    );
+    expect(event?.id).toContain(
+      status === "failed" ? "worker-failed" : "worker-stalled"
+    );
+    expect(event?.text).toContain(reason);
+    worker.emit({ reason, turnId: "sdk-turn", type: "turn_completed" });
+    worker.emit({ state: "idle", type: "working_state" });
+    expect(agentEvents(ctx)).toHaveLength(1);
+    if (status === "failed") {
+      await waitFor(() => worker.closed, Boolean);
+    }
+    expect(worker.closed).toBe(status === "failed");
+  });
+
+  it.each([
+    ["before", null],
+    ["after", null],
+    ["none", null],
+    ["before", "sdk-turn"],
+    ["after", "sdk-turn"],
+    ["none", "sdk-turn"],
+  ] as const)(
+    "notices one closed episode with idle %s and turn ID %s",
+    async (idle, turnId) => {
+      const ctx = await startMission();
+      const { assignment, worker } = await startWorker(ctx);
+      worker.emit({
+        input: {},
+        name: "Execute",
+        toolUseId: "failed-exec",
+        type: "tool_call",
+      });
+      worker.emit({
+        content: "tool execution cancelled",
+        isError: true,
+        toolUseId: "failed-exec",
+        type: "tool_result",
+      });
+      worker.emit({
+        attribution: "policy",
+        reason: "main agent obtains repositories",
+        toolUseIds: ["failed-exec"],
+        type: "permission_denied",
+      });
+      for (const state of [
+        "thinking",
+        "streaming_assistant_message",
+        "executing_tool",
+      ]) {
+        worker.emit({ state, type: "working_state" });
+      }
+      if (idle === "before") {
+        worker.emit({ state: "idle", type: "working_state" });
+      }
+      worker.emit({ reason: "completed", turnId, type: "turn_completed" });
+      if (idle === "after") {
+        worker.emit({ state: "idle", type: "working_state" });
+      }
+      worker.emit({ reason: "completed", turnId, type: "turn_completed" });
+      const [notice] = agentEvents(ctx);
+      expect(notice?.text).toContain("tool execution cancelled");
+      expect(notice?.text).toContain("main agent obtains repositories");
+      expect(notice?.text).toContain("Execute [failed-exec]");
+      await submittedNotice(ctx, notice?.id ?? "");
+      expect(agentEvents(ctx)).toHaveLength(1);
+      expect(ctx.daemon.store.assignments.get(assignment.id)?.status).toBe(
+        "running"
+      );
+    }
+  );
+
+  it.each(["text_delta", "thinking_delta"] as const)(
+    "reopens a fallback episode on %s without working-state events",
+    async (type) => {
+      const ctx = await startMission();
+      const { worker } = await startWorker(ctx);
+      const release = await holdOrchestrator(ctx);
+      worker.emit({
+        reason: "completed",
+        turnId: null,
+        type: "turn_completed",
+      });
+      worker.emit({ delta: "More work", messageId: "next-message", type });
+      worker.emit({
+        reason: "completed",
+        turnId: null,
+        type: "turn_completed",
+      });
+      worker.emit({
+        reason: "completed",
+        turnId: null,
+        type: "turn_completed",
+      });
+      const notices = agentEvents(ctx);
+      expect(notices).toHaveLength(2);
+      expect(notices[0]?.state).toBe("discarded");
+      expect(notices[1]?.id).not.toBe(notices[0]?.id);
+      expect(notices[1]?.text).toContain("completed");
+      release();
+      await submittedNotice(ctx, notices[1]?.id ?? "");
+    }
+  );
+
+  it("does not reopen a closed Worker episode for an assistant message", async () => {
+    const event: AgentEvent = {
+      message: {
+        id: "late-assistant",
+        requestId: null,
+        role: "assistant",
+        sender: null,
+        text: "Earlier response",
+        thinking: "",
+        toolResults: [],
+        toolUses: [],
+      },
+      type: "message",
+    };
+    expect(workerEpisodeActivity(event)).toBeFalsy();
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    worker.emit({ reason: "completed", turnId: null, type: "turn_completed" });
+    worker.emit(event);
+    worker.emit({ reason: "completed", turnId: null, type: "turn_completed" });
+    expect(agentEvents(ctx)).toHaveLength(1);
+  });
+
+  it("recognizes distinct SDK turns even when working-state notifications are absent", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    worker.emit({
+      reason: "completed",
+      turnId: "first",
+      type: "turn_completed",
+    });
+    worker.emit({
+      reason: "completed",
+      turnId: "second",
+      type: "turn_completed",
+    });
+    worker.emit({
+      reason: "completed",
+      turnId: "first",
+      type: "turn_completed",
+    });
+    expect(
+      agentEvents(ctx).filter((item) =>
+        item.id.startsWith("evt:worker-stalled:")
+      )
+    ).toHaveLength(2);
+  });
+
+  it("corrects a delivered stall truthfully when the Worker fails rather than wakes", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    worker.emit({
+      reason: "completed",
+      turnId: "stalled",
+      type: "turn_completed",
+    });
+    const [stall] = agentEvents(ctx);
+    await nativelyQueued(ctx.daemon, stall?.id ?? "");
+    ctx.orchestrator.consume(stall?.id ?? "");
+    worker.emit({ errorType: "SessionError", message: "fatal", type: "error" });
+    const correction = await submittedNotice(
+      ctx,
+      stall?.id.replace("worker-stalled", "worker-stall-resolved") ?? ""
+    );
+    expect(correction?.text).toContain("the assignment failed");
+    expect(correction?.text).not.toContain("the Worker resumed activity");
+  });
+
+  it("captures message tool-result errors and nonfatal SDK errors throughout an episode", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    worker.emit({
+      message: {
+        id: "result-message",
+        requestId: null,
+        role: "assistant",
+        sender: null,
+        text: "",
+        thinking: "",
+        toolResults: [
+          { content: "file missing", isError: true, toolUseId: "tool" },
+        ],
+        toolUses: [{ id: "tool", input: {}, name: "Read" }],
+      },
+      type: "message",
+    });
+    worker.emit({
+      errorType: "ModelError",
+      message: "model temporarily unavailable",
+      type: "error",
+    });
+    worker.emit({ state: "thinking", type: "working_state" });
+    worker.emit({ attempt: 1, reason: "retrying", type: "retry" });
+    expect(agentEvents(ctx)).toStrictEqual([]);
+    worker.emit({ reason: "completed", turnId: null, type: "turn_completed" });
+    expect(agentEvents(ctx)[0]?.text).toContain("file missing");
+    expect(agentEvents(ctx)[0]?.text).toContain(
+      "ModelError: model temporarily unavailable"
+    );
+  });
+
+  it("assigns separate fallback episode IDs, discards unsent stale notices, and resets only on wake", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    const release = await holdOrchestrator(ctx);
+    worker.emit({
+      attribution: "policy",
+      reason: "old denial",
+      toolUseIds: ["old"],
+      type: "permission_denied",
+    });
+    worker.emit({ reason: "completed", turnId: null, type: "turn_completed" });
+    const [first] = agentEvents(ctx);
+    expect(first?.state).toBe("accepted");
+    worker.emit({ state: "thinking", type: "working_state" });
+    worker.emit({ state: "executing_tool", type: "working_state" });
+    worker.emit({ reason: "completed", turnId: null, type: "turn_completed" });
+    const notices = agentEvents(ctx);
+    expect(notices).toHaveLength(2);
+    expect({
+      distinct: notices[0]?.id !== notices[1]?.id,
+      state: notices[0]?.state,
+    }).toStrictEqual({ distinct: true, state: "discarded" });
+    expect(notices[1]?.text).not.toContain("old denial");
+    release();
+    await submittedNotice(ctx, notices[1]?.id ?? "");
+    expect(
+      ctx.orchestrator.submitted.some((item) => item.id === first?.id)
+    ).toBeFalsy();
+  });
+
+  it.each(["queued", "sent", "unknown", "unconfirmed"] as const)(
+    "resolves a %s stalled notice without clearing a newer episode",
+    async (state) => {
+      const ctx = await startMission();
+      const { worker } = await startWorker(ctx);
+      worker.emit({
+        reason: "completed",
+        turnId: "first",
+        type: "turn_completed",
+      });
+      const [first] = agentEvents(ctx);
+      if (!first) {
+        throw new Error("Missing first notice");
+      }
+      await nativelyQueued(ctx.daemon, first.id);
+      if (state === "sent") {
+        ctx.orchestrator.consume(first.id);
+      }
+      if (state === "unknown") {
+        ctx.orchestrator.queue.submitFailed(first.id, "uncertain", false);
+      }
+      if (state === "unconfirmed") {
+        vi.spyOn(ctx.orchestrator, "remove").mockResolvedValue("unconfirmed");
+      }
+      worker.emit({ state: "thinking", type: "working_state" });
+      worker.emit({
+        reason: "completed",
+        turnId: "second",
+        type: "turn_completed",
+      });
+      await (state === "queued"
+        ? waitFor(
+            () => ctx.daemon.store.queue.get(first.id)?.state,
+            (value) => value === "removed"
+          )
+        : submittedNotice(
+            ctx,
+            first.id.replace("worker-stalled", "worker-stall-resolved")
+          ));
+      ctx.orchestrator.consume(first.id);
+      ctx.orchestrator.consume(first.id);
+      const correctionId = first.id.replace(
+        "worker-stalled",
+        "worker-stall-resolved"
+      );
+      await submittedNotice(ctx, correctionId);
+      const second = agentEvents(ctx).find(
+        (item) =>
+          item.id.startsWith("evt:worker-stalled:") && item.id !== first.id
+      );
+      await submittedNotice(ctx, second?.id ?? "");
+      expect(
+        agentEvents(ctx).filter((item) => item.id === correctionId)
+      ).toHaveLength(1);
+      expect(
+        agentEvents(ctx).filter((item) =>
+          item.id.startsWith("evt:worker-stall-resolved:")
+        )
+      ).toHaveLength(1);
+      expect(ctx.daemon.store.queue.get(second?.id ?? "")?.state).toBe(
+        "queued"
+      );
+    }
+  );
+
+  it.each(["SessionError", "ProcessExitError", "exit-zero"] as const)(
+    "fails immediately for %s, deduping later completion and exit",
+    async (kind) => {
+      const ctx = await startMission();
+      const { assignment, worker } = await startWorker(ctx);
+      worker.emit({
+        errorType: kind,
+        message: "fatal session",
+        type: "error",
+        ...(kind === "exit-zero" ? { exitCode: 0 } : {}),
+      });
+      expect(ctx.daemon.store.assignments.get(assignment.id)?.status).toBe(
+        "failed"
+      );
+      worker.emit({ reason: "error", turnId: "fatal", type: "turn_completed" });
+      worker.emit({ message: "then process exited", type: "process_exit" });
+      expect(agentEvents(ctx)).toHaveLength(1);
+      await submittedNotice(ctx, `evt:worker-failed:${assignment.id}:0`);
+      await waitFor(() => worker.closed, Boolean);
+      expect(agentEvents(ctx)[0]?.text).toContain(
+        kind === "exit-zero" ? "exit code 0" : kind
+      );
+    }
+  );
+
+  it("withdraws a stall on handoff and never reports the same-turn handoff as stalled", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    worker.emit({ reason: "completed", turnId: "old", type: "turn_completed" });
+    const [old] = agentEvents(ctx);
+    await nativelyQueued(ctx.daemon, old?.id ?? "");
+    ctx.orchestrator.consume(old?.id ?? "");
+    await worker.tool("submit_handoff", {
+      checks: [],
+      filesChanged: [],
+      followUps: [],
+      summary: "Done",
+    });
+    worker.emit({
+      reason: "completed",
+      turnId: "handoff",
+      type: "turn_completed",
+    });
+    await submittedNotice(
+      ctx,
+      old?.id.replace("worker-stalled", "worker-stall-resolved") ?? ""
+    );
+    expect(
+      agentEvents(ctx).filter((event) =>
+        event.id.startsWith("evt:worker-stalled")
+      )
+    ).toHaveLength(1);
+  });
+
+  it("discards accepted stalls on Pause and ignores fenced completion, wake and late consumption", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    const release = await holdOrchestrator(ctx);
+    worker.emit({ reason: "completed", turnId: "old", type: "turn_completed" });
+    const [old] = agentEvents(ctx);
+    await ctx.daemon.missions.pause(ctx.missionId, {
+      expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
+      operationId: "stall-pause",
+    });
+    worker.emit({ state: "thinking", type: "working_state" });
+    worker.emit({ reason: "error", turnId: "old", type: "turn_completed" });
+    ctx.orchestrator.consume(old?.id ?? "");
+    release();
+    expect(agentEvents(ctx).map((item) => item.state)).toStrictEqual([
+      "discarded",
+    ]);
+  });
+
+  it.each([false, true])(
+    "persists fatal completion before disposal and only frees the slot on confirmed stop (%s)",
+    async (survivors) => {
+      const ctx = await startMission();
+      ctx.daemon.settings.update({ maxConcurrentWorkers: 1 });
+      const { assignment, worker } = await startWorker(ctx);
+      await ctx.orchestrator.tool("dispatch_worker", {
+        instructions: "Next task",
+        needsWrite: true,
+        title: "Next",
+      });
+      const release = Promise.withResolvers<undefined>();
+      const entered = Promise.withResolvers<undefined>();
+      const close = worker.close.bind(worker);
+      worker.survivors = survivors ? [4242] : [];
+      vi.spyOn(worker, "close").mockImplementation(async () => {
+        entered.resolve(undefined);
+        await release.promise;
+        return await close();
+      });
+      worker.emit({ reason: "error", turnId: "fatal", type: "turn_completed" });
+      expect(ctx.daemon.store.assignments.get(assignment.id)?.status).toBe(
+        "failed"
+      );
+      await submittedNotice(ctx, `evt:worker-failed:${assignment.id}:0`);
+      await entered.promise;
+      expect(ctx.runtimes).toHaveLength(2);
+      release.resolve(undefined);
+      await (survivors
+        ? waitFor(
+            () => ctx.daemon.missions.get(ctx.missionId).status,
+            (status) => status === "stop_failed"
+          )
+        : waitFor(
+            () => ctx.runtimes[2]?.submitted.length ?? 0,
+            (count) => count > 0
+          ));
+      expect(ctx.runtimes).toHaveLength(survivors ? 2 : 3);
+      expect(
+        ctx.daemon.missions
+          .snapshot(ctx.missionId)
+          .assignments.map((item) => item.status)
+      ).toStrictEqual(survivors ? ["failed", "queued"] : ["failed", "running"]);
+      worker.survivors = [];
+    }
+  );
+
+  it("distinguishes an actual user Plan rejection from a superseded revision", async () => {
+    const ctx = await startMission();
+    const ask = () =>
+      ctx.orchestrator.options.onPermission({
+        agentId: ctx.orchestrator.options.agentId,
+        toolUses: [
+          {
+            confirmationType: "exit_spec_mode",
+            details: {
+              plan: "Review",
+              title: "Review",
+              type: "exit_spec_mode",
+            },
+            input: {},
+            toolName: "ExitSpecMode",
+            toolUseId: "plan",
+          },
+        ],
+      });
+    const first = ask();
+    const second = ask();
+    await expect(first).resolves.toMatchObject({
+      approved: false,
+      attribution: "lifecycle",
+      reason: expect.stringContaining("superseded"),
+    });
+    ctx.daemon.missions.decidePlan(ctx.missionId, {
+      approve: false,
+      feedback: "Try again",
+      planRevision: 2,
+    });
+    await expect(second).resolves.toMatchObject({
+      approved: false,
+      attribution: "user",
+      reason: expect.stringContaining("did not approve"),
+    });
+  });
+
+  it.each([false, true])(
+    "bounds a hung user ACK (consumed first: %s) and attempts a later failure once",
+    async (consumed) => {
+      const ctx = await startMission();
+      const { assignment, worker } = await startWorker(ctx);
+      const ack = Promise.withResolvers<undefined>();
+      const submit = ctx.orchestrator.submit.bind(ctx.orchestrator);
+      const attempts: string[] = [];
+      vi.spyOn(ctx.orchestrator, "submit").mockImplementation(
+        async (id, text, mode, options) => {
+          attempts.push(id);
+          if (id === "hung-user") {
+            ctx.orchestrator.queue.submitted(id, text, mode);
+            await ack.promise;
+            ctx.orchestrator.queue.admitted(id);
+            return;
+          }
+          await submit(id, text, mode, options);
+        }
+      );
+      vi.useFakeTimers();
+      await ctx.daemon.missions.submitMessage(ctx.missionId, {
+        mode: "steer",
+        operationId: "hung-user",
+        text: "earlier user",
+      });
+      await vi.waitFor(() => expect(attempts).toContain("hung-user"));
+      if (consumed) {
+        ctx.orchestrator.consume("hung-user");
+      }
+      try {
+        worker.emit({
+          reason: "error",
+          turnId: "fatal",
+          type: "turn_completed",
+        });
+        const id = `evt:worker-failed:${assignment.id}:0`;
+        await vi.advanceTimersByTimeAsync(SUBMIT_ACK_TIMEOUT_MS);
+        expect(attempts).toStrictEqual(["hung-user", id]);
+        expect([
+          ctx.daemon.store.queue.get("hung-user")?.state,
+          ctx.orchestrator.queue.get("hung-user")?.state,
+        ]).toStrictEqual([
+          consumed ? "sent" : "unknown",
+          consumed ? "sent" : "unknown",
+        ]);
+        ack.resolve(undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(ctx.daemon.store.queue.get("hung-user")?.state).toBe(
+          consumed ? "sent" : "queued"
+        );
+        expect(attempts).toStrictEqual(["hung-user", id]);
+      } finally {
+        ack.resolve(undefined);
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it("never replays a deadline-unknown message after cleanup, late ACK and daemon restart", async () => {
+    const config = await testConfig();
+    const ctx = await startMission(config);
+    const ack = Promise.withResolvers<undefined>();
+    const submit = ctx.orchestrator.submit.bind(ctx.orchestrator);
+    vi.spyOn(ctx.orchestrator, "submit").mockImplementation(
+      async (id, text, mode, options) => {
+        if (id === "restart-hung") {
+          ctx.orchestrator.queue.submitted(id, text, mode);
+          await ack.promise;
+          ctx.orchestrator.queue.admitted(id);
+          return;
+        }
+        await submit(id, text, mode, options);
+      }
+    );
+    vi.spyOn(ctx.orchestrator, "remove").mockResolvedValue("unconfirmed");
+    vi.useFakeTimers();
+    try {
+      await ctx.daemon.missions.submitMessage(ctx.missionId, {
+        mode: "steer",
+        operationId: "restart-hung",
+        text: "Do not replay",
+      });
+      await vi.waitFor(() =>
+        expect(ctx.orchestrator.queue.get("restart-hung")?.state).toBe(
+          "submitting"
+        )
+      );
+      await vi.advanceTimersByTimeAsync(SUBMIT_ACK_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    const paused = await ctx.daemon.missions.pause(ctx.missionId, {
+      expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
+      operationId: "restart-pause",
+    });
+    ack.resolve(undefined);
+    await yieldImmediate();
+    expect(ctx.daemon.store.queue.get("restart-hung")?.state).toBe("unknown");
+    await ctx.daemon.close();
+    const restarted = await boot(config);
+    await restarted.daemon.missions.resume(ctx.missionId, {
+      expectedRevision: paused.revision,
+      operationId: "restart-resume",
+    });
+    await waitFor(
+      () => restarted.runtimes[0]?.submitted.length ?? 0,
+      (count) => count > 0
+    );
+    expect(restarted.daemon.store.queue.get("restart-hung")?.state).toBe(
+      "unknown"
+    );
+    expect(
+      restarted.runtimes
+        .flatMap((runtime) => runtime.submitted)
+        .some((item) => item.id === "restart-hung")
+    ).toBeFalsy();
+  });
+
+  it("bounds stale-notice removal before queuing its correction", async () => {
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    worker.emit({ reason: "completed", turnId: "old", type: "turn_completed" });
+    const [notice] = agentEvents(ctx);
+    await nativelyQueued(ctx.daemon, notice?.id ?? "");
+    const removal = Promise.withResolvers<"removed">();
+    vi.spyOn(ctx.orchestrator, "remove").mockReturnValue(removal.promise);
+    vi.useFakeTimers();
+    try {
+      worker.emit({ state: "thinking", type: "working_state" });
+      await vi.advanceTimersByTimeAsync(5000);
+      const correction = agentEvents(ctx).find((item) =>
+        item.id.startsWith("evt:worker-stall-resolved:")
+      );
+      expect(correction?.text).toContain(notice?.id);
+      await vi.waitFor(() =>
+        expect(
+          ctx.orchestrator.submitted.some((item) => item.id === correction?.id)
+        ).toBeTruthy()
+      );
+    } finally {
+      removal.resolve("removed");
+      vi.useRealTimers();
+    }
+  });
+
   it("tells the main agent when a worker waits for the user and when the wait ends", async () => {
     const ctx = await startMission();
     const { assignment, worker } = await startWorker(ctx);
@@ -2598,12 +3232,12 @@ describe("mission service", () => {
       agentId: ctx.orchestrator.options.agentId,
       toolUses: [UNCLASSIFIED],
     });
-    const { approved, request } = await askWorkerPermission(ctx, worker);
+    const { approved, request } = askWorkerQuestion(ctx, worker);
     const blockedId = `evt:worker-blocked:${request.id}`;
     const blocked = await submittedNotice(ctx, blockedId);
     ctx.orchestrator.consume(blockedId);
-    ctx.daemon.missions.decidePermission(ctx.missionId, request.id, {
-      decision: "approve_once",
+    ctx.daemon.missions.answerQuestion(ctx.missionId, request.id, {
+      answers: [],
       epoch: 0,
     });
     await expect(approved).resolves.toBeTruthy();
@@ -2625,7 +3259,7 @@ describe("mission service", () => {
     }).toStrictEqual({
       blocked: expect.stringMatching(
         new RegExp(
-          `^${EVENT_LABEL.replaceAll(/[.()[\]]/gu, String.raw`\$&`)}.*assignment ${assignment.id}.*waiting for the user to approve: Mystery.*never user authorization\\.$`,
+          `^${EVENT_LABEL.replaceAll(/[.()[\]]/gu, String.raw`\$&`)}.*assignment ${assignment.id}.*waiting for the user to answer a question.*never user authorization\\.$`,
           "u"
         )
       ),
@@ -2637,7 +3271,7 @@ describe("mission service", () => {
       })),
       mode: "steer",
       options: {},
-      unblocked: expect.stringContaining("the request was approved"),
+      unblocked: expect.stringContaining("the request was answered"),
     });
     expect(
       ctx.daemon.missions
@@ -2645,15 +3279,7 @@ describe("mission service", () => {
         .transcript.filter((entry) => entry.requestId === blockedId)
         .map((entry) => entry.kind)
     ).toStrictEqual(["system"]);
-    for (const pending of ctx.daemon.store.permissions.list(ctx.missionId, [
-      "pending",
-    ])) {
-      ctx.daemon.missions.decidePermission(ctx.missionId, pending.id, {
-        decision: "deny",
-        epoch: 0,
-      });
-    }
-    await expect(own).resolves.toBeFalsy();
+    await expect(own).resolves.toMatchObject({ approved: true });
     expect(agentEvents(ctx)).toHaveLength(2);
   });
 
@@ -2661,21 +3287,23 @@ describe("mission service", () => {
     const ctx = await startMission();
     const { worker } = await startWorker(ctx);
     const release = await holdOrchestrator(ctx);
-    const first = await askWorkerPermission(ctx, worker);
+    const first = askWorkerQuestion(ctx, worker);
     const firstId = `evt:worker-blocked:${first.request.id}`;
     expect(ctx.daemon.store.queue.get(firstId)?.state).toBe("accepted");
-    ctx.daemon.missions.decidePermission(ctx.missionId, first.request.id, {
-      decision: "deny",
+    ctx.daemon.missions.answerQuestion(ctx.missionId, first.request.id, {
+      answers: [],
+      cancelled: true,
       epoch: 0,
     });
     await expect(first.approved).resolves.toBeFalsy();
     release();
     await nativelyQueued(ctx.daemon, "hold-delivery");
-    const second = await askWorkerPermission(ctx, worker);
+    const second = askWorkerQuestion(ctx, worker);
     const secondId = `evt:worker-blocked:${second.request.id}`;
     await nativelyQueued(ctx.daemon, secondId);
-    ctx.daemon.missions.decidePermission(ctx.missionId, second.request.id, {
-      decision: "deny",
+    ctx.daemon.missions.answerQuestion(ctx.missionId, second.request.id, {
+      answers: [],
+      cancelled: true,
       epoch: 0,
     });
     await waitFor(
@@ -2700,30 +3328,32 @@ describe("mission service", () => {
   it("follows a blocked notice the runner already delivered with an unblocked notice", async () => {
     const ctx = await startMission();
     const { worker } = await startWorker(ctx);
-    const { request } = await askWorkerPermission(ctx, worker);
+    const { request } = askWorkerQuestion(ctx, worker);
     const blockedId = `evt:worker-blocked:${request.id}`;
     await nativelyQueued(ctx.daemon, blockedId);
     vi.spyOn(ctx.orchestrator, "remove").mockResolvedValue("already_sent");
-    ctx.daemon.missions.decidePermission(ctx.missionId, request.id, {
-      decision: "deny",
+    ctx.daemon.missions.answerQuestion(ctx.missionId, request.id, {
+      answers: [],
+      cancelled: true,
       epoch: 0,
     });
     const unblocked = await submittedNotice(
       ctx,
       `evt:worker-unblocked:${request.id}`
     );
-    expect(unblocked?.text).toContain("the request was denied");
+    expect(unblocked?.text).toContain("the request was cancelled");
   });
 
   it("follows a removed blocked notice the runner still consumed with an unblocked notice", async () => {
     const ctx = await startMission();
     const { worker } = await startWorker(ctx);
-    const { request } = await askWorkerPermission(ctx, worker);
+    const { request } = askWorkerQuestion(ctx, worker);
     const blockedId = `evt:worker-blocked:${request.id}`;
     const unblockedId = `evt:worker-unblocked:${request.id}`;
     await nativelyQueued(ctx.daemon, blockedId);
-    ctx.daemon.missions.decidePermission(ctx.missionId, request.id, {
-      decision: "deny",
+    ctx.daemon.missions.answerQuestion(ctx.missionId, request.id, {
+      answers: [],
+      cancelled: true,
       epoch: 0,
     });
     await waitFor(
@@ -2741,14 +3371,14 @@ describe("mission service", () => {
     }).toStrictEqual({
       beforeConsumed: null,
       blocked: "sent",
-      text: expect.stringContaining("the request was denied"),
+      text: expect.stringContaining("the request was cancelled"),
     });
   });
 
   it("sends only the failure notice when a blocked worker dies", async () => {
     const ctx = await startMission();
     const { assignment, worker } = await startWorker(ctx);
-    const { approved, request } = await askWorkerPermission(ctx, worker);
+    const { approved, request } = askWorkerQuestion(ctx, worker);
     const blockedId = `evt:worker-blocked:${request.id}`;
     await submittedNotice(ctx, blockedId);
     ctx.orchestrator.consume(blockedId);
@@ -2983,52 +3613,40 @@ describe("mission service", () => {
     ]);
   });
 
-  it("retiring one worker invalidates only its pending decisions", async () => {
+  it("retiring one worker invalidates only its pending questions", async () => {
     const ctx = await startMission();
-    await ctx.orchestrator.tool("dispatch_worker", {
-      instructions: "Work",
-      needsWrite: true,
-      title: "Worker",
-    });
-    const worker = await waitFor(
-      () => ctx.runtimes[1],
-      (runtime) => (runtime?.submitted.length ?? 0) > 0
-    );
-    if (!worker) {
-      throw new Error("Missing worker");
-    }
-    const orchestratorDecision = ctx.orchestrator.options.onPermission({
+    const { worker } = await startWorker(ctx);
+    const orchestratorDecision = ctx.orchestrator.options.onAskUser({
       agentId: ctx.orchestrator.options.agentId,
-      toolUses: [UNCLASSIFIED],
+      questions: [],
+      toolCallId: "main",
     });
-    const workerDecision = worker.options.onPermission({
+    const workerDecision = worker.options.onAskUser({
       agentId: worker.options.agentId,
-      toolUses: [UNCLASSIFIED],
+      questions: [],
+      toolCallId: "worker",
     });
-    await waitFor(
-      () => ctx.daemon.missions.snapshot(ctx.missionId).permissions.length,
-      (count) => count === 2
-    );
     await worker.tool("submit_handoff", {
       checks: [],
       filesChanged: [],
       followUps: [],
       summary: "Done",
     });
-    await expect(workerDecision).resolves.toBeFalsy();
-    const remaining = ctx.daemon.missions.snapshot(ctx.missionId).permissions;
+    await expect(workerDecision).resolves.toMatchObject({ cancelled: true });
+    const remaining = ctx.daemon.missions.snapshot(ctx.missionId).questions;
     expect(remaining.map((request) => request.agentId)).toStrictEqual([
       ctx.orchestrator.options.agentId,
     ]);
     const [request] = remaining;
-    if (!request) {
-      throw new Error("Missing orchestrator decision");
-    }
-    ctx.daemon.missions.decidePermission(ctx.missionId, request.id, {
-      decision: "deny",
-      epoch: request.epoch,
+    expect(request).toBeDefined();
+    ctx.daemon.missions.answerQuestion(ctx.missionId, request?.id ?? "", {
+      answers: [],
+      cancelled: true,
+      epoch: 0,
     });
-    await expect(orchestratorDecision).resolves.toBeFalsy();
+    await expect(orchestratorDecision).resolves.toMatchObject({
+      cancelled: true,
+    });
   });
 
   it("retirement cancels lease waits without handing off a still-running writer", async () => {
@@ -3063,7 +3681,7 @@ describe("mission service", () => {
       followUps: [],
       summary: "Done",
     });
-    await expect(waiting).resolves.toBeFalsy();
+    await expect(waiting).resolves.toMatchObject({ approved: false });
     expect([
       ctx.daemon.missions.leases.holder(ctx.repo),
       ctx.daemon.missions.leases.waiting(ctx.repo),

@@ -23,10 +23,27 @@ const until = async <T>(read: () => T, done: (value: T) => boolean) =>
 const SUMMARY =
   "Added NOTES.md and reviewed it.\n\nChecks:\n- test -f NOTES.md: passed";
 
-const start = async (goal = "Write notes") => {
+const start = async (
+  goal = "Write notes",
+  deny?: "Create" | "ExitSpecMode"
+) => {
   const daemon = await createDaemon({
     config: await testConfig(),
-    createRuntime: (options) => new ScriptedRuntime(options, 1),
+    createRuntime: (options) =>
+      new ScriptedRuntime(
+        {
+          ...options,
+          onPermission: (ask) =>
+            ask.toolUses.some((use) => use.toolName === deny)
+              ? Promise.resolve({
+                  approved: false,
+                  attribution: "policy",
+                  reason: "Fixture denial",
+                })
+              : options.onPermission(ask),
+        },
+        1
+      ),
     version: "test",
   });
   opened.push(daemon);
@@ -57,6 +74,48 @@ const start = async (goal = "Write notes") => {
 describe(ScriptedRuntime, () => {
   afterEach(async () => {
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
+  });
+
+  it("does not write when a denied verdict object is returned", async () => {
+    const { daemon, id, repo } = await start("Write notes", "Create");
+    const snapshot = await until(
+      () => daemon.missions.snapshot(id),
+      (snap) =>
+        snap.assignments.some(
+          (assignment) => assignment.status === "handed_off"
+        )
+    );
+    expect(existsSync(path.join(repo, "NOTES.md"))).toBeFalsy();
+    expect(snapshot.assignments[0]?.handoff?.filesChanged).toStrictEqual([]);
+    expect(snapshot.assignments[0]?.handoff?.followUps).toStrictEqual([
+      "The write was denied",
+    ]);
+    expect(
+      snapshot.transcript.some(
+        (item) =>
+          item.kind === "tool_result" &&
+          item.text === "Fixture denial" &&
+          item.isError
+      )
+    ).toBeTruthy();
+  });
+
+  it("never implements a plan when a denied verdict object is returned", async () => {
+    const { daemon, id, repo } = await start(
+      "Write notes. Plan it first.",
+      "ExitSpecMode"
+    );
+    const snapshot = await until(
+      () => daemon.missions.snapshot(id),
+      (snap) =>
+        snap.transcript.some(
+          (item) =>
+            item.kind === "tool_result" && item.text === "Fixture denial"
+        )
+    );
+    expect(snapshot.assignments).toStrictEqual([]);
+    expect(existsSync(path.join(repo, "NOTES.md"))).toBeFalsy();
+    expect(snapshot.mission.executionMode).toBe("plan");
   });
 
   it(
