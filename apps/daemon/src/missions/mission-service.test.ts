@@ -15,11 +15,12 @@ import { createDaemon } from "../daemon";
 import type { Daemon } from "../daemon";
 import { pollUntil } from "../lib/async";
 import { ProcessRecordRepository } from "../processes/process-record-repository";
-import type { PermissionToolUse } from "../sdk/agent-runtime";
+import type { AgentEvent, PermissionToolUse } from "../sdk/agent-runtime";
 import { SUBMIT_ACK_TIMEOUT_MS } from "../sdk/submit-ack-timeout";
 import type { ModelLoader } from "../settings/models";
 import { FakeRuntime } from "../test/fake-runtime";
 import { gitRepo, testConfig } from "../test/fixtures";
+import { workerEpisodeActivity } from "./worker-turns";
 
 const opened: Daemon[] = [];
 const MODEL: AgentModelSettings = {
@@ -2691,6 +2692,61 @@ describe("mission service", () => {
       );
     }
   );
+
+  it.each(["text_delta", "thinking_delta"] as const)(
+    "reopens a fallback episode on %s without working-state events",
+    async (type) => {
+      const ctx = await startMission();
+      const { worker } = await startWorker(ctx);
+      const release = await holdOrchestrator(ctx);
+      worker.emit({
+        reason: "completed",
+        turnId: null,
+        type: "turn_completed",
+      });
+      worker.emit({ delta: "More work", messageId: "next-message", type });
+      worker.emit({
+        reason: "completed",
+        turnId: null,
+        type: "turn_completed",
+      });
+      worker.emit({
+        reason: "completed",
+        turnId: null,
+        type: "turn_completed",
+      });
+      const notices = agentEvents(ctx);
+      expect(notices).toHaveLength(2);
+      expect(notices[0]?.state).toBe("discarded");
+      expect(notices[1]?.id).not.toBe(notices[0]?.id);
+      expect(notices[1]?.text).toContain("completed");
+      release();
+      await submittedNotice(ctx, notices[1]?.id ?? "");
+    }
+  );
+
+  it("does not reopen a closed Worker episode for an assistant message", async () => {
+    const event: AgentEvent = {
+      message: {
+        id: "late-assistant",
+        requestId: null,
+        role: "assistant",
+        sender: null,
+        text: "Earlier response",
+        thinking: "",
+        toolResults: [],
+        toolUses: [],
+      },
+      type: "message",
+    };
+    expect(workerEpisodeActivity(event)).toBeFalsy();
+    const ctx = await startMission();
+    const { worker } = await startWorker(ctx);
+    worker.emit({ reason: "completed", turnId: null, type: "turn_completed" });
+    worker.emit(event);
+    worker.emit({ reason: "completed", turnId: null, type: "turn_completed" });
+    expect(agentEvents(ctx)).toHaveLength(1);
+  });
 
   it("recognizes distinct SDK turns even when working-state notifications are absent", async () => {
     const ctx = await startMission();

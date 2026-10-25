@@ -383,7 +383,8 @@ export class PermissionBroker {
       }
       return {
         approved: false,
-        attribution: controller.signal.aborted ? "lifecycle" : "runtime",
+        attribution:
+          !timedOut && controller.signal.aborted ? "lifecycle" : "runtime",
         reason,
       };
     } finally {
