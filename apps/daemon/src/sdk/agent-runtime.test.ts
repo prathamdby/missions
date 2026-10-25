@@ -77,6 +77,10 @@ class MockTransport implements DroidClientTransport {
     settings: { modelId: "model", reasoningEffort: "medium" },
     workingState: "idle",
   };
+  mcpResult = {
+    servers: [] as unknown[],
+    summary: { connected: 0, connecting: 0, failed: 0, total: 0 },
+  };
   #handler: ((message: WireMessage) => void) | null = null;
   #errorHandler: ((error: Error) => void) | null = null;
 
@@ -149,6 +153,8 @@ class MockTransport implements DroidClientTransport {
       result = this.initializeResult;
     } else if (request.method === "droid.load_session") {
       result = this.loadResult;
+    } else if (request.method === "droid.list_mcp_servers") {
+      result = this.mcpResult;
     }
     this.receive({ id: request.id, result, type: "response" });
   }
@@ -184,7 +190,128 @@ const setup = (overrides: Partial<AgentRuntimeOptions> = {}) => {
 describe(AgentRuntime, () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
+
+  it.each([undefined, "saved-session"])(
+    "reports only safe MCP fields after startup (resume: %s)",
+    async (resumeId) => {
+      vi.useFakeTimers();
+      const onTiming = vi.fn<NonNullable<AgentRuntimeOptions["onTiming"]>>();
+      const log = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const { runtime, transport } = setup({ onTiming });
+      transport.mcpResult.servers = [
+        {
+          args: ["secret-argument"],
+          command: "secret-command",
+          env: { TOKEN: "secret-env" },
+          error: "secret-error",
+          headers: { Authorization: "secret-header" },
+          isManaged: false,
+          name: "fixture",
+          serverType: "stdio",
+          source: "project",
+          status: "failed",
+        },
+      ];
+      transport.onRequest = (request) => {
+        if (
+          request.method === "droid.initialize_session" ||
+          request.method === "droid.load_session"
+        ) {
+          transport.receive({
+            method: "droid.session_notification",
+            params: {
+              notification: {
+                servers: [
+                  {
+                    isManaged: false,
+                    name: "fixture",
+                    serverType: "stdio",
+                    source: "project",
+                    status: "connecting",
+                  },
+                ],
+                summary: { connected: 0, connecting: 1, failed: 0, total: 1 },
+                type: "mcp_status_changed",
+              },
+            },
+            type: "notification",
+          });
+          vi.setSystemTime(Date.now() + 32_000);
+        }
+      };
+      await runtime.start(resumeId);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onTiming).toHaveBeenCalledWith("startup.mcp.fixture", {
+        durationMs: 32_000,
+        status: "failed",
+      });
+      expect(log).toHaveBeenCalledWith(
+        `${JSON.stringify({
+          event: "mcp.server_status",
+          ms: 32_000,
+          name: "fixture",
+          status: "failed",
+        })}\n`
+      );
+      expect(
+        JSON.stringify([onTiming.mock.calls, log.mock.calls])
+      ).not.toContain("secret");
+      expect(
+        transport.requests.filter((r) => r.method === "droid.list_mcp_servers")
+      ).toHaveLength(1);
+      await runtime.close();
+    }
+  );
+
+  it("does not invent a connection duration when no transitions were observed", async () => {
+    const onTiming = vi.fn<NonNullable<AgentRuntimeOptions["onTiming"]>>();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const { runtime, transport } = setup({ onTiming });
+    transport.mcpResult.servers = [
+      {
+        isManaged: false,
+        name: "healthy",
+        serverType: "stdio",
+        source: "user",
+        status: "connected",
+      },
+    ];
+    await runtime.start();
+    await nextTurn();
+    expect(onTiming).toHaveBeenCalledWith("startup.mcp.healthy", {
+      durationMs: null,
+      status: "connected",
+    });
+    await runtime.close();
+  });
+
+  it.each(["reject", "hang"])(
+    "does not delay or fail startup when MCP diagnostics %s",
+    async (failure) => {
+      const onTiming = vi.fn<NonNullable<AgentRuntimeOptions["onTiming"]>>();
+      const { runtime, transport } = setup({ onTiming });
+      if (failure === "reject") {
+        transport.rejectMethod = "droid.list_mcp_servers";
+      } else {
+        transport.deferMethod = "droid.list_mcp_servers";
+      }
+      await expect(runtime.start()).resolves.toMatchObject({
+        sessionId: "session",
+      });
+      await runtime.submit("first", "hello", "steer");
+      expect(
+        transport.requests.some((r) => r.method === "droid.add_user_message")
+      ).toBeTruthy();
+      expect(
+        onTiming.mock.calls.some(([stage]) =>
+          String(stage).startsWith("startup.mcp.")
+        )
+      ).toBeFalsy();
+      await runtime.close();
+    }
+  );
 
   it.each([
     { role: "orchestrator" as const, systemPrompt: MAIN_PROMPT },
@@ -337,10 +464,11 @@ describe(AgentRuntime, () => {
     ).resolves.toStrictEqual({ modelId: "next", reasoningEffort: "low" });
     expect(transport.requests.map((request) => request.method)).toStrictEqual([
       "droid.initialize_session",
+      "droid.list_mcp_servers",
       "droid.update_session_settings",
       "droid.update_session_settings",
     ]);
-    expect(transport.requests[1]?.params).toStrictEqual({
+    expect(transport.requests[2]?.params).toStrictEqual({
       modelId: "next",
       reasoningEffort: "high",
     });
@@ -390,7 +518,7 @@ describe(AgentRuntime, () => {
       await runtime.updateModel({ modelId: "next", reasoningEffort: null });
       await expect(runtime.updateModel(plain)).resolves.toStrictEqual(plain);
       expect(
-        transport.requests.slice(1).map((request) => request.params)
+        transport.requests.slice(2).map((request) => request.params)
       ).toStrictEqual([
         { modelId: "plain" },
         { modelId: "next", reasoningEffort: "high" },
@@ -451,7 +579,9 @@ describe(AgentRuntime, () => {
           reasoningEffort,
         })
       ).rejects.toThrow(/does not support/u);
-      expect(transport.requests).toHaveLength(1);
+      expect(transport.requests.map((request) => request.method)).toStrictEqual(
+        ["droid.initialize_session", "droid.list_mcp_servers"]
+      );
       await runtime.close();
     }
   );
@@ -764,7 +894,7 @@ describe(AgentRuntime, () => {
     await runtime.submit("from-user", "hello", "steer");
     await runtime.addContext("sys:plan-guidance:1", "guidance");
     await runtime.setInteractionMode("spec");
-    const [worker, user, context, mode] = transport.requests.slice(1);
+    const [worker, user, context, mode] = transport.requests.slice(2);
     expect(worker).toMatchObject({
       id: "from-worker",
       method: "droid.add_user_message",
@@ -807,7 +937,7 @@ describe(AgentRuntime, () => {
     });
     await runtime.submit("queue", "queued", "queue");
     await runtime.submit("steer", "steered", "steer");
-    expect(transport.requests.slice(1)).toMatchObject([
+    expect(transport.requests.slice(2)).toMatchObject([
       { id: "queue", params: { queuePlacement: "end_of_loop" } },
       { id: "steer", params: { queuePlacement: "end_of_turn" } },
     ]);

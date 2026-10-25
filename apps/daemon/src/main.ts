@@ -16,7 +16,7 @@ const daemon = await createDaemon({
   config,
   titleGenerator: scripted
     ? null
-    : new TitleGenerator({ droidPath: config.droidPath }),
+    : (models) => new TitleGenerator({ droidPath: config.droidPath, models }),
   ...(scripted && {
     createRuntime: (options) =>
       new scripted.ScriptedRuntime(

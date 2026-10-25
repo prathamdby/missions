@@ -10,6 +10,7 @@ import { pollUntil, sleep } from "../lib/async";
 import { PermissionBroker } from "../permissions/permission-broker";
 import type { AgentContext } from "../permissions/permission-broker";
 import { ProcessSupervisor } from "../processes/process-supervisor";
+import { addHangingMcp, HANGING_MCP_NAME } from "../test/hanging-mcp";
 import { WriteLeaseRegistry } from "../workspaces/write-lease";
 import { AgentRuntime } from "./agent-runtime";
 import type { AgentEvent, AgentRuntimeOptions } from "./agent-runtime";
@@ -135,6 +136,52 @@ describe.runIf(process.env.MISSIONS_LIVE === "1")("live Droid runner", () => {
   afterAll(async () => {
     await Promise.allSettled(runtimes.map((runtime) => runtime.close()));
   });
+
+  it("keeps first-turn missions role tools available with a hanging inherited MCP server", async () => {
+    const dir = await workspace();
+    await addHangingMcp(dir);
+    const rec = recorder();
+    const marks = new Map<
+      string,
+      Record<string, string | number | boolean | null>
+    >();
+    const todos: unknown[] = [];
+    const handlers = {
+      updateTodos: (_agentId: string, input: { todos: unknown[] }) => {
+        todos.push(...input.todos);
+        return Promise.resolve("Todos saved");
+      },
+    } as unknown as RoleToolHandlers;
+    const runtime = makeRuntime(dir, supervisorFor(dir), rec, {
+      agentId: "hanging-mcp-main",
+      mcpServers: [
+        createRoleToolServer("orchestrator", "hanging-mcp-main", handlers),
+      ],
+      onTiming: (stage, detail) => marks.set(stage, detail),
+      role: "orchestrator",
+    });
+    try {
+      await runtime.start();
+      const health = await pollUntil(
+        () => Promise.resolve(marks.get(`startup.mcp.${HANGING_MCP_NAME}`)),
+        (mark) => mark !== undefined,
+        Date.now() + 5000,
+        50
+      );
+      expect(["connecting", "failed"]).toContain(health?.status);
+      expect(marks.get("startup.session_initialization")?.ok).toBeTruthy();
+      const done = rec.until(turnDone);
+      await runtime.submit(
+        "hanging-mcp-tool",
+        "Call the missions update_todos tool with one pending todo 'probe'. Do not call any other tools. Then reply DONE.",
+        "steer"
+      );
+      await done;
+      expect(todos).toHaveLength(1);
+    } finally {
+      await runtime.close();
+    }
+  }, 240_000);
 
   it("gives each agent its own client and process in one shared cwd without an SDK worktree", async () => {
     const dir = await workspace();

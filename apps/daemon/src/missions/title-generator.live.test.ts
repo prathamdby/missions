@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { ModelCatalog } from "../settings/models";
 import { TitleGenerator } from "./title-generator";
 
 const WORDS = /\s+/u;
@@ -12,11 +13,11 @@ describe("live Auto titles", () => {
     "names the change in 2–6 sentence-case words",
     { timeout: 30_000 },
     async () => {
-      const generator = new TitleGenerator({
-        droidPath:
-          process.env.MISSIONS_DROID_PATH ??
-          path.join(os.homedir(), ".local/bin/droid"),
-      });
+      const droidPath =
+        process.env.MISSIONS_DROID_PATH ??
+        path.join(os.homedir(), ".local/bin/droid");
+      const models = new ModelCatalog(droidPath);
+      const generator = new TitleGenerator({ droidPath, models });
       try {
         const title = await generator.generate({
           goal: "Fix keyboard focus rings on read-only panels and make message text selectable",
@@ -28,6 +29,7 @@ describe("live Auto titles", () => {
         expect(title).toMatch(/^[A-Z]/u);
       } finally {
         await generator.close();
+        await models.close();
       }
     }
   );

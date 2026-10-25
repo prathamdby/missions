@@ -45,6 +45,7 @@ export class ModelCatalog {
   readonly #cancel = new AbortController();
   #closed = false;
   #cache: { at: number; list: ModelList } | null = null;
+  #remembered: ModelList | null = null;
   #pending: Promise<ModelList> | null = null;
 
   constructor(droidPath: string, load?: ModelLoader) {
@@ -64,6 +65,9 @@ export class ModelCatalog {
     if (this.#closed) {
       return { models: [], source: "unavailable" };
     }
+    if (this.#remembered) {
+      return this.#remembered;
+    }
     if (this.#cache && Date.now() - this.#cache.at < CACHE_MS) {
       return this.#cache.list;
     }
@@ -74,8 +78,8 @@ export class ModelCatalog {
   }
 
   /**
-   * Seeds the cache from models a real session reported at initialization,
-   * so later resolves need no throwaway discovery process.
+   * Prefer models a real session reported over throwaway discovery, even
+   * after the probe cache expires. Each agent start refreshes this list.
    */
   remember(raw: readonly unknown[]) {
     if (this.#closed || raw.length === 0) {
@@ -83,7 +87,7 @@ export class ModelCatalog {
     }
     const models = raw.map(toModelOption).filter((model) => model !== null);
     if (models.length > 0) {
-      this.#cache = { at: Date.now(), list: { models, source: "droid" } };
+      this.#remembered = { models, source: "droid" };
     }
   }
 
@@ -104,9 +108,9 @@ export class ModelCatalog {
       const models = raw.map(toModelOption).filter((model) => model !== null);
       const list: ModelList = { models, source: "droid" };
       this.#cache = { at: Date.now(), list };
-      return list;
+      return this.#remembered ?? list;
     } catch {
-      return { models: [], source: "unavailable" };
+      return this.#remembered ?? { models: [], source: "unavailable" };
     }
   }
 
