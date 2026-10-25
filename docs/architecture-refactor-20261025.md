@@ -16,7 +16,7 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - [x] P5: Subtract unreachable permission completion machinery.
 - [x] P6: Hide mount-scoped command/sink assembly.
 - [x] P7: Extract pure conversation projection at existing memo boundaries.
-- [ ] P8: Final equivalence, structural restrictions, rollback and tool report.
+- [x] P8: Final equivalence, restrictions, rollback and explicit tooling-gap report.
 
 ## Baseline provenance
 
@@ -116,6 +116,20 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - Deletion: caller/test-only copies of those three projection stages. Renderer JSX/keys, clocks, refs/state, ResizeObserver, 96px pin threshold, WorkingLine's distinct predicate and Digest animation-frame logic are unchanged.
 - Restrictions: forbidden/allowed fixtures cover direct ChatColumn→timeline coupling and prohibit projection imports of React, rendering, daemon/SDK, command ownership or I/O. Type-only live-state/protocol inputs are allowed.
 - Revert: pure module/import commit; it changes no persisted representation.
+
+### P8, final proof and delivery record
+
+- Base: `888784f`. Action: complete the selected dependency restrictions, immutable-oracle audit, whole-diff cleanup review, final suites and downgrade exercise. Type-only commit `954d1e5` retains writable permission-entrypoint types, matching the old methods; emitted broker JavaScript is unchanged, and a type assertion guards the property flags.
+- Structural outcome: runtime adapters share contracts without reverse imports; publishing sees five exact facade capabilities; unreachable permission completion is gone; MissionView no longer assembles sinks; ChatColumn no longer assembles participant/inline-card/turn projection. P3/P4 remain explicitly rejected, not shallow extractions counted as completed modules.
+- Final proof: `pnpm gate` passes 105 files / 1,099 tests, lint/type/design checks and all eight doctor checks. `pnpm test:e2e` passes all 62 cases (59 desktop, three mobile). Native/process, Git/recovery, lease, permission, question/Plan, retry/admission and live-store suites remain included. Logs: `final-gate-confirmed.log`, `final-e2e-confirmed.log`; the earlier final run also passed before the executable-neutral type correction.
+- Integrity: the three preserved baseline-artifact SHA-256 checks pass. All 15 original oracle files match their P0 archive byte for byte. All 12 executable module hashes match the base, and all seven modified pre-existing test files have identical emitted JavaScript. No existing assertion, snapshot, tolerance, timeout, budget or configuration was weakened.
+- Rendering audit: the complete ChatColumn suffix from work-timing through JSX, and its goal/observer/current-agent/running block, are byte-identical to base. No tokens, UI primitives or generated styles changed.
+- Downgrade proof: export candidate.db from the unchanged deterministic durable oracle, then run the original `eafc235` source extracted from the preserved archive against separate throwaway copies of base.db and candidate.db. Both daemon reopen/recovery runs finish serially, with no shared writer. Full public snapshots, unknown fields, permission/grants, ordered replay, original journal receipt and exact HTTP stale error match. Semantic result SHA-256: `91e3a952eba9751036bcbfe00cbaf0528df88405cd7e607cb962188aac771fef`.
+- Reproduction artifacts: `p8-candidate-export.log`, `p8-downgrade.log`, `reopen-semantics.json` and `base-reopen-source/apps/daemon/src/test/architecture-downgrade.ts` under the preserved artifact directory. The old source uses the same pinned dependencies and unchanged workspace packages; no install or network/model call was needed.
+- Cleanup: prath-mode deslop against `eafc235...888784f` is CLEAN, 47 files, all six categories, zero kept edits, original empty index preserved. Scope SHA-256: `e26235d3221e1fc55464d670c9073a123eb3bea68872597a55505d9a1a81aac7`. The final documentation and permission-entrypoint type assertion were separately audited/formatted. Records: `deslop-scope.txt`, `deslop-scope.diff`, `deslop-audit.json`.
+- Coverage limits: no live SDK/model, paid first-token or remote publishing exercise ran. Offline native-process suites are not evidence of live model behavior. No new differential crash harness is claimed for rejected P3/P4. The requested crapper/dryer/mutator metrics remain blocked and unmeasured; this record does not claim full metric compliance or mutation-survivor analysis.
+- Deletion: no transition-only production bridge remains. The durable, pixel, and projection oracles remain independent protections, not dual production owners.
+- Rollback: stop the app/daemon pair, revert only the relevant structural commit through normal history and preserve user changes. Do not restore a stale database backup, run old/new writers together or repeat a native/Git effect. Code rollback cannot undo delivery, commits, pushes or deletions; retain receipts and reconcile their original intent. Use one normal reviewed PR to main, without forced history or bypassing integration controls.
 
 ### Deferred observations and blockers
 
