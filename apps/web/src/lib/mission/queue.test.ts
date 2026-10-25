@@ -1,6 +1,7 @@
 import type { QueueItem, TranscriptItem } from "@missions/protocol/missions";
 import { describe, expect, it } from "vitest";
 
+import { inlineIdleSubmissions, orchestratorTurnRunning } from "./idle-send";
 import {
   deliveredRequestIds,
   deliveryOf,
@@ -86,6 +87,61 @@ const userItem = (requestId: string | null): TranscriptItem => ({
   text: "hello",
   toolName: null,
   toolUseId: null,
+});
+
+describe("idle-send presentation", () => {
+  const submissions = {
+    a: { attachments: [], failed: false, id: "a", text: "hello" },
+  };
+
+  it("shows pending inline immediately and deduplicates on transcript acknowledgement", () => {
+    expect(inlineIdleSubmissions(submissions, {}, [])).toHaveLength(1);
+    const queue = { a: entry("a", "accepted") };
+    const inline = inlineIdleSubmissions(submissions, queue, []);
+    expect(
+      visibleQueue(
+        Object.values(queue),
+        NOW,
+        new Set(inline.map((item) => item.id))
+      )
+    ).toStrictEqual([]);
+    expect(
+      inlineIdleSubmissions(submissions, queue, [userItem("a")])
+    ).toStrictEqual([]);
+  });
+
+  it("returns failed and uncertain sends to the retry tray", () => {
+    for (const state of ["failed", "unknown"] as const) {
+      const queue = { a: entry("a", state) };
+      expect(inlineIdleSubmissions(submissions, queue, [])).toStrictEqual([]);
+      expect(visibleQueue(Object.values(queue), NOW)).toHaveLength(1);
+    }
+    expect(
+      inlineIdleSubmissions({ a: { ...submissions.a, failed: true } }, {}, [])
+    ).toStrictEqual([]);
+  });
+
+  it("uses Orchestrator turn state, including user waits, instead of mission activity", () => {
+    const idle = { role: "orchestrator" as const, status: "idle" as const };
+    expect(
+      orchestratorTurnRunning("running", [
+        idle,
+        { role: "worker", status: "working" },
+      ])
+    ).toBeFalsy();
+    for (const status of [
+      "working",
+      "starting",
+      "waiting_answer",
+      "waiting_permission",
+    ] as const) {
+      expect(
+        orchestratorTurnRunning("running", [{ ...idle, status }])
+      ).toBeTruthy();
+    }
+    expect(orchestratorTurnRunning("setting_up", [idle])).toBeTruthy();
+    expect(orchestratorTurnRunning("awaiting_approval", [idle])).toBeTruthy();
+  });
 });
 
 describe("transcript dedupe", () => {

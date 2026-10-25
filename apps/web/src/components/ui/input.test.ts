@@ -12,7 +12,10 @@ const publishClasses =
   "w-full rounded-sm bg-surface px-lg py-control text-sm leading-chat font-book tracking-tight text-text outline-none ring-1 ring-border placeholder:text-text-tertiary focus-visible:ring-border-strong";
 const classSet = (classes: string) => new Set(classes.split(" "));
 const renderedClasses = (markup: string) =>
-  classSet(/class="(?<classes>[^"]*)"/u.exec(markup)?.groups?.classes ?? "");
+  classSet(
+    /<(?:input|textarea)\b[^>]*class="(?<classes>[^"]*)"/u.exec(markup)?.groups
+      ?.classes ?? ""
+  );
 
 describe("publish fields", () => {
   it("preserves the title appearance and native input props", () => {
@@ -70,7 +73,7 @@ describe("publish fields", () => {
     );
     expect(markup).toContain('rows="3"');
     expect(markup).toContain(">Commit message</textarea>");
-    expect(Textarea(props).props.onChange).toBe(onChange);
+    expect(markup).toContain('data-testid="commit-message"');
     expect(markup).not.toMatch(/field-sizing-content|resize-none|shadow-/u);
   });
 });

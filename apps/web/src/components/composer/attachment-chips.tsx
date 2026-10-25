@@ -2,11 +2,10 @@
 
 import type { AttachmentRef } from "@missions/protocol/attachments";
 import { routes } from "@missions/protocol/routes";
-import Image from "next/image";
 import { useMemo, useSyncExternalStore } from "react";
 
-import { IconButton } from "@/components/ui/button";
-import { CloseIcon } from "@/components/ui/icons";
+import { AttachmentCard } from "@/components/ui/attachment-card";
+import { Button } from "@/components/ui/button";
 import { proxyUrl } from "@/lib/api/client";
 import { FilePreviewSource } from "@/lib/composer/file-preview";
 import type {
@@ -21,24 +20,12 @@ const FilePreview = ({
   attachment: AttachmentRef;
   url: string;
 }) => (
-  <a
-    className="flex min-w-0 items-center gap-sm text-xs text-text-secondary underline-offset-4 hover:underline"
-    href={url}
-    rel="noopener noreferrer"
-    target="_blank"
-  >
-    {attachment.kind === "image" ? (
-      <Image
-        alt={attachment.name}
-        className="size-12 rounded-sm object-cover"
-        height={48}
-        src={url}
-        unoptimized
-        width={48}
-      />
-    ) : null}
-    <span className="truncate">{attachment.name}</span>
-  </a>
+  <AttachmentCard
+    image={attachment.kind === "image"}
+    name={attachment.name}
+    size={attachment.size}
+    url={url}
+  />
 );
 
 export const AttachmentPreview = ({
@@ -55,7 +42,13 @@ export const AttachmentPreview = ({
 );
 
 /** Draft previews stay local even when a lost receipt moved the upload. */
-const DraftPreview = ({ file }: { file: DraftAttachment }) => {
+export const DraftPreview = ({
+  file,
+  onRemove,
+}: {
+  file: DraftAttachment;
+  onRemove?: () => void;
+}) => {
   const preview = useMemo(
     () => new FilePreviewSource(file.source),
     [file.source]
@@ -65,41 +58,51 @@ const DraftPreview = ({ file }: { file: DraftAttachment }) => {
     preview.snapshot,
     () => null
   );
-  return file.ref && url ? (
-    <FilePreview attachment={file.ref} url={url} />
-  ) : (
-    <span className="text-xs text-text-secondary">{file.name}</span>
+  return (
+    <AttachmentCard
+      image={file.source.type.startsWith("image/")}
+      name={file.name}
+      onRemove={onRemove}
+      size={file.source.size}
+      status={file.status}
+      url={url}
+    />
   );
 };
 
 export const AttachmentChips = ({
   files,
   draft,
+  onRetry,
 }: {
   files: readonly DraftAttachment[];
   draft: MessageDraft;
+  onRetry: (file: DraftAttachment) => void;
 }) =>
   files.length ? (
-    <ul aria-label="Attachments" className="flex flex-wrap gap-sm">
+    <ul
+      aria-label="Attachments"
+      className="flex flex-wrap gap-control pt-xs pr-xs"
+    >
       {files.map((file) => (
-        <li
-          className="flex min-w-0 items-center gap-xs rounded-sm bg-surface-overlay px-sm py-xs"
-          key={file.key}
-        >
-          {file.ref ? (
-            <DraftPreview file={file} />
-          ) : (
-            <span className="text-xs text-text-secondary">
-              {file.name} ·{" "}
-              {file.status === "uploading" ? "Uploading…" : file.error}
-            </span>
-          )}
-          <IconButton
-            icon={<CloseIcon />}
-            label={`Remove ${file.name}`}
-            onClick={() => draft.removeAttachment(file.key)}
-            size="sm"
+        <li className="flex max-w-full min-w-0 flex-col gap-sm" key={file.key}>
+          <DraftPreview
+            file={file}
+            onRemove={() => draft.removeAttachment(file.key)}
           />
+          {file.status === "failed" ? (
+            <div className="flex max-w-full flex-wrap items-center gap-sm">
+              <p
+                className="max-w-60 text-xs leading-sm break-words text-danger"
+                role="alert"
+              >
+                {file.name}: {file.error}
+              </p>
+              <Button onClick={() => onRetry(file)} size="sm" variant="ghost">
+                Retry
+              </Button>
+            </div>
+          ) : null}
         </li>
       ))}
     </ul>

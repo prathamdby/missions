@@ -69,6 +69,20 @@ export class MessageDraft {
     this.emit();
   }
 
+  retryAttachment(key: string): boolean {
+    const file = this.files.find((candidate) => candidate.key === key);
+    if (file?.status !== "failed") {
+      return false;
+    }
+    this.files = this.files.map((candidate) =>
+      candidate.key === key
+        ? { ...candidate, error: null, status: "uploading" }
+        : candidate
+    );
+    this.emit();
+    return true;
+  }
+
   failAttachment(key: string, error: string): void {
     this.files = this.files.map((file) =>
       file.key === key ? { ...file, error, status: "failed" } : file

@@ -124,6 +124,16 @@ export class MissionCommands {
   pendingModelUpdate = (role: ModelRole): boolean =>
     this.flights.has(`model:${role}`);
 
+  /** The daemon uses this operation ID as the message's request ID. */
+  messageIdFor(
+    input: MissionCommandInputs["message"],
+    occurrence: string
+  ): string {
+    return this.intents.idFor(
+      operationIntentKey(this.missionId, "message", input, occurrence)
+    );
+  }
+
   run<K extends MissionCommandKind>(
     kind: K,
     input: MissionCommandInputs[K],

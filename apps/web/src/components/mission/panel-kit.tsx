@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 
 import { ChevronDownIcon } from "@/components/mission/icons";
+import { OverflowArea } from "@/components/ui/overflow-area";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
@@ -42,7 +43,8 @@ export const PanelSection = ({
     <section
       aria-label={title}
       className={cn(
-        "flex flex-col",
+        "flex max-h-max min-h-5 flex-1 basis-0 flex-col",
+        !open && "flex-none",
         gap === "lg" && "gap-lg",
         gap === "sm" && "gap-sm",
         gap === "xs" && "gap-xs",
@@ -70,7 +72,11 @@ export const PanelSection = ({
           />
         </button>
       </h2>
-      {open ? children : null}
+      {open ? (
+        <OverflowArea aria-label={`${title} content`} size="panel">
+          {children}
+        </OverflowArea>
+      ) : null}
     </section>
   );
 };

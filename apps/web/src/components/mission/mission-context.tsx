@@ -5,6 +5,7 @@ import { createContext, use } from "react";
 import type { MissionLiveState } from "@/lib/live/mission-state";
 import type { LocalEntity } from "@/lib/live/mission-store";
 import type { MissionCommands } from "@/lib/mission/commands";
+import type { IdleSubmission } from "@/lib/mission/idle-send";
 
 export type PanelTab = "changes" | "digest" | "files" | "overview";
 
@@ -18,6 +19,11 @@ export interface MissionContextValue {
   refresh: () => Promise<boolean>;
   sessionError: unknown;
   selectedAgentId: string | null;
+  closedAgentIds: readonly string[];
+  closeAgent: (agentId: string) => void;
+  idleSubmissions: Readonly<Record<string, IdleSubmission>>;
+  presentIdleSubmission: (submission: IdleSubmission) => void;
+  failIdleSubmission: (id: string) => void;
   showAgent: (agentId: string) => void;
   /** Opens the details panel on a tab (docked or as a sheet). */
   showPanel: (tab: PanelTab) => void;
