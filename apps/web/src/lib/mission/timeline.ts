@@ -476,12 +476,60 @@ const groupedWork = (entry: TimelineEntry) =>
   entry.kind === "assistant" ||
   entry.kind === "preview";
 
+const failedCalls = (entry: TimelineEntry) =>
+  entry.kind === "tools"
+    ? entry.calls.filter((call) => call.result?.isError === true).length
+    : 0;
+
+/**
+ * Tool groups are rebuilt when earlier calls join them, so their entry id
+ * changes. Call and result ids survive that merge.
+ */
+const workEntryKeys = (entry: TimelineEntry) => {
+  if (entry.kind !== "tools") {
+    return [entry.id];
+  }
+  const ids = entry.calls.flatMap((call) =>
+    call.result ? [call.id, call.result.id] : [call.id]
+  );
+  return ids.length > 0 ? ids : [entry.id];
+};
+
+/** Manual open state follows the leaves, not the work part id. */
+export const rememberWorkOpen = (
+  manual: ReadonlyMap<string, boolean>,
+  entries: readonly TimelineEntry[],
+  open: boolean
+) => {
+  const next = new Map(manual);
+  for (const id of entries.flatMap(workEntryKeys)) {
+    next.set(id, open);
+  }
+  return next;
+};
+
+/** A stored choice wins when any current leaf was already toggled. */
+export const storedWorkOpen = (
+  manual: ReadonlyMap<string, boolean>,
+  entries: readonly TimelineEntry[],
+  running: boolean
+) => {
+  for (const id of entries.flatMap(workEntryKeys)) {
+    const open = manual.get(id);
+    if (open !== undefined) {
+      return open;
+    }
+  }
+  return running;
+};
+
 export type TurnPart =
   | { kind: "entries"; id: string; entries: TimelineEntry[] }
   | {
       kind: "work";
       id: string;
       entries: TimelineEntry[];
+      failures: number;
       running: boolean;
       start: string | null;
       end: string | null;
@@ -538,6 +586,7 @@ export const turnParts = (
           work = {
             end,
             entries: [],
+            failures: 0,
             id: `work:${first.id}:${entry.id}`,
             kind: "work",
             running: active,
@@ -545,6 +594,7 @@ export const turnParts = (
           };
           parts.push(work);
         }
+        work.failures += failedCalls(entry);
         work.entries.push(entry);
       } else {
         const last = parts.at(-1);

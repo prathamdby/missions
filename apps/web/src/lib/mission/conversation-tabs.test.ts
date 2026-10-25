@@ -35,6 +35,16 @@ describe(conversationTabs, () => {
     );
   });
 
+  it("ignores a repeated close and selects Orchestrator when the last worker closes", () => {
+    const state = { closed: ["one"], selected: "two" };
+    expect(conversationTabs(state, { agents, id: "one", kind: "close" })).toBe(
+      state
+    );
+    expect(
+      conversationTabs(state, { agents, id: "two", kind: "close" })
+    ).toStrictEqual({ closed: ["one", "two"], selected: "orch" });
+  });
+
   it("reopens and selects a closed tab from any entry point", () => {
     expect(
       conversationTabs(

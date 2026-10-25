@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import type { ReactNode } from "react";
 
 import { BrainIcon, ChevronRightIcon } from "@/components/mission/icons";
@@ -15,19 +14,23 @@ import { cn } from "@/lib/utils";
 
 export const TurnGroup = ({
   children,
+  failures,
+  onOpenChange,
+  open,
   running,
   start,
   end,
   now,
 }: {
   children: ReactNode;
+  failures: number;
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
   running: boolean;
   start: string | null;
   end: string | null;
   now: number;
 }) => {
-  const [manual, setManual] = useState<boolean | null>(null);
-  const open = manual ?? running;
   const duration =
     start && (running || end)
       ? formatDuration(
@@ -38,12 +41,21 @@ export const TurnGroup = ({
         )
       : null;
   return (
-    <Collapsible data-testid="turn-group" onOpenChange={setManual} open={open}>
+    <Collapsible
+      data-testid="turn-group"
+      onOpenChange={onOpenChange}
+      open={open}
+    >
       <CollapsibleHeader>
         <BrainIcon className="text-text-tertiary" />
         <span className="text-sm leading-sm font-book text-text-tertiary">
           {running ? "Work" : "Worked"}
         </span>
+        {failures > 0 ? (
+          <span className="font-mono text-2xs leading-xs text-warning">
+            {failures === 1 ? "Failed" : `${failures} failed`}
+          </span>
+        ) : null}
         {duration ? (
           <span className="font-mono text-2xs leading-xs text-text-tertiary">
             {duration}

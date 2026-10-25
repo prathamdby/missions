@@ -6,7 +6,13 @@ import type {
 } from "@missions/protocol/missions";
 import { describe, expect, it } from "vitest";
 
-import { buildTimeline, transcriptRows, turnParts } from "./timeline";
+import {
+  buildTimeline,
+  rememberWorkOpen,
+  storedWorkOpen,
+  transcriptRows,
+  turnParts,
+} from "./timeline";
 import type { TimelineEntry, ToolCall } from "./timeline";
 import { argumentOf, inputOf, toolCardKind, toolSummary } from "./tool-output";
 
@@ -254,6 +260,69 @@ describe("turn groups", () => {
       turnParts(entries, "orch", true)
         .filter((part) => part.kind === "work")
         .every((part) => part.start === at(1))
+    ).toBeTruthy();
+  });
+
+  it("counts failed tool results on the work disclosure", () => {
+    const entries = turnTimeline([
+      item(1, "user"),
+      item(2, "tool_call", { toolName: "Read", toolUseId: "ok" }),
+      item(3, "tool_result", { toolUseId: "ok" }),
+      item(4, "tool_call", { toolName: "Execute", toolUseId: "bad" }),
+      item(5, "tool_result", { isError: true, toolUseId: "bad" }),
+      item(6, "assistant"),
+    ]);
+    expect(
+      turnParts(entries, "orch", false).find((part) => part.kind === "work")
+    ).toMatchObject({ failures: 1, kind: "work" });
+  });
+
+  it("keeps a manual disclosure choice when earlier history rebuilds the work id", () => {
+    const partial = turnParts(
+      turnTimeline([
+        item(4, "tool_call", { toolUseId: "c" }),
+        item(5, "assistant"),
+      ]),
+      "orch",
+      false
+    ).find((part) => part.kind === "work");
+    const loaded = turnParts(
+      turnTimeline([
+        item(1, "user"),
+        item(2, "tool_call", { toolUseId: "b" }),
+        item(3, "assistant"),
+        item(4, "tool_call", { toolUseId: "c" }),
+        item(5, "assistant"),
+      ]),
+      "orch",
+      false
+    ).find((part) => part.kind === "work");
+    if (partial?.kind !== "work" || loaded?.kind !== "work") {
+      throw new Error("Expected both timelines to contain work");
+    }
+    expect(loaded.id).not.toBe(partial.id);
+    const opened = rememberWorkOpen(new Map(), partial.entries, true);
+    expect(storedWorkOpen(opened, loaded.entries, false)).toBeTruthy();
+    const closed = rememberWorkOpen(opened, partial.entries, false);
+    const running = turnParts(
+      turnTimeline([
+        item(1, "user"),
+        item(2, "tool_call", { toolUseId: "b" }),
+        item(4, "tool_call", { toolUseId: "c" }),
+      ]),
+      "orch",
+      true
+    ).find((part) => part.kind === "work");
+    if (running?.kind !== "work") {
+      throw new Error("Expected the running timeline to contain work");
+    }
+    expect(storedWorkOpen(closed, running.entries, true)).toBeFalsy();
+    expect(
+      storedWorkOpen(
+        closed,
+        turnTimeline([item(8, "tool_call", { toolUseId: "z" })]),
+        true
+      )
     ).toBeTruthy();
   });
 });

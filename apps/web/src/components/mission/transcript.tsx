@@ -1,7 +1,7 @@
 "use client";
 
 import type { TranscriptItem } from "@missions/protocol/missions";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import {
   AttachmentPreview,
@@ -24,7 +24,11 @@ import { Markdown } from "@/components/ui/markdown";
 import type { DraftAttachment } from "@/lib/mission/message-draft";
 import { todoProgress } from "@/lib/mission/overview";
 import { goalRequestId } from "@/lib/mission/queue";
-import { transcriptRows } from "@/lib/mission/timeline";
+import {
+  rememberWorkOpen,
+  storedWorkOpen,
+  transcriptRows,
+} from "@/lib/mission/timeline";
 import type { TimelineEntry, TurnPart } from "@/lib/mission/timeline";
 import { markFirstOutput } from "@/lib/perf-marks";
 
@@ -252,23 +256,33 @@ export const Transcript = ({
   parts: readonly TurnPart[];
   running: boolean;
   now: number;
-}) => (
-  <ol aria-label="Mission transcript" className="flex flex-col gap-lg">
-    {parts.map((part) => (
-      <li className="flex min-w-0 flex-col" key={part.id}>
-        {part.kind === "work" ? (
-          <TurnGroup
-            end={part.end}
-            now={now}
-            running={part.running}
-            start={part.start}
-          >
-            <TranscriptRows entries={part.entries} running={part.running} />
-          </TurnGroup>
-        ) : (
-          <TranscriptRows entries={part.entries} running={running} />
-        )}
-      </li>
-    ))}
-  </ol>
-);
+}) => {
+  const [manual, setManual] = useState(() => new Map<string, boolean>());
+  return (
+    <ol aria-label="Mission transcript" className="flex flex-col gap-lg">
+      {parts.map((part) => (
+        <li className="flex min-w-0 flex-col" key={part.id}>
+          {part.kind === "work" ? (
+            <TurnGroup
+              end={part.end}
+              failures={part.failures}
+              now={now}
+              onOpenChange={(open) => {
+                setManual((current) =>
+                  rememberWorkOpen(current, part.entries, open)
+                );
+              }}
+              open={storedWorkOpen(manual, part.entries, part.running)}
+              running={part.running}
+              start={part.start}
+            >
+              <TranscriptRows entries={part.entries} running={part.running} />
+            </TurnGroup>
+          ) : (
+            <TranscriptRows entries={part.entries} running={running} />
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+};
