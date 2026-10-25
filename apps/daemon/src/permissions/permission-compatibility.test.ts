@@ -1,6 +1,6 @@
 import { MissionSchema } from "@missions/protocol/missions";
 import { routes } from "@missions/protocol/routes";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { createDaemon } from "../daemon";
 import { testConfig } from "../test/fixtures";
@@ -130,6 +130,10 @@ describe("permission compatibility", () => {
   });
 
   it("keeps the synchronous StaleDecisionError and never calls completion storage", () => {
+    expectTypeOf<Pick<PermissionBroker, "pending" | "decide">>().toEqualTypeOf<{
+      pending: PermissionBroker["pending"];
+      decide: PermissionBroker["decide"];
+    }>();
     const broker = new PermissionBroker({
       acquireWriteLease: () => Promise.resolve(),
       context: () => {

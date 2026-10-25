@@ -391,8 +391,8 @@ export class PermissionBroker {
     }
   }
 
-  readonly pending = pendingPermissions;
-  readonly decide = decidePermission;
+  pending = pendingPermissions;
+  decide = decidePermission;
 
   /** Pause: abort every lease waiter for the mission. */
   cancelMission(missionId: string) {
