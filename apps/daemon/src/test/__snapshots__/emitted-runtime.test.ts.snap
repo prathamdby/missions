@@ -1,0 +1,18 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`type-only executable equivalence > preserves executable code across type-only boundary changes > eafc235 executable modules 1`] = `
+{
+  "apps/daemon/src/daemon.ts": "caf1a487dd644dec4fbcf2a364fc9561cd459ffc5effd4f221e220ce4a44b966",
+  "apps/daemon/src/db/journal.ts": "a6615884758b522f0b4962afbb4c941dbd7e8e94d82a16f71f6ce9eb3446af9c",
+  "apps/daemon/src/db/normalize.ts": "b30af718db8371c2cf4230b017c63f245183a0d0ef9220e2839856881c7d3de5",
+  "apps/daemon/src/db/store.ts": "c03f2930c07fe35fa4708056ff0a01828b447062b473e7cd921f4185e49c11bd",
+  "apps/daemon/src/git/git-service.ts": "234826975673ae75e503cd3fddfe403bbc0ba6a66378d6d01755fad331f43afc",
+  "apps/daemon/src/missions/mission-service.ts": "62d3e9f2347c8be732f54087e8a111053c82b44cd66c490262d963ee47cb749b",
+  "apps/daemon/src/sdk/agent-runtime.ts": "bc9508bce546bed1ef9b0ea228e3e735756a31f56d7d0a17a5d583bba5783df8",
+  "apps/daemon/src/sdk/native-queue.ts": "12595c16dff3a7306df3c80b5e037a580af3dd9617ada60116edb2ad50f135f1",
+  "apps/daemon/src/sdk/prompts.ts": "7c2d32d59c940bbbb0a9d5be9973b1efa364ea320bd6e0e1acb090e248a6bb6e",
+  "apps/daemon/src/sdk/role-tools.ts": "d77ff72fbcaa7315fa661a98f892198be758162be0af0702680fd95efeafe63a",
+  "apps/daemon/src/test/fake-runtime.ts": "37afc00f5bc6dc969e439f36da5aac064e164be994a44a280ed1456e0935733d",
+  "apps/daemon/src/test/scripted-runtime.ts": "3550ff5c08fbcb707cd2521e334b7b6ebb557b993cf9294cced37b0752c3538b",
+}
+`;
