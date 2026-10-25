@@ -1,11 +1,13 @@
 import type { Grant, PermissionRequest } from "@missions/protocol/missions";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PermissionToolUse } from "../sdk/agent-runtime";
+import { WriteLeaseRegistry } from "../workspaces/write-lease";
 import {
   autoApproves,
   classifyToolUse,
   PermissionBroker,
+  WRITE_LEASE_WAIT_TIMEOUT_MS,
 } from "./permission-broker";
 import type { AgentContext } from "./permission-broker";
 
@@ -51,8 +53,7 @@ const setup = (overrides: Partial<AgentContext> = {}) => {
       saveRequest: (request) => requests.push(request),
     },
   });
-  const lastPending = () => requests.findLast((r) => r.status === "pending");
-  return { broker, ctx, grants, lastPending, leases, requests };
+  return { broker, ctx, grants, leases, requests };
 };
 
 describe(classifyToolUse, () => {
@@ -122,6 +123,30 @@ describe(classifyToolUse, () => {
 });
 
 describe(PermissionBroker, () => {
+  it.each(["propose_mission", "start_mission_run", "recommend_mission"])(
+    "denies the built-in %s confirmation before YOLO approval",
+    async (type) => {
+      const { broker, leases, requests } = setup();
+      const use: PermissionToolUse = {
+        confirmationType: "custom",
+        details: { type },
+        input: {},
+        toolName: type,
+        toolUseId: "built-in-mission",
+      };
+      const classified = classifyToolUse(use, "/w", "missions");
+      expect(classified.category).toBe("blocked");
+      expect(autoApproves(classified)).toBeFalsy();
+      await expect(broker.ask("a", [use])).resolves.toMatchObject({
+        approved: false,
+        attribution: "policy",
+        reason: expect.stringContaining("disabled"),
+      });
+      expect(leases).toStrictEqual([]);
+      expect(requests).toStrictEqual([]);
+    }
+  );
+
   it("keeps exact command identity for quoted whitespace and excludes legacy keys", () => {
     const first = classifyToolUse(
       exec('printf "%s" "two  spaces"'),
@@ -188,23 +213,6 @@ describe(PermissionBroker, () => {
     expect(leases).toHaveLength(0);
   });
 
-  it("rechecks current Plan mode and capabilities after a pending approval", async () => {
-    const { broker, ctx, lastPending } = setup();
-    const pending = broker.ask("a", [create("/outside/x")]);
-    ctx.canWrite = false;
-    expect(() =>
-      broker.decide(lastPending()?.id ?? "", "always_allow", 1)
-    ).toThrow(/earlier run/u);
-    await expect(pending).resolves.toMatchObject({ approved: false });
-    ctx.canWrite = true;
-    const second = broker.ask("a", [create("/outside/x")]);
-    ctx.planMode = true;
-    expect(() =>
-      broker.decide(lastPending()?.id ?? "", "approve_once", 1)
-    ).toThrow(/earlier run/u);
-    await expect(second).resolves.toMatchObject({ approved: false });
-  });
-
   it.each(["orchestrator", "worker"] as const)(
     "Plan mode keeps the %s read-only before automatic approval",
     async (role) => {
@@ -244,6 +252,7 @@ describe(PermissionBroker, () => {
         async (use) => {
           await expect(broker.ask("a", [use])).resolves.toStrictEqual({
             approved: false,
+            attribution: "lifecycle",
             reason: "Mission is paused",
           });
         }
@@ -308,47 +317,139 @@ describe(PermissionBroker, () => {
     ).resolves.toMatchObject({ approved: true });
   });
 
-  it("stores scoped Always allow grants that later auto-approve", async () => {
-    const { broker, grants, lastPending } = setup();
-    const first = broker.ask("a", [create("/outside/a.ts")]);
-    expect(broker.pending("m1")).toMatchObject([
-      { allowAlways: true, kind: "tool", status: "pending" },
-    ]);
-    await Promise.resolve();
-    broker.decide(lastPending()?.id ?? "", "always_allow", 1);
-    await expect(first).resolves.toMatchObject({ approved: true });
-    expect(lastPending()).toMatchObject({ allowAlways: true, kind: "tool" });
-    expect(grants[0]).toMatchObject({
-      action: "Create",
-      normalizedRequest: "/outside/a.ts",
-      projectId: "p1",
-      role: "worker",
-      workspacePath: "/w",
+  it.each(["worker", "orchestrator"] as const)(
+    "runs %s approval-free after capability gates",
+    async (role) => {
+      const { broker, requests, grants, leases } = setup({ role });
+      const decisions = await Promise.all(
+        [
+          create("/outside/a.ts"),
+          {
+            confirmationType: "custom",
+            details: {},
+            input: {},
+            toolName: "Mystery",
+            toolUseId: "unknown",
+          },
+        ].map((use) => broker.ask("a", [use]))
+      );
+      expect(decisions).toStrictEqual([
+        { approved: true, via: "policy" },
+        { approved: true, via: "policy" },
+      ]);
+      expect(requests).toStrictEqual([]);
+      expect(grants).toStrictEqual([]);
+      expect(leases).toStrictEqual(["a", "a"]);
+      expect(() => broker.decide("historical", "approve_once", 1)).toThrow(
+        /no longer pending/u
+      );
+    }
+  );
+
+  it.each([
+    "git clone https://example.invalid/repo /outside/repo",
+    "git -C /outside init",
+  ])(
+    "conservatively denies Worker %s with an actionable reason",
+    async (command) => {
+      const { broker, requests } = setup();
+      await expect(broker.ask("a", [exec(command)])).resolves.toMatchObject({
+        approved: false,
+        attribution: "policy",
+        reason: expect.stringContaining("obtain the dependency"),
+      });
+      expect(requests).toStrictEqual([]);
+    }
+  );
+
+  it("rechecks capability changes while waiting for a write lease", async () => {
+    const { broker, ctx } = setup();
+    const pending = broker.ask("a", [create("/outside/x")]);
+    ctx.canWrite = false;
+    await expect(pending).resolves.toMatchObject({
+      approved: false,
+      reason: "This assignment is read-only",
     });
-    await expect(
-      broker.ask("a", [create("/outside/a.ts")])
-    ).resolves.toMatchObject({
-      approved: true,
-      via: "grant",
+    ctx.canWrite = true;
+    const second = broker.ask("a", [create("/outside/x")]);
+    ctx.planMode = true;
+    await expect(second).resolves.toMatchObject({
+      approved: false,
+      reason: expect.stringContaining("Plan mode"),
     });
   });
 
-  it("rejects stale decisions and cancels waiters on Pause", async () => {
-    const { broker, ctx, lastPending } = setup();
-    const pending = broker.ask("a", [create("/outside/a.ts")]);
-    await Promise.resolve();
-    const id = lastPending()?.id ?? "";
-    expect(() => broker.decide(id, "approve_once", 0)).toThrow(/earlier run/u);
-    await expect(pending).resolves.toMatchObject({ approved: false });
+  it.each(["timeout", "pause", "grant"] as const)(
+    "settles lease %s without orphaning or releasing the current writer",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const registry = new WriteLeaseRegistry();
+      await registry.acquire("/w", "writer");
+      const { ctx } = setup();
+      const broker = new PermissionBroker({
+        acquireWriteLease: (id, signal) => registry.acquire("/w", id, signal),
+        context: () => ctx,
+        roleToolServer: "missions",
+        store: {
+          addGrant: () => {},
+          listGrants: () => [],
+          saveRequest: () => {},
+        },
+      });
+      try {
+        const decision = broker.ask("waiting", [create("/w/x")]);
+        expect(registry.waiting("/w")).toStrictEqual(["waiting"]);
+        if (outcome === "timeout") {
+          await vi.advanceTimersByTimeAsync(WRITE_LEASE_WAIT_TIMEOUT_MS);
+        } else if (outcome === "pause") {
+          ctx.fenced = true;
+          broker.cancelMission("m1");
+        } else {
+          registry.release("/w", "writer");
+          await decision;
+          await vi.advanceTimersByTimeAsync(WRITE_LEASE_WAIT_TIMEOUT_MS);
+        }
+        const expected = {
+          grant: { approved: true },
+          pause: {
+            approved: false,
+            attribution: "lifecycle",
+            reason: expect.stringContaining("paused"),
+          },
+          timeout: {
+            approved: false,
+            attribution: "runtime",
+            reason: expect.stringContaining("timed out"),
+          },
+        };
+        await expect(decision).resolves.toMatchObject(expected[outcome]);
+        expect(registry.waiting("/w")).toStrictEqual([]);
+        expect(registry.holder("/w")).toBe(
+          outcome === "grant" ? "waiting" : "writer"
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
-    const second = broker.ask("a", [create("/outside/b.ts")]);
-    await Promise.resolve();
-    ctx.fenced = true;
-    broker.cancelMission("m1");
-    await expect(second).resolves.toMatchObject({ approved: false });
-    await expect(broker.ask("a", [exec("ls", "low")])).resolves.toMatchObject({
+  it("attributes internal lease acquisition failures honestly", async () => {
+    const { ctx } = setup();
+    const broker = new PermissionBroker({
+      acquireWriteLease: () =>
+        Promise.reject(new Error("lease storage unavailable")),
+      context: () => ctx,
+      roleToolServer: "missions",
+      store: {
+        addGrant: () => {},
+        listGrants: () => [],
+        saveRequest: () => {},
+      },
+    });
+    await expect(broker.ask("a", [create("/w/a")])).resolves.toMatchObject({
       approved: false,
-      reason: "Mission is paused",
+      attribution: "runtime",
+      reason: expect.stringContaining("lease storage unavailable"),
     });
   });
 

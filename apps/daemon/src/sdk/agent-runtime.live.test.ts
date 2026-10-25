@@ -91,7 +91,8 @@ const workspace = async () => {
 
 const runtimes: AgentRuntime[] = [];
 const askNobody = () => Promise.resolve({ answers: [], cancelled: true });
-const allowAll = () => Promise.resolve(true);
+const allowAll = () =>
+  Promise.resolve({ approved: true as const, via: "policy" as const });
 
 const supervisorFor = (dir: string) =>
   new ProcessSupervisor({
@@ -368,7 +369,7 @@ describe.runIf(process.env.MISSIONS_LIVE === "1")("live Droid runner", () => {
             exits.push(String(use.details.plan ?? ""));
           }
         }
-        return Promise.resolve(true);
+        return Promise.resolve({ approved: true, via: "policy" });
       },
       role: "orchestrator",
     });
@@ -564,7 +565,7 @@ describe.runIf(process.env.MISSIONS_LIVE === "1")("live Droid runner", () => {
         mcpServers: [createRoleToolServer("worker", "gate", handlers)],
         onPermission: async (ask) => {
           const result = await broker.ask(ask.agentId, ask.toolUses);
-          return result.approved;
+          return result;
         },
       });
       await runtime.start();

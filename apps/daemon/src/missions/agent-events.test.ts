@@ -8,9 +8,12 @@ import {
   parseAgentEventId,
   workerBlockedId,
   workerFailedId,
+  workerStalledId,
+  workerStallResolvedId,
   workerUnblockedId,
 } from "./agent-events";
 import type { AgentEventFacts } from "./agent-events";
+import { workerTurnKey } from "./worker-turns";
 
 const facts = (changes: Partial<AgentEventFacts> = {}): AgentEventFacts => ({
   assignmentStatus: null,
@@ -20,6 +23,63 @@ const facts = (changes: Partial<AgentEventFacts> = {}): AgentEventFacts => ({
 });
 
 describe("agent events", () => {
+  it("round-trips bounded stalled and resolved IDs even for long native turn IDs", () => {
+    const assignmentId = randomUUID();
+    const turnKey = workerTurnKey("session".repeat(100), "turn".repeat(100));
+    const ids = [
+      workerStalledId(assignmentId, 12, turnKey),
+      workerStallResolvedId(assignmentId, 12, turnKey),
+    ];
+    expect(ids.map(parseAgentEventId)).toStrictEqual([
+      { assignmentId, epoch: 12, kind: "worker-stalled", turnKey },
+      { assignmentId, epoch: 12, kind: "worker-stall-resolved", turnKey },
+    ]);
+    expect(
+      ids.every((id) => IdSchema.safeParse(`${id}:record`).success)
+    ).toBeTruthy();
+    expect(workerTurnKey("first-session", "turn")).not.toBe(
+      workerTurnKey("second-session", "turn")
+    );
+    expect(workerTurnKey("first-session", "turn")).toBe(
+      workerTurnKey("first-session", "turn")
+    );
+    expect(
+      ["evt:worker-stalled:a:bad:turn", "evt:worker-stalled:a:1:"].map(
+        parseAgentEventId
+      )
+    ).toStrictEqual([null, null]);
+  });
+
+  it("requires the current closed episode, running assignment and epoch for a stall, not idle status", () => {
+    const event = {
+      assignmentId: "assignment",
+      epoch: 3,
+      kind: "worker-stalled",
+      turnKey: "turn",
+    } as const;
+    const current = {
+      assignmentStatus: "running",
+      stallCurrent: true,
+    } as const;
+    expect([
+      agentEventStillValid(event, facts(current)),
+      agentEventStillValid(event, facts({ ...current, stallCurrent: false })),
+      agentEventStillValid(
+        event,
+        facts({ ...current, assignmentStatus: "handed_off" })
+      ),
+      agentEventStillValid(event, facts({ ...current, missionEpoch: 4 })),
+      agentEventStillValid(
+        { ...event, kind: "worker-stall-resolved" },
+        facts({ ...current, stallCurrent: false })
+      ),
+      agentEventStillValid(
+        { ...event, kind: "worker-stall-resolved" },
+        facts(current)
+      ),
+    ]).toStrictEqual([true, false, false, false, true, false]);
+  });
+
   it("round-trips every event ID within the protocol ID limit", () => {
     const waitId = randomUUID();
     const ids = [

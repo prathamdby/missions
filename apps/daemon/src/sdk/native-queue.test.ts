@@ -84,6 +84,49 @@ describe(NativeQueueTracker, () => {
     expect(tracker.get("a")?.state).toBe("sent");
   });
 
+  it.each(["submitting", "sent", "removed", "discarded"] as const)(
+    "reconciles a late ACK after timeout without regressing %s",
+    (state) => {
+      const { tracker } = setup();
+      tracker.submitted("late", "text", "steer");
+      if (state === "sent") {
+        tracker.consumed("late");
+      }
+      if (state === "removed") {
+        tracker.removeConfirmed("late");
+      }
+      if (state === "discarded") {
+        tracker.discarded("late", "text");
+      }
+      tracker.submitFailed("late", "timeout", false);
+      expect(tracker.get("late")?.state).toBe(
+        state === "submitting" ? "unknown" : state
+      );
+      const previousError = tracker.get("late")?.error;
+      tracker.admitted("late");
+      expect(tracker.get("late")).toMatchObject({
+        error: state === "submitting" ? null : previousError,
+        state: state === "submitting" ? "queued" : state,
+      });
+    }
+  );
+
+  it("reconciles late rejection, removal and consumption after uncertain submission without replay", () => {
+    const { tracker } = setup();
+    tracker.submitted("late", "text", "steer");
+    tracker.submitFailed("late", "timeout", false);
+    tracker.removing("late");
+    tracker.admitted("late");
+    expect(tracker.get("late")?.state).toBe("removing");
+    tracker.removeConfirmed("late");
+    tracker.submitFailed("late", "late rejection", true);
+    expect(tracker.get("late")?.state).toBe("removed");
+    tracker.consumed("late");
+    tracker.admitted("late");
+    tracker.submitFailed("late", "disconnected", false);
+    expect(tracker.get("late")?.state).toBe("sent");
+  });
+
   it("keeps sent when consumption is observed before the add response", () => {
     const { tracker } = setup();
     tracker.submitted("a", "hi", "queue");

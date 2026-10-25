@@ -269,8 +269,8 @@ export class ScriptedRuntime implements RuntimeHandle {
     this.#busy = true;
     this.#interrupted = false;
     const text = steered?.text ?? this.#deliver(next);
-    this.#emit({ state: "working", type: "working_state" });
-    let reason = "end_turn";
+    this.#emit({ state: "thinking", type: "working_state" });
+    let reason = "completed";
     try {
       await this.#turn(next, text);
     } catch (error) {
@@ -281,7 +281,7 @@ export class ScriptedRuntime implements RuntimeHandle {
           type: "error",
         });
       }
-      reason = "interrupted";
+      reason = error === INTERRUPTED ? "cancelled" : "error";
     }
     this.#turns += 1;
     this.#busy = false;
@@ -362,17 +362,17 @@ export class ScriptedRuntime implements RuntimeHandle {
         },
       ],
     });
-    if (approved) {
+    if (approved.approved) {
       await writeFile(filePath, content);
     }
     this.#emit({
-      content: approved ? `Created ${file}` : "The user denied this change",
-      isError: !approved,
+      content: approved.approved ? `Created ${file}` : approved.reason,
+      isError: !approved.approved,
       toolUseId,
       type: "tool_result",
     });
     await this.#step();
-    return approved;
+    return approved.approved;
   }
 
   async #turn(requestId: string, text: string) {
@@ -493,12 +493,12 @@ export class ScriptedRuntime implements RuntimeHandle {
       ],
     });
     this.#emit({
-      content: approved ? "Plan approved" : "The user wants changes",
-      isError: !approved,
+      content: approved.approved ? "Plan approved" : approved.reason,
+      isError: !approved.approved,
       toolUseId,
       type: "tool_result",
     });
-    if (!approved) {
+    if (!approved.approved) {
       return;
     }
     this.#mode = "auto";

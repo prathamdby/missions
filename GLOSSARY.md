@@ -22,9 +22,9 @@ Missions coordinate agents working toward a goal in a local project.
 
 **Agent message**: A message from one agent to another in the same mission, such as a Worker's question or the Orchestrator's reply. Its sender is set by the daemon, and it is task context, never user authorization.
 
-**Agent event**: An automated daemon notice telling the Orchestrator that a Worker failed, started waiting on the user, or stopped waiting. It is task context, never user authorization.
+**Agent event**: An automated daemon notice telling the Orchestrator that a Worker failed, stalled without a handoff, resumed after a stall, started waiting on the user, or stopped waiting. It is task context, never user authorization.
 
-**Work mode**: The default execution mode, in which agents act directly under the fixed High permission policy.
+**Work mode**: The default execution mode, in which agents act directly under approval-free YOLO after mandatory capability gates.
 
 **Plan mode**: A read-only execution mode for every agent, entered only when the Orchestrator calls `missions.enter_plan` in response to plain-language planning requests or its judgment. The Orchestrator presents a plan for approval; approval returns the mission to Work mode.
 
@@ -36,7 +36,11 @@ Missions coordinate agents working toward a goal in a local project.
 
 **Steer**: Delivery at the agent's next tool boundary. _Avoid_: Interrupt
 
-**Permission**: Authorization for an agent action that requires approval.
+**Permission**: A broker verdict for an agent action. Tools passing mandatory gates are approved automatically; denials carry a reason and attribution. Plan approval and intentional questions still require the user.
+
+**Stalled Worker**: A Worker whose turn ended without a handoff. Its assignment stays running until it resumes, hands off or fails; the main agent receives a notice and, if needed, a correction for that specific turn.
+
+**Unknown delivery**: An attempted message submission whose admission or consumption is uncertain, including after a 30-second acknowledgement deadline. It is never replayed automatically.
 
 **Publish**: Sharing mission changes through a commit, push, or pull request.
 

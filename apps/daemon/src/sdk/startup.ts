@@ -10,7 +10,7 @@ export const MODEL_PROBE_TIMEOUT_MS = 30_000;
 export const withDeadline = async <T>(
   operation: Promise<T>,
   timeoutMs: number,
-  message: string,
+  message: string | Error,
   signal?: AbortSignal
 ): Promise<T> => {
   const deadline = Promise.withResolvers<never>();
@@ -21,7 +21,10 @@ export const withDeadline = async <T>(
     cancel();
   }
   const timer = setTimeout(
-    () => deadline.reject(new Error(message)),
+    () =>
+      deadline.reject(
+        typeof message === "string" ? new Error(message) : message
+      ),
     timeoutMs
   );
   try {

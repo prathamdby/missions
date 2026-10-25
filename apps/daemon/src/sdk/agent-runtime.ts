@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   DroidClient,
   ListMcpServersResultSchema,
@@ -47,6 +49,16 @@ export interface PermissionAsk {
   agentId: string;
   toolUses: PermissionToolUse[];
 }
+
+export type PermissionVerdict =
+  | { approved: true; via: "policy" | "grant" | "user" }
+  | {
+      approved: false;
+      reason: string;
+      attribution: "policy" | "lifecycle" | "runtime" | "user";
+    };
+
+export const DENIAL_CONTEXT_TIMEOUT_MS = 2000;
 
 export interface AskUserAsk {
   agentId: string;
@@ -107,7 +119,18 @@ export type AgentEvent =
   | { type: "turn_completed"; reason: string; turnId: string | null }
   | { type: "queue"; entry: NativeQueueEntry }
   | { type: "retry"; reason: string; attempt: number }
-  | { type: "error"; message: string; errorType: string | null }
+  | {
+      type: "permission_denied";
+      toolUseIds: string[];
+      reason: string;
+      attribution: string;
+    }
+  | {
+      type: "error";
+      message: string;
+      errorType: string | null;
+      exitCode?: number;
+    }
   | { type: "title"; title: string }
   | { type: "process_exit"; message: string };
 
@@ -123,7 +146,7 @@ export interface AgentRuntimeOptions {
   enabledToolIds?: string[];
   supervisor: ProcessSupervisor;
   onEvent: (event: AgentEvent) => void;
-  onPermission: (ask: PermissionAsk) => Promise<boolean>;
+  onPermission: (ask: PermissionAsk) => Promise<PermissionVerdict>;
   onAskUser: (ask: AskUserAsk) => Promise<AskUserAnswer>;
   /** Test seam: a fake transport exercises the adapter, not CLI scheduling. */
   createTransport?: () => DroidClientTransport | Promise<DroidClientTransport>;
@@ -289,6 +312,7 @@ const NOTIFICATION_EVENTS: Record<
   }),
   error: (n) => ({
     errorType: optionalString(n.errorType),
+    ...(typeof n.exitCode === "number" ? { exitCode: n.exitCode } : {}),
     message: str(n.message),
     type: "error",
   }),
@@ -488,18 +512,58 @@ export class AgentRuntime {
         toolUseId: use.toolUse.id,
       }));
       const offered = new Set(params.options.map((option) => option.value));
-      let approved = false;
+      let verdict: PermissionVerdict;
       try {
-        approved = await onPermission({ agentId, toolUses });
-      } catch {
-        approved = false;
+        verdict = await onPermission({ agentId, toolUses });
+      } catch (error) {
+        verdict = {
+          approved: false,
+          attribution: "runtime",
+          reason: `Permission evaluation failed: ${errorMessage(error)}`,
+        };
       }
-      // Never answer with a persistent "always" outcome: grants live in the
-      // broker so plan, publish, and Pause gates keep applying.
-      if (approved && offered.has(ToolConfirmationOutcome.ProceedOnce)) {
+      // Approve only this invocation so every request passes the broker's
+      // mandatory gates, including Plan mode, publishing, and Pause.
+      if (
+        verdict.approved &&
+        offered.has(ToolConfirmationOutcome.ProceedOnce)
+      ) {
         return ToolConfirmationOutcome.ProceedOnce;
       }
-      return ToolConfirmationOutcome.Cancel;
+      const reason = verdict.approved
+        ? "The SDK did not offer one-time approval. Ask the main agent to inspect the tool confirmation."
+        : verdict.reason.trim() || "Permission was denied without a reason";
+      const attribution = verdict.approved ? "runtime" : verdict.attribution;
+      onEvent({
+        attribution,
+        reason,
+        toolUseIds: toolUses.map((use) => use.toolUseId),
+        type: "permission_denied",
+      });
+      const source =
+        attribution === "user"
+          ? "This is the user's explicit plan decision, not an automatic tool-policy denial."
+          : "This is daemon permission feedback, not a user cancellation.";
+      try {
+        await withDeadline(
+          this.addContext(
+            `sys:permission-denied:${randomUUID()}`,
+            `Tool permission denied (${attribution}) for ${toolUses.map((use) => `${use.toolName} [${use.toolUseId}]`).join(", ")}: ${reason}. ${source}`
+          ),
+          DENIAL_CONTEXT_TIMEOUT_MS,
+          "Permission denial context acknowledgement timed out"
+        );
+      } catch (error) {
+        onEvent({
+          errorType: "PermissionContextError",
+          message: `Could not confirm model-visible denial context: ${errorMessage(error)}`,
+          type: "error",
+        });
+      }
+      return {
+        comment: reason,
+        selectedOption: ToolConfirmationOutcome.Cancel,
+      };
     });
     client.setAskUserHandler(async (event) => {
       const { toolCallId, questions } = event.params;
