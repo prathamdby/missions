@@ -9,7 +9,11 @@ import type {
   ToolUseSummary,
 } from "@missions/protocol/missions";
 
-import type { PermissionToolUse } from "../sdk/agent-runtime";
+import { errorMessage } from "../lib/async";
+import type {
+  PermissionToolUse,
+  PermissionVerdict,
+} from "../sdk/agent-runtime";
 import { commandCategory, isHighImpactGit } from "./command-policy";
 import { StaleDecisionError } from "./stale-decision-error";
 
@@ -66,9 +70,9 @@ export interface PermissionBrokerOptions {
   now?: () => Date;
 }
 
-export type AskResult =
-  | { approved: true; via: "policy" | "grant" | "user" }
-  | { approved: false; reason: string };
+export type AskResult = PermissionVerdict;
+
+export const WRITE_LEASE_WAIT_TIMEOUT_MS = 30_000;
 
 const READ_TOOLS = new Set([
   "Read",
@@ -231,25 +235,8 @@ export const flattenToolUses = (uses: PermissionToolUse[]) =>
     }));
   });
 
-/** Fixed High policy; workspace-external edits and unknown tools still ask. */
-export const autoApproves = (use: ClassifiedUse) => {
-  switch (use.category) {
-    case "edit": {
-      return use.impact !== "high";
-    }
-    case "read":
-    case "execute":
-    case "vcs":
-    case "mcp":
-    case "role_tool":
-    case "publish": {
-      return true;
-    }
-    default: {
-      return false;
-    }
-  }
-};
+/** YOLO approval follows mandatory capability gates, never replaces them. */
+export const autoApproves = (use: ClassifiedUse) => use.category !== "blocked";
 
 const isWritable = (use: ClassifiedUse) =>
   use.category === "edit" ||
@@ -290,7 +277,7 @@ const mandatoryDenial = (
     (use) => use.category === "vcs" || use.category === "publish"
   );
   if (context.role === "worker" && vcs) {
-    return "Repository administration belongs to the main agent; list what to commit in your handoff";
+    return "Repository administration, including clone/init outside the checkout, belongs to the main agent. Ask the main agent to obtain the dependency repository; list required repository actions in your handoff.";
   }
   const writers = context.otherWriters ?? [];
   if (writers.length > 0 && uses.some(isRepositoryAdmin)) {
@@ -309,7 +296,7 @@ interface Pending {
 /**
  * One policy point for SDK permission requests. Mandatory gates (Pause fence,
  * read-only assignments, Plan mode, repository coordination) run before
- * grants and automatic approval so neither can bypass them.
+ * automatic approval and cannot be bypassed.
  */
 export class PermissionBroker {
   readonly #options: PermissionBrokerOptions;
@@ -324,19 +311,6 @@ export class PermissionBroker {
     return (this.#options.now ?? (() => new Date()))().toISOString();
   }
 
-  #grantMatches(context: AgentContext, use: ClassifiedUse) {
-    return this.#options.store
-      .listGrants()
-      .some(
-        (grant) =>
-          grant.projectId === context.projectId &&
-          grant.workspacePath === context.workspacePath &&
-          grant.role === context.role &&
-          grant.action === use.action &&
-          grant.normalizedRequest === use.normalized
-      );
-  }
-
   async ask(
     agentId: string,
     toolUses: PermissionToolUse[]
@@ -345,6 +319,7 @@ export class PermissionBroker {
     if (!context) {
       return {
         approved: false,
+        attribution: "lifecycle",
         reason: "Agent is not part of an active mission",
       };
     }
@@ -353,74 +328,68 @@ export class PermissionBroker {
     );
     const denied = mandatoryDenial(context, uses);
     if (denied) {
-      return { approved: false, reason: denied };
+      return {
+        approved: false,
+        attribution: context.fenced ? "lifecycle" : "policy",
+        reason: denied,
+      };
     }
     const writable = uses.some(isWritable);
-    const covered = uses.every(
-      (use) => autoApproves(use) || this.#grantMatches(context, use)
-    );
-    let via: "policy" | "grant" | "user" = uses.every(autoApproves)
-      ? "policy"
-      : "grant";
-    if (!covered) {
-      const decision = await this.#askUser(agentId, context, uses);
-      if (decision === null || decision === "deny") {
-        return { approved: false, reason: "Denied" };
-      }
-      via = "user";
-    }
     if (writable) {
-      const lease = await this.#acquireLease(agentId, context);
-      if (!lease) {
-        return { approved: false, reason: "Mission is paused" };
+      const deniedLease = await this.#acquireLease(agentId, context);
+      if (deniedLease) {
+        return deniedLease;
       }
     }
     // Re-check the fence: Pause may have landed while we waited.
     const latest = this.#options.context(agentId);
     if (!latest || latest.fenced || latest.epoch !== context.epoch) {
-      return { approved: false, reason: "Mission is paused" };
+      return {
+        approved: false,
+        attribution: "lifecycle",
+        reason: "Mission is paused or its execution changed",
+      };
     }
     const latestDenial = mandatoryDenial(latest, uses);
     if (latestDenial) {
-      return { approved: false, reason: latestDenial };
+      return { approved: false, attribution: "policy", reason: latestDenial };
     }
-    return { approved: true, via };
+    return { approved: true, via: "policy" };
   }
 
-  async #acquireLease(agentId: string, context: AgentContext) {
+  async #acquireLease(
+    agentId: string,
+    context: AgentContext
+  ): Promise<Extract<AskResult, { approved: false }> | null> {
     const controller = new AbortController();
     const key = `${context.missionId}:${agentId}:${randomUUID()}`;
     this.#aborts.set(key, controller);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, WRITE_LEASE_WAIT_TIMEOUT_MS);
     try {
       await this.#options.acquireWriteLease(agentId, controller.signal);
-      return true;
-    } catch {
-      return false;
+      return null;
+    } catch (error) {
+      let reason = `Could not acquire the shared-checkout write lease: ${errorMessage(error)}`;
+      if (controller.signal.aborted) {
+        reason = "Mission is paused or its execution changed";
+      }
+      if (timedOut) {
+        reason =
+          "Shared-checkout write lease wait timed out after 30 seconds. Ask the main agent to coordinate the current writer, then retry when it finishes.";
+      }
+      return {
+        approved: false,
+        attribution: controller.signal.aborted ? "lifecycle" : "runtime",
+        reason,
+      };
     } finally {
+      clearTimeout(timer);
       this.#aborts.delete(key);
     }
-  }
-
-  #askUser(agentId: string, context: AgentContext, uses: ClassifiedUse[]) {
-    const request: PermissionRequest = {
-      agentId,
-      allowAlways: true,
-      createdAt: this.#now(),
-      decidedAt: null,
-      decision: null,
-      epoch: context.epoch,
-      id: randomUUID(),
-      kind: "tool",
-      missionId: context.missionId,
-      reason: null,
-      status: "pending",
-      toolUses: uses.map((use) => use.summary),
-    };
-    this.#options.store.saveRequest(request);
-    const { promise, resolve } =
-      Promise.withResolvers<PermissionDecision | null>();
-    this.#pending.set(request.id, { context, request, resolve, uses });
-    return promise;
   }
 
   pending(missionId: string) {

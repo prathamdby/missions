@@ -125,8 +125,8 @@ export class NativeQueueTracker {
   /** The add response is `{}`: admission, not proof of consumption. */
   admitted(id: string) {
     const entry = this.#entries.get(id);
-    if (entry?.state === "submitting") {
-      this.#update(id, { state: "queued" });
+    if (entry?.state === "submitting" || entry?.state === "unknown") {
+      this.#update(id, { error: null, state: "queued" });
     }
   }
 

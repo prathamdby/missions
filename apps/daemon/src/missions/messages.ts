@@ -153,6 +153,7 @@ const workerRef = (workerTitle: string, assignment: Assignment) =>
 
 export type WorkerFailure =
   | { kind: "exit"; detail: string }
+  | { kind: "turn"; detail: string }
   | { kind: "start"; detail: string };
 
 export const workerFailedMessage = (
@@ -160,12 +161,30 @@ export const workerFailedMessage = (
   assignment: Assignment,
   failure: WorkerFailure
 ) => {
-  const what =
-    failure.kind === "exit"
-      ? "stopped unexpectedly: its process exited or lost its connection"
-      : "could not start";
+  const descriptions = {
+    exit: "stopped unexpectedly: its process exited or lost its connection",
+    start: "could not start",
+    turn: "failed during its turn",
+  };
+  const what = descriptions[failure.kind];
   return `${NOTICE_LABEL} ${workerRef(workerTitle, assignment)} ${what} (${clip(failure.detail, REASON_LIMIT)}). The assignment is marked failed and will not resume. Queued assignments start once its cleanup finishes. Whether to dispatch a replacement is your decision. ${NOTICE_DISCLAIMER}`;
 };
+
+export const workerStalledMessage = (
+  workerTitle: string,
+  assignment: Assignment,
+  reason: string,
+  detail: string
+) =>
+  `${NOTICE_LABEL} ${workerRef(workerTitle, assignment)} ended a turn without a handoff (${clip(reason, REASON_LIMIT)}). ${clip(detail, REASON_LIMIT * 3)} The assignment is still running and retains its Worker slot. Steer this Worker or decide whether to replace it; no retry or replacement was started. ${NOTICE_DISCLAIMER}`;
+
+export const workerStallResolvedMessage = (
+  workerTitle: string,
+  assignment: Assignment,
+  noticeId: string,
+  outcome: string
+) =>
+  `${NOTICE_LABEL} The stalled-turn notice ${noticeId} for ${workerRef(workerTitle, assignment)} is no longer current: ${outcome}. This correction refers only to that earlier turn. ${NOTICE_DISCLAIMER}`;
 
 /** What a blocked Worker waits for; question text is agent-written and never included. */
 export type WorkerWait =

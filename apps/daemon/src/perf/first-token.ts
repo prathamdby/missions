@@ -121,7 +121,12 @@ const directSample = async (cwd: string, index: number): Promise<Sample[]> => {
     modelId: MODEL,
     onAskUser: () => Promise.resolve({ answers: [], cancelled: true }),
     onEvent: (event) => events.push({ at: performance.now(), event }),
-    onPermission: () => Promise.resolve(false),
+    onPermission: () =>
+      Promise.resolve({
+        approved: false,
+        attribution: "policy",
+        reason: "Tools are disabled in this fixture",
+      }),
     onTiming: (stage, detail) => {
       process.stderr.write(
         `${JSON.stringify({ detail, path: "direct", stage })}\n`

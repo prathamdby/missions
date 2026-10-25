@@ -88,6 +88,18 @@ The queue is a durable outbox. Every logical message (user prompt, agent message
 - An event is checked again just before delivery and becomes `discarded` if it no longer applies (for example the wait already ended). A blocked notice whose wait ends before the main agent reads it is discarded or withdrawn instead of being followed by an unblocked notice; if the runner reports it consumed after all, the unblocked notice follows. Pause discards events that are still `accepted`; the next resume message that is sent lists failures whose notice was not confirmed `sent`, and those items then carry the error `Summarized in the resume message`. `failed` or `unknown` events are never resent, and editing, removing, changing or retrying a daemon item returns `409`. Events do not count toward the per-recipient capacity.
 - `Agent.waitingReason` explains a waiting agent: `startup`, `model`, `permission`, `answer`, `write_lease` or `retry`.
 
+### Worker turn outcomes
+
+A running Worker that finishes a turn without a handoff produces `evt:worker-stalled:<assignmentId>:<epoch>:<turnKey>`. Its assignment stays running and keeps its concurrency slot so the main agent can steer it. The notice includes the completion reason and bounded summaries of the last tool, tool error, permission denial and SDK error. One episode spans working-state transitions, including idle; duplicate completions do not create another notice. Native turn keys digest the session ID and turn ID; missing native IDs use a runtime-generation ID and episode counter.
+
+Fatal completion reasons (`error`, `process_exit`, exhausted usage, authentication/request/provider failures, rejected prompts, persistence failure and invalid/missing structured output) mark the assignment failed and queue `worker-failed` before cleanup. `SessionError`, `ProcessExitError` or an error carrying an exit code (including zero) fail immediately. Queued assignments start only after confirmed disposal. `completed`, `cancelled`, `permission_rejected`, `model_rate_limited`, `no_approver_available` and `spec_handoff` are recoverable stalls without a handoff. Unknown completion reasons use a diagnostic stalled fallback. Retry notifications alone never fail an assignment.
+
+Wake, handoff or failure invalidates the earlier stalled episode. Definitely unsent notices are discarded; possibly queued notices get a bounded removal attempt. If the notice was sent, its delivery is unknown, removal is unconfirmed, or consumption arrives after removal, `evt:worker-stall-resolved:<assignmentId>:<epoch>:<turnKey>` corrects that earlier episode once. It does not resolve a newer stall. Owner and epoch fences suppress late events during intentional stop or Pause.
+
+Every outbox submission, including user and agent messages ahead of notices, has a 30-second acknowledgement deadline. On timeout the durable item and native mirror become `unknown`, unless stronger consumption/removal evidence already exists. Later accepted items can then be attempted. Late acknowledgement, rejection and transcript echoes reconcile the original ID without replaying it. This bounds subsequent attempts, not successful delivery through a broken transport.
+
+These paths have controlled-transport tests using the installed SDK and actual OS-process-exit tests using a native-wire peer. They do not prove how a live CLI/model renders denial feedback or autonomously wakes an idle agent. There is no tool/MCP watchdog, automatic retry or replacement Worker.
+
 ## Work mode and Plan mode
 
 `Mission.executionMode` is `work` by default. Only the main agent can enter Plan mode, through `missions.enter_plan`, when the user asks in plain language to plan, scope or review an approach before changes, or the agent judges that a broad, risky or ambiguous request needs planning. Mission creation and message requests reject `executionMode` with `400` (`bad_request`).
@@ -98,13 +110,17 @@ The queue is a durable outbox. Every logical message (user prompt, agent message
 
 ## Agent Git actions
 
-The main agent may commit, push and open pull requests without asking; Workers cannot. The fixed High policy automatically approves commands, local Git and publishing, but edits outside the workspace and unknown tools still ask. Pause, read-only assignments and Plan mode remain mandatory gates. High-impact Git commands (reset, clean, rebase, checkout/switch, branch or tag deletion, force pushes and similar) and publishing wait until no other agent holds write access. After an agent runs a Git or `gh` command the daemon re-reads the branch, commits since the mission's start revision, upstream and any pull request into `Mission.publish`. These reads are best effort and never retried as side effects.
+The main agent may commit, push and open pull requests without asking; Workers cannot. Worker clone/init is also conservatively denied, even outside the checkout, because shell/path parsing is not a reliable exemption. The denial asks the main agent to obtain dependency repositories and the Worker to hand off required repository actions. Both roles run approval-free YOLO: every tool passing mandatory capability gates is approved automatically, including unknown tools and edits outside the workspace. There are no automatic tool-approval prompts; intentional questions and user approval of plans remain. Native SDK autonomy stays off so it cannot bypass the broker. Pause, read-only assignments and Plan mode remain mandatory gates. High-impact Git commands (reset, clean, rebase, checkout/switch, branch or tag deletion, force pushes and similar) and publishing wait until no other agent holds write access. After an agent runs a Git or `gh` command the daemon re-reads the branch, commits since the mission's start revision, upstream and any pull request into `Mission.publish`. These reads are best effort and never retried as side effects.
+
+Tool denials preserve a nonempty reason and attribution (`policy`, `lifecycle`, `runtime`, or actual `user` plan rejection). The SDK cancellation carries a comment and the adapter awaits tool-correlated, system-role, `llm_only` context with `skipAgentLoop` for up to two seconds. Rejection or timeout is reported explicitly as `PermissionContextError`, not silently treated as user cancellation. Shared-checkout write-lease waits stop after 30 seconds with an actionable denial; cancelling a waiter never releases the current writer. Policy and epoch gates are checked again after acquisition. Historical permission/grant records and compatibility endpoints remain readable.
 
 ## Timing
 
 `MISSIONS_TIMING=1` writes content-free JSON timing records (`[timing] {...}`) to the daemon's stderr: message acceptance, delivery submission and admission, runtime startup stages, and the first thinking and assistant text per request. Records carry IDs, stage names and durations only.
 
 ## Upgrade and rollback
+
+The Worker lifecycle and YOLO changes introduce no database migration or prompt-version change. Pause or stop the new daemon before downgrading: older daemons may not recognize the new event IDs, cannot undo delivered effects, and must not replay uncertain submissions.
 
 Database migrations run when the daemon opens `<MISSIONS_HOME>/missions.db`.
 
