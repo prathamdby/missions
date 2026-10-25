@@ -13,43 +13,19 @@ import {
   snapshot,
   transcriptItem,
 } from "../live/test-adapters";
+import {
+  conversationEntries,
+  conversationParts,
+  conversationTranscript,
+} from "./conversation";
 import { deliveredRequestIds, showGoalBubble } from "./queue";
-import { buildTimeline, turnParts } from "./timeline";
 
-// P0 reference: the current ChatColumn pipeline, before any production move.
+// The original tuple and memo-stage order, now using the production stages.
 const project = (live: MissionLiveState, agentId?: string) => {
   const missionId = live.mission.id;
   const worker = agentId ? live.agents[agentId]?.role === "worker" : false;
-  const transcript = Object.values(live.transcript).filter(
-    (item) =>
-      !agentId ||
-      item.agentId === agentId ||
-      (item.kind === "agent_message" &&
-        (item.sender?.agentId === agentId ||
-          item.recipient?.agentId === agentId))
-  );
-  const entries = buildTimeline({
-    assignments: worker ? [] : Object.values(live.assignments),
-    permissions: Object.values(live.permissions),
-    planAgentId: worker ? undefined : agentId,
-    planInFlight:
-      !worker &&
-      !!agentId &&
-      ["working", "starting"].includes(live.agents[agentId]?.status ?? ""),
-    plans: worker ? [] : Object.values(live.plans),
-    previews: Object.values(live.previews),
-    questions: Object.values(live.questions),
-    transcript,
-  }).filter(
-    (entry) =>
-      !agentId ||
-      entry.agentId === agentId ||
-      entry.kind === "agent_message" ||
-      (!worker &&
-        (entry.agentId === null ||
-          entry.kind === "permission" ||
-          entry.kind === "question"))
-  );
+  const transcript = conversationTranscript(live.transcript, agentId);
+  const entries = conversationEntries(live, transcript, agentId, worker);
   const goalBubble =
     !worker &&
     showGoalBubble(
@@ -66,20 +42,13 @@ const project = (live: MissionLiveState, agentId?: string) => {
     ["working", "starting"].includes(
       live.agents[currentAgentId]?.status ?? ""
     ) && isMissionActive(live.mission.status);
-  const visible = worker
-    ? entries
-    : entries.filter(
-        (entry) =>
-          entry.agentId === null ||
-          live.agents[entry.agentId]?.role !== "worker" ||
-          !["assistant", "preview", "thinking", "tools"].includes(entry.kind)
-      );
-  const delivered = new Set(
-    Object.values(live.queue)
-      .filter((item) => item.state === "sent")
-      .map((item) => item.id)
+  const parts = conversationParts(
+    live,
+    entries,
+    worker,
+    currentAgentId,
+    running
   );
-  const parts = turnParts(visible, currentAgentId, running, delivered);
   const timedByWork = parts.some(
     (part) => part.kind === "work" && part.running
   );
