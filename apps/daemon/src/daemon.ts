@@ -68,8 +68,11 @@ export interface DaemonOptions {
   ghPath?: string;
   /** Test seam: model discovery without spawning Droid. */
   loadModels?: ModelLoader;
-  /** Opt-in: only the real entry point creates background Auto title runs. */
-  titleGenerator?: MissionTitleGenerator | null;
+  /** Opt-in factory shares the daemon's model catalog with Auto title runs. */
+  titleGenerator?:
+    | MissionTitleGenerator
+    | ((models: ModelCatalog) => MissionTitleGenerator)
+    | null;
   /** Events kept per stream before the oldest are pruned. */
   retainEventsPerStream?: number;
 }
@@ -145,7 +148,10 @@ export const createDaemon = async (options: DaemonOptions): Promise<Daemon> => {
       () => composerCatalog.close(),
       () => models.close()
     );
-    const titleGenerator = options.titleGenerator ?? null;
+    const titleGenerator =
+      typeof options.titleGenerator === "function"
+        ? options.titleGenerator(models)
+        : (options.titleGenerator ?? null);
     if (titleGenerator) {
       owners.push(() => titleGenerator.close());
     }

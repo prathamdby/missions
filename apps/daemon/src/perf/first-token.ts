@@ -9,15 +9,18 @@ import { ProcessSupervisor } from "../processes/process-supervisor";
 import { AgentRuntime } from "../sdk/agent-runtime";
 import type { AgentEvent } from "../sdk/agent-runtime";
 import { gitRepo, testConfig } from "../test/fixtures";
+import { addHangingMcp } from "../test/hanging-mcp";
 
 /**
  * Bounded first-token comparison between a direct SDK session and the app,
- * using the same CLI, model, reasoning, cwd and (absent) MCP configuration.
+ * using the same CLI, model, reasoning, cwd and inherited MCP configuration.
  * Mission creation (cold) is measured separately from a later prompt (warm),
  * and first thinking text is kept apart from first assistant text.
  *
  *   pnpm perf:first-token -- --samples 3 --model glm-5.3-flash
  * Set MISSIONS_PERF_TITLES=0 for a baseline without background titles.
+ * Set MISSIONS_PERF_HANG_MCP=1 to add a non-handshaking stdio server in
+ * the disposable project only. User configuration is never changed.
  *
  * Opt-in only: it spawns real Droid sessions and spends model tokens.
  */
@@ -27,6 +30,27 @@ const TURN_MS = 120_000;
 const COLD_PROMPT = "Reply with the single word: ready";
 const WARM_PROMPT = "Reply with the single word: again";
 const TITLES = process.env.MISSIONS_PERF_TITLES !== "0";
+const HANG_MCP = process.env.MISSIONS_PERF_HANG_MCP === "1";
+
+interface ProcessRegistration {
+  agentId: string;
+  at: number;
+}
+
+/** Count actual spawns, not /proc enrichment callbacks for an existing PID. */
+const withRegistrations = async <T>(effect: () => Promise<T>) => {
+  const registrations: ProcessRegistration[] = [];
+  const original = ProcessSupervisor.prototype.register;
+  ProcessSupervisor.prototype.register = function register(agentId, child) {
+    registrations.push({ agentId, at: Date.now() });
+    original.call(this, agentId, child);
+  };
+  try {
+    return { registrations, result: await effect() };
+  } finally {
+    ProcessSupervisor.prototype.register = original;
+  }
+};
 
 interface Sample {
   path: "direct" | "app";
@@ -98,6 +122,11 @@ const directSample = async (cwd: string, index: number): Promise<Sample[]> => {
     onAskUser: () => Promise.resolve({ answers: [], cancelled: true }),
     onEvent: (event) => events.push({ at: performance.now(), event }),
     onPermission: () => Promise.resolve(false),
+    onTiming: (stage, detail) => {
+      process.stderr.write(
+        `${JSON.stringify({ detail, path: "direct", stage })}\n`
+      );
+    },
     reasoningEffort: null,
     role: "orchestrator",
     supervisor: new ProcessSupervisor({
@@ -159,7 +188,9 @@ const appSample = async (cwd: string, index: number): Promise<Sample[]> => {
   const daemon = await createDaemon({
     config,
     timingSinks: [(record) => records.push(record)],
-    titleGenerator: TITLES ? new TitleGenerator({ droidPath: DROID }) : null,
+    titleGenerator: TITLES
+      ? (models) => new TitleGenerator({ droidPath: DROID, models })
+      : null,
     version: "perf",
   });
   try {
@@ -178,7 +209,8 @@ const appSample = async (cwd: string, index: number): Promise<Sample[]> => {
       orchestrator: model,
       projectId: added.project.id,
       worker: model,
-      workspace: { mode: "current_checkout" },
+      // The opt-in fixture is the harness's own untracked project config.
+      workspace: { acknowledgeDirty: HANG_MCP, mode: "current_checkout" },
     });
     const missionId = created.mission.id;
     const goalId = `${missionId}:goal`;
@@ -197,6 +229,14 @@ const appSample = async (cwd: string, index: number): Promise<Sample[]> => {
         seen.some((r) => r.traceId === goalId && r.stage === "first_text"),
       Date.now() + TURN_MS,
       50
+    );
+    const readyAt = records.find((r) => r.stage === "startup.ready")?.at;
+    process.stderr.write(
+      `${JSON.stringify({
+        event: "perf.startup",
+        readyAt,
+        stages: records.filter((r) => r.stage.startsWith("startup.")),
+      })}\n`
     );
     await idle();
     const warmId = `perf-warm-${index}`;
@@ -255,20 +295,34 @@ const summarize = (samples: Sample[]) => {
   return rows;
 };
 
+const perfRepo = async (index: number) => {
+  const repo = await gitRepo(`perf-${index}`);
+  if (HANG_MCP) {
+    await addHangingMcp(repo);
+  }
+  return repo;
+};
+
 const main = async () => {
   const samples: Sample[] = [];
+  const processes = [];
   for (let index = 0; index < SAMPLES; index += 1) {
     // Sequential on purpose: concurrent sessions would distort latency.
     // oxlint-disable-next-line no-await-in-loop -- one live session at a time
-    const repo = await gitRepo(`perf-${index}`);
+    const repo = await perfRepo(index);
     // oxlint-disable-next-line no-await-in-loop -- one live session at a time
-    const direct = await directSample(repo, index);
+    const direct = await withRegistrations(() => directSample(repo, index));
     // oxlint-disable-next-line no-await-in-loop -- one live session at a time
-    const app = await appSample(repo, index);
-    samples.push(...direct, ...app);
+    const app = await withRegistrations(() => appSample(repo, index));
+    samples.push(...direct.result, ...app.result);
+    processes.push({
+      app: app.registrations,
+      direct: direct.registrations,
+      sample: index,
+    });
   }
   process.stdout.write(
-    `${JSON.stringify({ droid: DROID, model: MODEL, samples, summary: summarize(samples), titles: TITLES }, null, 2)}\n`
+    `${JSON.stringify({ droid: DROID, hangingMcp: HANG_MCP, model: MODEL, processes, samples, summary: summarize(samples), titles: TITLES }, null, 2)}\n`
   );
 };
 

@@ -1,5 +1,6 @@
 import {
   DroidClient,
+  ListMcpServersResultSchema,
   ProcessTransport,
   ToolConfirmationOutcome,
 } from "@factory/droid-sdk/node";
@@ -361,6 +362,10 @@ export class AgentRuntime {
   #settingsVersion = 0;
   readonly #models = new Map<string, ModelOption>();
   #availableModels: unknown[] = [];
+  readonly #mcpTimings = new Map<
+    string,
+    { connectingAt: number | null; durationMs: number | null }
+  >();
 
   constructor(options: AgentRuntimeOptions) {
     this.options = options;
@@ -533,6 +538,10 @@ export class AgentRuntime {
     const params = isRecord(raw.params) ? raw.params : raw;
     const n = isRecord(params.notification) ? params.notification : params;
     const type = str(n.type);
+    if (type === "mcp_status_changed") {
+      this.#captureMcpTimings(n.servers);
+      return;
+    }
     if (type === "settings_updated") {
       this.#captureSettings(n.settings);
       return;
@@ -608,6 +617,8 @@ export class AgentRuntime {
         resumeSessionId ? "session loading" : "session initialization"
       );
       this.#assertStarting();
+      // Diagnostics must never hold readiness or the first turn hostage.
+      void this.#reportMcpHealth(client);
       return result;
     } catch (error) {
       const cancelled = this.#closing;
@@ -622,6 +633,60 @@ export class AgentRuntime {
   #assertStarting() {
     if (this.#closing) {
       throw new Error("Runtime startup was cancelled");
+    }
+  }
+
+  #captureMcpTimings(raw: unknown) {
+    if (!Array.isArray(raw)) {
+      return;
+    }
+    const now = Date.now();
+    for (const server of raw) {
+      if (!isRecord(server) || typeof server.name !== "string") {
+        continue;
+      }
+      const timing = this.#mcpTimings.get(server.name) ?? {
+        connectingAt: null,
+        durationMs: null,
+      };
+      if (server.status === "connecting") {
+        timing.connectingAt ??= now;
+      } else if (timing.connectingAt !== null) {
+        timing.durationMs =
+          (timing.durationMs ?? 0) + now - timing.connectingAt;
+        timing.connectingAt = null;
+      }
+      this.#mcpTimings.set(server.name, timing);
+    }
+  }
+
+  async #reportMcpHealth(client: DroidClient) {
+    try {
+      const response = await client.listMcpServers();
+      if (this.#closing || !("result" in response) || !response.result) {
+        return;
+      }
+      const result = ListMcpServersResultSchema.safeParse(response.result);
+      if (!result.success) {
+        return;
+      }
+      this.#captureMcpTimings(result.data.servers);
+      for (const { name, status } of result.data.servers) {
+        const timing = this.#mcpTimings.get(name);
+        // The SDK has no server duration field. Only report intervals we
+        // observed, never attribute the entire initialize latency to a server.
+        const ms = timing?.connectingAt === null ? timing.durationMs : null;
+        this.options.onTiming?.(`startup.mcp.${name}`, {
+          durationMs: ms,
+          status,
+        });
+        process.stderr.write(
+          `${JSON.stringify({ event: "mcp.server_status", ms, name, status })}\n`
+        );
+      }
+    } catch {
+      // Old CLIs, failed queries and diagnostic sinks cannot fail startup.
+      // Error payloads can contain credentials, so do not log them.
     }
   }
 

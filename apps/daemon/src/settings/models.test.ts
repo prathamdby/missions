@@ -29,6 +29,63 @@ describe(ModelCatalog, () => {
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
   });
 
+  it("serves remembered runtime models without probing, even after the probe cache expires", async () => {
+    vi.useFakeTimers();
+    const load = vi.fn<() => Promise<unknown[]>>();
+    const catalog = new ModelCatalog("droid", load);
+    catalog.remember(RAW);
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
+    const list = await catalog.list();
+    expect(list).toMatchObject({
+      models: [{ id: "glm-5.3-flash" }, { id: "plain" }],
+      source: "droid",
+    });
+    expect(load).not.toHaveBeenCalled();
+    catalog.remember([{ id: "refreshed" }]);
+    catalog.remember([]);
+    catalog.remember([{ invalid: true }]);
+    await expect(catalog.list()).resolves.toMatchObject({
+      models: [{ id: "refreshed" }],
+    });
+    await catalog.close();
+    await expect(catalog.list()).resolves.toStrictEqual({
+      models: [],
+      source: "unavailable",
+    });
+  });
+
+  it.each(["resolve", "reject"])(
+    "does not let a stale probe %s replace remembered runtime models",
+    async (outcome) => {
+      const pending = Promise.withResolvers<unknown[]>();
+      const load = vi.fn<() => Promise<unknown[]>>(() => pending.promise);
+      const catalog = new ModelCatalog("droid", load);
+      const first = catalog.list();
+      catalog.remember(RAW);
+      if (outcome === "resolve") {
+        pending.resolve([{ id: "stale" }]);
+      } else {
+        pending.reject(new Error("offline"));
+      }
+      await expect(first).resolves.toMatchObject({
+        models: [{ id: "glm-5.3-flash" }, { id: "plain" }],
+        source: "droid",
+      });
+      const choice = { modelId: "glm-5.3-flash", reasoningEffort: null };
+      await expect(catalog.validate(choice, "Worker")).resolves.toBeUndefined();
+      await expect(catalog.resolve(choice, "Worker")).resolves.toStrictEqual({
+        ...choice,
+        reasoningEffort: "high",
+      });
+      catalog.remember([{ id: "refreshed" }]);
+      await expect(catalog.validate(choice, "Worker")).rejects.toThrow(
+        /model glm-5.3-flash is not available/u
+      );
+      expect(load).toHaveBeenCalledOnce();
+      await catalog.close();
+    }
+  );
+
   it("bounds a hung discovery, clears its pending slot and permits a retry", async () => {
     vi.useFakeTimers();
     const load = vi
