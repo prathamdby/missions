@@ -1,0 +1,452 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`architecture compatibility > keeps exact historical permission HTTP results, revisions, events, receipts and reopen documents > eafc235 HTTP, events and durable receipts 1`] = `
+{
+  "duplicate": {
+    "duplicate": true,
+    "result": {
+      "originalId": "native-request-1",
+      "receipt": "kept",
+    },
+  },
+  "first": {
+    "duplicate": false,
+    "result": {
+      "originalId": "native-request-1",
+      "receipt": "kept",
+    },
+  },
+  "grants": [],
+  "patched": {
+    "createdAt": "2026-10-25T12:00:00.000Z",
+    "endedAt": null,
+    "epoch": 2,
+    "executionMode": "work",
+    "goal": "Keep the architecture compatible",
+    "id": "architecture-mission",
+    "lastError": null,
+    "orchestrator": {
+      "modelId": "fixture",
+      "reasoningEffort": null,
+    },
+    "projectId": "architecture-project",
+    "publish": {
+      "cleanup": "none",
+      "cleanupReason": null,
+      "commits": [],
+      "pr": null,
+      "pushedBranch": null,
+      "remote": null,
+    },
+    "revision": 8,
+    "status": "paused",
+    "summary": null,
+    "title": "Reviewed publishing metadata",
+    "unknownFixtureField": {
+      "keep": [
+        "unknown",
+        42,
+      ],
+    },
+    "updatedAt": "2026-10-25T12:00:00.000Z",
+    "worker": {
+      "modelId": "fixture",
+      "reasoningEffort": null,
+    },
+    "workspace": null,
+  },
+  "pending": [],
+  "permission": {
+    "agentId": null,
+    "allowAlways": true,
+    "createdAt": "2026-10-25T12:00:00.000Z",
+    "decidedAt": null,
+    "decision": null,
+    "epoch": 2,
+    "id": "historical-approval",
+    "kind": "tool",
+    "missionId": "architecture-mission",
+    "reason": null,
+    "status": "pending",
+    "toolUses": [],
+  },
+  "receipt": {
+    "operation": {
+      "createdAt": "2026-10-25T12:00:00.000Z",
+      "detail": {
+        "original": {
+          "ids": [
+            "first",
+            "second",
+          ],
+        },
+      },
+      "id": "architecture-operation",
+      "kind": "architecture.fixture",
+      "missionId": "architecture-mission",
+      "status": "succeeded",
+      "updatedAt": "2026-10-25T12:00:00.000Z",
+    },
+    "result": {
+      "originalId": "native-request-1",
+      "receipt": "kept",
+    },
+  },
+  "responses": [
+    {
+      "body": {
+        "error": {
+          "code": "stale_revision",
+          "message": "This approval is no longer pending",
+        },
+      },
+      "status": 409,
+    },
+    {
+      "body": {
+        "error": {
+          "code": "not_found",
+          "message": "Approval not found",
+        },
+      },
+      "status": 404,
+    },
+  ],
+  "seen": [
+    {
+      "at": "2026-10-25T12:00:00.000Z",
+      "data": {
+        "mission": {
+          "createdAt": "2026-10-25T12:00:00.000Z",
+          "endedAt": null,
+          "epoch": 2,
+          "executionMode": "work",
+          "goal": "Keep the architecture compatible",
+          "id": "architecture-mission",
+          "lastError": null,
+          "orchestrator": {
+            "modelId": "fixture",
+            "reasoningEffort": null,
+          },
+          "projectId": "architecture-project",
+          "publish": {
+            "cleanup": "none",
+            "cleanupReason": null,
+            "commits": [],
+            "pr": null,
+            "pushedBranch": null,
+            "remote": null,
+          },
+          "revision": 8,
+          "status": "paused",
+          "summary": null,
+          "title": "Reviewed publishing metadata",
+          "unknownFixtureField": {
+            "keep": [
+              "unknown",
+              42,
+            ],
+          },
+          "updatedAt": "2026-10-25T12:00:00.000Z",
+          "worker": {
+            "modelId": "fixture",
+            "reasoningEffort": null,
+          },
+          "workspace": null,
+        },
+      },
+      "missionId": "architecture-mission",
+      "seq": 1,
+      "type": "mission.updated",
+    },
+    {
+      "at": "2026-10-25T12:00:00.000Z",
+      "data": {
+        "notice": {
+          "code": "info",
+          "level": "info",
+          "message": "Exact notice",
+          "retryAfterMs": null,
+        },
+      },
+      "missionId": "architecture-mission",
+      "seq": 2,
+      "type": "notice",
+    },
+    {
+      "at": "2026-10-25T12:00:00.000Z",
+      "data": {
+        "operation": {
+          "createdAt": "2026-10-25T12:00:00.000Z",
+          "detail": {
+            "original": {
+              "ids": [
+                "first",
+                "second",
+              ],
+            },
+          },
+          "id": "architecture-operation",
+          "kind": "architecture.fixture",
+          "missionId": "architecture-mission",
+          "status": "intent",
+          "updatedAt": "2026-10-25T12:00:00.000Z",
+        },
+      },
+      "missionId": "architecture-mission",
+      "seq": 3,
+      "type": "operation.updated",
+    },
+    {
+      "at": "2026-10-25T12:00:00.000Z",
+      "data": {
+        "operation": {
+          "createdAt": "2026-10-25T12:00:00.000Z",
+          "detail": {
+            "original": {
+              "ids": [
+                "first",
+                "second",
+              ],
+            },
+          },
+          "id": "architecture-operation",
+          "kind": "architecture.fixture",
+          "missionId": "architecture-mission",
+          "status": "succeeded",
+          "updatedAt": "2026-10-25T12:00:00.000Z",
+        },
+      },
+      "missionId": "architecture-mission",
+      "seq": 4,
+      "type": "operation.updated",
+    },
+  ],
+  "snapshot": {
+    "agents": [],
+    "artifacts": [],
+    "assignments": [],
+    "cursor": 4,
+    "mission": {
+      "createdAt": "2026-10-25T12:00:00.000Z",
+      "endedAt": null,
+      "epoch": 2,
+      "executionMode": "work",
+      "goal": "Keep the architecture compatible",
+      "id": "architecture-mission",
+      "lastError": null,
+      "orchestrator": {
+        "modelId": "fixture",
+        "reasoningEffort": null,
+      },
+      "projectId": "architecture-project",
+      "publish": {
+        "cleanup": "none",
+        "cleanupReason": null,
+        "commits": [],
+        "pr": null,
+        "pushedBranch": null,
+        "remote": null,
+      },
+      "revision": 8,
+      "status": "paused",
+      "summary": null,
+      "title": "Reviewed publishing metadata",
+      "unknownFixtureField": {
+        "keep": [
+          "unknown",
+          42,
+        ],
+      },
+      "updatedAt": "2026-10-25T12:00:00.000Z",
+      "worker": {
+        "modelId": "fixture",
+        "reasoningEffort": null,
+      },
+      "workspace": null,
+    },
+    "permissions": [
+      {
+        "agentId": null,
+        "allowAlways": true,
+        "createdAt": "2026-10-25T12:00:00.000Z",
+        "decidedAt": null,
+        "decision": null,
+        "epoch": 2,
+        "id": "historical-approval",
+        "kind": "tool",
+        "missionId": "architecture-mission",
+        "reason": null,
+        "status": "pending",
+        "toolUses": [],
+      },
+    ],
+    "plans": [],
+    "questions": [],
+    "queue": [],
+    "todos": [],
+    "transcript": [],
+    "transcriptHasMore": false,
+  },
+}
+`;
+
+exports[`architecture compatibility > keeps exact historical permission HTTP results, revisions, events, receipts and reopen documents > eafc235 reopened public documents and replay 1`] = `
+{
+  "mission": {
+    "createdAt": "2026-10-25T12:00:00.000Z",
+    "endedAt": null,
+    "epoch": 2,
+    "executionMode": "work",
+    "goal": "Keep the architecture compatible",
+    "id": "architecture-mission",
+    "lastError": null,
+    "orchestrator": {
+      "modelId": "fixture",
+      "reasoningEffort": null,
+    },
+    "projectId": "architecture-project",
+    "publish": {
+      "cleanup": "none",
+      "cleanupReason": null,
+      "commits": [],
+      "pr": null,
+      "pushedBranch": null,
+      "remote": null,
+    },
+    "revision": 8,
+    "status": "paused",
+    "summary": null,
+    "title": "Reviewed publishing metadata",
+    "unknownFixtureField": {
+      "keep": [
+        "unknown",
+        42,
+      ],
+    },
+    "updatedAt": "2026-10-25T12:00:00.000Z",
+    "worker": {
+      "modelId": "fixture",
+      "reasoningEffort": null,
+    },
+    "workspace": null,
+  },
+  "receipt": {
+    "duplicate": true,
+    "result": {
+      "originalId": "native-request-1",
+      "receipt": "kept",
+    },
+  },
+  "replay": [
+    {
+      "at": "2026-10-25T12:00:00.000Z",
+      "data": {
+        "mission": {
+          "createdAt": "2026-10-25T12:00:00.000Z",
+          "endedAt": null,
+          "epoch": 2,
+          "executionMode": "work",
+          "goal": "Keep the architecture compatible",
+          "id": "architecture-mission",
+          "lastError": null,
+          "orchestrator": {
+            "modelId": "fixture",
+            "reasoningEffort": null,
+          },
+          "projectId": "architecture-project",
+          "publish": {
+            "cleanup": "none",
+            "cleanupReason": null,
+            "commits": [],
+            "pr": null,
+            "pushedBranch": null,
+            "remote": null,
+          },
+          "revision": 8,
+          "status": "paused",
+          "summary": null,
+          "title": "Reviewed publishing metadata",
+          "unknownFixtureField": {
+            "keep": [
+              "unknown",
+              42,
+            ],
+          },
+          "updatedAt": "2026-10-25T12:00:00.000Z",
+          "worker": {
+            "modelId": "fixture",
+            "reasoningEffort": null,
+          },
+          "workspace": null,
+        },
+      },
+      "missionId": "architecture-mission",
+      "seq": 1,
+      "type": "mission.updated",
+    },
+    {
+      "at": "2026-10-25T12:00:00.000Z",
+      "data": {
+        "notice": {
+          "code": "info",
+          "level": "info",
+          "message": "Exact notice",
+          "retryAfterMs": null,
+        },
+      },
+      "missionId": "architecture-mission",
+      "seq": 2,
+      "type": "notice",
+    },
+    {
+      "at": "2026-10-25T12:00:00.000Z",
+      "data": {
+        "operation": {
+          "createdAt": "2026-10-25T12:00:00.000Z",
+          "detail": {
+            "original": {
+              "ids": [
+                "first",
+                "second",
+              ],
+            },
+          },
+          "id": "architecture-operation",
+          "kind": "architecture.fixture",
+          "missionId": "architecture-mission",
+          "status": "intent",
+          "updatedAt": "2026-10-25T12:00:00.000Z",
+        },
+      },
+      "missionId": "architecture-mission",
+      "seq": 3,
+      "type": "operation.updated",
+    },
+    {
+      "at": "2026-10-25T12:00:00.000Z",
+      "data": {
+        "operation": {
+          "createdAt": "2026-10-25T12:00:00.000Z",
+          "detail": {
+            "original": {
+              "ids": [
+                "first",
+                "second",
+              ],
+            },
+          },
+          "id": "architecture-operation",
+          "kind": "architecture.fixture",
+          "missionId": "architecture-mission",
+          "status": "succeeded",
+          "updatedAt": "2026-10-25T12:00:00.000Z",
+        },
+      },
+      "missionId": "architecture-mission",
+      "seq": 4,
+      "type": "operation.updated",
+    },
+  ],
+}
+`;
