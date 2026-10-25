@@ -1,4 +1,7 @@
+"use client";
+
 import type { ComponentProps, ReactNode } from "react";
+import { useRef } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -87,6 +90,7 @@ export const Input = ({
 };
 
 type TextareaProps = ComponentProps<"textarea"> & {
+  highlightLength?: number;
   mono?: boolean;
   /** Publish fields retain native rows and vertical resizing, not content sizing. */
   size?: "md" | "sm";
@@ -98,30 +102,69 @@ export const Textarea = ({
   mono = false,
   size = "md",
   variant = "field",
+  highlightLength = 0,
   ...props
-}: TextareaProps) => (
-  <textarea
-    className={cn(
-      variant === "publish"
-        ? cn(publishChrome, "resize-y", size === "sm" ? "min-h-20" : "min-h-24")
-        : cn(
-            "field-sizing-content w-full min-w-0 resize-none text-sm placeholder:text-text-tertiary disabled:text-text-disabled",
-            variant === "field"
-              ? cn(
-                  fieldChrome,
-                  fieldState,
-                  fieldFocus,
-                  "min-h-24 px-control py-md leading-lg outline-none"
-                )
-              : "min-h-6 bg-transparent leading-chat font-book tracking-tight text-text outline-none focus-visible:shadow-none"
-          ),
-      mono && "font-mono text-xs leading-md",
-      className
-    )}
-    data-slot="textarea"
-    {...props}
-  />
-);
+}: TextareaProps) => {
+  const mirror = useRef<HTMLDivElement>(null);
+  const highlighted = highlightLength > 0 && variant === "bare";
+  const field = (
+    <textarea
+      className={cn(
+        variant === "publish"
+          ? cn(
+              publishChrome,
+              "resize-y",
+              size === "sm" ? "min-h-20" : "min-h-24"
+            )
+          : cn(
+              "field-sizing-content w-full min-w-0 resize-none text-sm placeholder:text-text-tertiary disabled:text-text-disabled",
+              variant === "field"
+                ? cn(
+                    fieldChrome,
+                    fieldState,
+                    fieldFocus,
+                    "min-h-24 px-control py-md leading-lg outline-none"
+                  )
+                : "min-h-6 bg-transparent p-0 leading-chat font-book tracking-tight text-text outline-none focus-visible:shadow-none"
+            ),
+        mono && "font-mono text-xs leading-md",
+        highlighted && "relative text-transparent caret-text",
+        className
+      )}
+      data-slot="textarea"
+      {...props}
+      onScroll={(event) => {
+        if (mirror.current) {
+          mirror.current.scrollTop = event.currentTarget.scrollTop;
+          mirror.current.scrollLeft = event.currentTarget.scrollLeft;
+        }
+        props.onScroll?.(event);
+      }}
+    />
+  );
+  if (variant !== "bare") {
+    return field;
+  }
+  const text = String(props.value ?? "");
+  return (
+    <div className="relative min-w-0">
+      {highlighted ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 overflow-hidden p-0 text-sm leading-chat font-book tracking-tight break-words whitespace-pre-wrap text-text"
+          ref={mirror}
+        >
+          <mark className="bg-accent-muted p-0 text-accent-text">
+            {text.slice(0, highlightLength)}
+          </mark>
+          {text.slice(highlightLength)}
+          {"\n"}
+        </div>
+      ) : null}
+      {field}
+    </div>
+  );
+};
 
 /** Field label above an input. */
 export const FieldLabel = ({

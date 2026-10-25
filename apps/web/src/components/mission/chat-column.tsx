@@ -1,6 +1,6 @@
 "use client";
 
-import type { TranscriptItem } from "@missions/protocol/missions";
+import type { QueueItem, TranscriptItem } from "@missions/protocol/missions";
 import { useEffect, useMemo, useRef } from "react";
 
 import { MissionComposer } from "@/components/mission/composer";
@@ -22,12 +22,13 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { errorMessage } from "@/lib/api/api-error";
 import { useSingleFlightMutation } from "@/lib/api/use-operation";
 import { formatDuration, isMissionActive } from "@/lib/format";
+import { inlineIdleSubmissions } from "@/lib/mission/idle-send";
 import {
   deliveredRequestIds,
   goalRequestId,
   showGoalBubble,
 } from "@/lib/mission/queue";
-import { buildTimeline } from "@/lib/mission/timeline";
+import { buildTimeline, turnParts } from "@/lib/mission/timeline";
 import { WAITING, waitingOf } from "@/lib/mission/waiting";
 import { useNow } from "@/lib/use-now";
 
@@ -68,15 +69,22 @@ const EarlierMessages = ({ onLoaded }: { onLoaded: () => void }) => {
   );
 };
 
-/** When the current turn began: the latest message to the agents, else mission start. */
-const turnStart = (transcript: readonly TranscriptItem[], fallback: string) => {
-  let start = fallback;
+/** Unknown paginated starts remain unknown, rather than using mission age. */
+const turnStart = (
+  transcript: readonly TranscriptItem[],
+  agentId: string,
+  queue: Readonly<Record<string, QueueItem>>
+) => {
+  let start: string | null = null;
   for (const item of transcript) {
     if (
       (item.kind === "user" ||
         item.kind === "system" ||
-        item.kind === "agent_message") &&
-      item.createdAt > start
+        (item.kind === "agent_message" &&
+          item.recipient?.agentId === agentId &&
+          item.requestId !== null &&
+          queue[item.requestId]?.state === "sent")) &&
+      (start === null || item.createdAt > start)
     ) {
       start = item.createdAt;
     }
@@ -92,12 +100,15 @@ const turnStart = (transcript: readonly TranscriptItem[], fallback: string) => {
 const WorkingLine = ({
   agentId,
   transcript,
+  now,
+  showDuration,
 }: {
   agentId?: string;
   transcript: readonly TranscriptItem[];
+  now: number;
+  showDuration: boolean;
 }) => {
   const { live } = useMission();
-  const now = useNow();
   const agents = Object.values(live.agents).filter(
     (agent) => !agentId || agent.id === agentId
   );
@@ -115,23 +126,26 @@ const WorkingLine = ({
   if (waiting) {
     label = WAITING[waiting].long;
   }
-  const started = Date.parse(turnStart(transcript, live.mission.createdAt));
+  const started = turnStart(transcript, agentId ?? "", live.queue);
   return (
     <div className="flex h-2xl shrink-0 items-center gap-control">
       <DotLoader label="Agents working" tone="accent" />
       <span className="text-sm leading-sm font-medium tracking-tight text-text-secondary">
         {label}
       </span>
-      <span className="font-mono text-2xs leading-xs font-book text-text-tertiary">
-        {formatDuration(Math.max(0, now - started))}
-      </span>
+      {started && showDuration ? (
+        <span className="font-mono text-2xs leading-xs font-book text-text-tertiary">
+          {formatDuration(Math.max(0, now - Date.parse(started)))}
+        </span>
+      ) : null}
     </div>
   );
 };
 
 /** Paper FQQ chat column: transcript, inline state cards, and the composer. */
 export const ChatColumn = ({ agentId }: { agentId?: string }) => {
-  const { live, missionId } = useMission();
+  const { idleSubmissions, live, missionId } = useMission();
+  const now = useNow();
   const worker = agentId ? live.agents[agentId]?.role === "worker" : false;
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -220,7 +234,34 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
     return () => observer.disconnect();
   }, []);
 
-  const running = isMissionActive(live.mission.status);
+  const currentAgentId =
+    agentId ??
+    Object.values(live.agents).find((agent) => agent.role === "orchestrator")
+      ?.id ??
+    "";
+  const running =
+    ["working", "starting"].includes(
+      live.agents[currentAgentId]?.status ?? ""
+    ) && isMissionActive(live.mission.status);
+  const parts = useMemo(() => {
+    const visible = worker
+      ? entries
+      : entries.filter(
+          (entry) =>
+            entry.agentId === null ||
+            live.agents[entry.agentId]?.role !== "worker" ||
+            !["assistant", "preview", "thinking", "tools"].includes(entry.kind)
+        );
+    const delivered = new Set(
+      Object.values(live.queue)
+        .filter((item) => item.state === "sent")
+        .map((item) => item.id)
+    );
+    return turnParts(visible, currentAgentId, running, delivered);
+  }, [entries, worker, live.agents, live.queue, currentAgentId, running]);
+  const timedByWork = parts.some(
+    (part) => part.kind === "work" && part.running
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -263,8 +304,31 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
               />
             ) : null}
             {goalBubble ? <WorkspaceLine /> : null}
-            <Transcript entries={entries} running={running} />
-            <WorkingLine agentId={agentId} transcript={transcript} />
+            <Transcript parts={parts} now={now} running={running} />
+            {worker
+              ? null
+              : inlineIdleSubmissions(
+                  idleSubmissions,
+                  live.queue,
+                  transcript
+                ).map((submission) => (
+                  <div
+                    className="flex flex-col"
+                    data-testid="pending-message"
+                    key={submission.id}
+                  >
+                    <UserMessage
+                      pendingAttachments={submission.attachments}
+                      text={submission.text}
+                    />
+                  </div>
+                ))}
+            <WorkingLine
+              agentId={currentAgentId}
+              now={now}
+              showDuration={!timedByWork}
+              transcript={transcript}
+            />
             {worker ? null : (
               <>
                 <MissionBanners />
@@ -282,7 +346,16 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
             Orchestrator.
           </p>
         ) : (
-          <MissionComposer />
+          <MissionComposer
+            onSend={() => {
+              pinned.current = true;
+              preserveFrom.current = null;
+              const element = scroller.current;
+              if (element) {
+                element.scrollTop = element.scrollHeight;
+              }
+            }}
+          />
         )}
       </div>
     </div>

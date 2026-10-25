@@ -5,7 +5,10 @@ import { useState } from "react";
 
 import { errorMessage } from "@/lib/api/api-error";
 import { api } from "@/lib/api/endpoints";
-import type { MessageDraft } from "@/lib/mission/message-draft";
+import type {
+  DraftAttachment,
+  MessageDraft,
+} from "@/lib/mission/message-draft";
 
 export const useAttachments = (draft: MessageDraft, disabled: boolean) => {
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +43,11 @@ export const useAttachments = (draft: MessageDraft, disabled: boolean) => {
       if (event.clipboardData.files.length > 0) {
         event.preventDefault();
         add(event.clipboardData.files);
+      }
+    },
+    handleRetry: (file: DraftAttachment) => {
+      if (!disabled && draft.retryAttachment(file.key)) {
+        void upload(file.source, file.key);
       }
     },
     handleSelect: (event: ChangeEvent<HTMLInputElement>) => {

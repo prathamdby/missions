@@ -12,9 +12,13 @@ import { AtIcon, AttachIcon } from "@/components/ui/icons";
 import { FileInput, Textarea } from "@/components/ui/input";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import { Hint } from "@/components/ui/tooltip";
+import { skillTokenLength } from "@/lib/composer/skill-token";
 import { composerTrigger, insertSuggestion } from "@/lib/composer/trigger";
 import { useAttachments } from "@/lib/composer/use-attachments";
-import { useComposerSuggestions } from "@/lib/composer/use-suggestions";
+import {
+  useComposerCatalog,
+  useComposerSuggestions,
+} from "@/lib/composer/use-suggestions";
 import type { ComposerScope } from "@/lib/composer/use-suggestions";
 import type { MessageDraft } from "@/lib/mission/message-draft";
 
@@ -56,6 +60,8 @@ export const ComposerField = ({
     draft.attachmentSnapshot
   );
   const upload = useAttachments(draft, disabled);
+  const catalog = useComposerCatalog(scope, scope !== null);
+  const highlightLength = skillTokenLength(text, catalog.data?.commands ?? []);
   const input = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const listId = useId();
@@ -153,7 +159,11 @@ export const ComposerField = ({
           onDrop={upload.handleDrop}
           size={size}
         >
-          <AttachmentChips draft={draft} files={attachments} />
+          <AttachmentChips
+            draft={draft}
+            files={attachments}
+            onRetry={upload.handleRetry}
+          />
           {upload.error ? (
             <p role="alert" className="text-xs text-danger">
               {upload.error}
@@ -177,6 +187,7 @@ export const ComposerField = ({
             data-testid={testId}
             disabled={disabled}
             id={id}
+            highlightLength={highlightLength}
             onChange={(event) => {
               draft.change(event.target.value);
               setCursor(event.target.selectionStart);

@@ -1,9 +1,12 @@
 "use client";
 
 import type { TranscriptItem } from "@missions/protocol/missions";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
-import { AttachmentPreview } from "@/components/composer/attachment-chips";
+import {
+  AttachmentPreview,
+  DraftPreview,
+} from "@/components/composer/attachment-chips";
 import { AgentMessages } from "@/components/mission/agent-message";
 import { AssignmentCard } from "@/components/mission/assignment-card";
 import { EventLine } from "@/components/mission/chat-cards";
@@ -15,21 +18,30 @@ import { QuestionCard } from "@/components/mission/question-card";
 import { Thinking } from "@/components/mission/thinking";
 import { CommandCard, EditCard, RanRow } from "@/components/mission/tool-cards";
 import { ToolRun } from "@/components/mission/tool-group";
+import { TurnGroup } from "@/components/mission/turn-group";
 import { Callout } from "@/components/ui/callout";
 import { Markdown } from "@/components/ui/markdown";
+import type { DraftAttachment } from "@/lib/mission/message-draft";
 import { todoProgress } from "@/lib/mission/overview";
 import { goalRequestId } from "@/lib/mission/queue";
-import { transcriptRows } from "@/lib/mission/timeline";
-import type { TimelineEntry } from "@/lib/mission/timeline";
+import {
+  rememberWorkOpen,
+  storedWorkOpen,
+  transcriptRows,
+} from "@/lib/mission/timeline";
+import type { TimelineEntry, TurnPart } from "@/lib/mission/timeline";
 import { markFirstOutput } from "@/lib/perf-marks";
 
 /** Paper user bubble: right-aligned, 480px max, overlay surface. */
+const NO_ATTACHMENTS: readonly DraftAttachment[] = [];
 export const UserMessage = ({
   text,
   requestId,
+  pendingAttachments = NO_ATTACHMENTS,
 }: {
   text: string;
   requestId?: string | null;
+  pendingAttachments?: readonly DraftAttachment[];
 }) => {
   const { live, missionId } = useMission();
   const attachments = requestId
@@ -40,6 +52,18 @@ export const UserMessage = ({
       <p className="max-w-prose text-sm leading-chat font-book tracking-tight text-pretty break-words whitespace-pre-wrap text-text select-text">
         {text}
       </p>
+      {pendingAttachments.length ? (
+        <ul
+          aria-label="Message attachments"
+          className="flex flex-wrap gap-sm pt-sm"
+        >
+          {pendingAttachments.map((file) => (
+            <li key={file.key}>
+              <DraftPreview file={file} />
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {attachments.length ? (
         <ul
           aria-label="Message attachments"
@@ -165,7 +189,7 @@ const isGoal = (item: TranscriptItem, missionId: string) =>
  * The Orchestrator's side of the mission: messages, tool runs, and decision
  * cards. The worktree line follows the goal.
  */
-export const Transcript = ({
+const TranscriptRows = ({
   entries,
   running,
 }: {
@@ -175,7 +199,7 @@ export const Transcript = ({
   const { missionId } = useMission();
   const rows = transcriptRows(entries, running);
   return (
-    <ol aria-label="Mission transcript" className="flex flex-col gap-lg">
+    <ol className="flex flex-col gap-lg">
       {rows.map((row) => {
         if (row.kind === "card") {
           return (
@@ -220,6 +244,45 @@ export const Transcript = ({
           </li>
         );
       })}
+    </ol>
+  );
+};
+
+export const Transcript = ({
+  parts,
+  running,
+  now,
+}: {
+  parts: readonly TurnPart[];
+  running: boolean;
+  now: number;
+}) => {
+  const [manual, setManual] = useState(() => new Map<string, boolean>());
+  return (
+    <ol aria-label="Mission transcript" className="flex flex-col gap-lg">
+      {parts.map((part) => (
+        <li className="flex min-w-0 flex-col" key={part.id}>
+          {part.kind === "work" ? (
+            <TurnGroup
+              end={part.end}
+              failures={part.failures}
+              now={now}
+              onOpenChange={(open) => {
+                setManual((current) =>
+                  rememberWorkOpen(current, part.entries, open)
+                );
+              }}
+              open={storedWorkOpen(manual, part.entries, part.running)}
+              running={part.running}
+              start={part.start}
+            >
+              <TranscriptRows entries={part.entries} running={part.running} />
+            </TurnGroup>
+          ) : (
+            <TranscriptRows entries={part.entries} running={running} />
+          )}
+        </li>
+      ))}
     </ol>
   );
 };

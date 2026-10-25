@@ -150,4 +150,32 @@ describe("attachment draft ownership", () => {
     ).toBeTruthy();
     expect(controller.take("steer")).toBeNull();
   });
+
+  it("retries the same local file, blocks concurrent retry and preserves the text", () => {
+    const controller = draft();
+    const source = file("notes.txt");
+    controller.change("Keep this draft");
+    controller.beginAttachment("retry", source);
+    controller.failAttachment("retry", "offline");
+    expect([
+      controller.retryAttachment("retry"),
+      controller.retryAttachment("retry"),
+    ]).toStrictEqual([true, false]);
+    expect(controller.attachmentSnapshot()[0]).toMatchObject({
+      error: null,
+      source,
+      status: "uploading",
+    });
+    expect(controller.uploadsReady()).toBeFalsy();
+    controller.finishAttachment("retry", attachment);
+    expect([controller.uploadsReady(), controller.snapshot()]).toStrictEqual([
+      true,
+      "Keep this draft",
+    ]);
+    controller.removeAttachment("retry");
+    expect([
+      controller.retryAttachment("retry"),
+      controller.snapshot(),
+    ]).toStrictEqual([false, "Keep this draft"]);
+  });
 });

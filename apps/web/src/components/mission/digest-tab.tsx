@@ -146,15 +146,37 @@ const ITEM_ICON: Record<DigestItem["icon"], ReactNode> = {
   working: <DotLoader label="Working" tone="accent" />,
 };
 
+const ItemTitle = ({ item }: { item: DigestItem }) => {
+  const { showAgent } = useMission();
+  const className =
+    "text-left text-sm leading-sm font-medium tracking-tight text-text";
+  return item.agentId ? (
+    <button
+      className={cn(
+        className,
+        "cursor-pointer rounded-xs focus-visible:shadow-focus"
+      )}
+      onClick={() => {
+        if (item.agentId) {
+          showAgent(item.agentId);
+        }
+      }}
+      type="button"
+    >
+      {item.title}
+    </button>
+  ) : (
+    <span className={className}>{item.title}</span>
+  );
+};
+
 const ItemRow = ({ item }: { item: DigestItem }) => (
   <li className="flex gap-control rounded-md px-md py-control">
     <span className="flex h-4 w-5 shrink-0 items-center justify-center">
       {ITEM_ICON[item.icon]}
     </span>
     <div className="flex min-w-0 flex-1 flex-col gap-xs">
-      <span className="text-sm leading-sm font-medium tracking-tight text-text">
-        {item.title}
-      </span>
+      <ItemTitle item={item} />
       <Markdown appearance="panel">{item.detail}</Markdown>
     </div>
     <Age at={item.at} />

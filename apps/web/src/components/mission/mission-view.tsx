@@ -3,7 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 
 import { AgentConversations } from "@/components/mission/agent-conversations";
 import { MissionProvider } from "@/components/mission/mission-context";
@@ -26,6 +26,9 @@ import {
   attachMissionSink,
   missionCommandsFor,
 } from "@/lib/mission/command-registry";
+import { conversationTabs } from "@/lib/mission/conversation-tabs";
+import type { IdleSubmission } from "@/lib/mission/idle-send";
+import { inlineIdleSubmissions } from "@/lib/mission/idle-send";
 import { useMediaQuery, WIDE_QUERY } from "@/lib/use-media-query";
 
 const MissionPlaceholder = ({ error }: { error: unknown }) => {
@@ -77,12 +80,60 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
   const wide = useMediaQuery(WIDE_QUERY);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [tab, setTab] = useState<PanelTab>("overview");
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [idleSubmissions, setIdleSubmissions] = useState<
+    Readonly<Record<string, IdleSubmission>>
+  >({});
+  const presentIdleSubmission = useCallback((submission: IdleSubmission) => {
+    setIdleSubmissions((current) => ({
+      ...current,
+      [submission.id]: submission,
+    }));
+  }, []);
+  const failIdleSubmission = useCallback((id: string) => {
+    setIdleSubmissions((current) => {
+      if (!current[id]) {
+        return current;
+      }
+      return Object.fromEntries(
+        Object.entries(current).filter(([key]) => key !== id)
+      );
+    });
+  }, []);
+  const [conversations, dispatchConversation] = useReducer(conversationTabs, {
+    closed: [],
+    selected: null,
+  });
+  const selectedAgentId = conversations.selected;
   const showAgent = useCallback((agentId: string) => {
-    setSelectedAgentId(agentId);
+    dispatchConversation({ id: agentId, kind: "show" });
     setSheetOpen(false);
   }, []);
   const { applyLocal, error: sessionError, live, loadOlder, refresh } = mission;
+  // Release local Files once the durable transcript or retry tray owns the send.
+  const pendingIdle = live
+    ? inlineIdleSubmissions(
+        idleSubmissions,
+        live.queue,
+        Object.values(live.transcript)
+      )
+    : Object.values(idleSubmissions);
+  if (pendingIdle.length < Object.keys(idleSubmissions).length) {
+    setIdleSubmissions(
+      Object.fromEntries(
+        pendingIdle.map((submission) => [submission.id, submission])
+      )
+    );
+  }
+  const closeAgent = useCallback(
+    (agentId: string) => {
+      dispatchConversation({
+        agents: Object.values(live?.agents ?? {}),
+        id: agentId,
+        kind: "close",
+      });
+    },
+    [live?.agents]
+  );
 
   const showPanel = useCallback(
     (next: PanelTab) => {
@@ -116,10 +167,15 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
         ? {
             agentLabels: labels,
             applyLocal,
+            closeAgent,
+            closedAgentIds: conversations.closed,
             commands,
+            failIdleSubmission,
+            idleSubmissions,
             live,
             loadOlder,
             missionId,
+            presentIdleSubmission,
             refresh,
             selectedAgentId,
             sessionError,
@@ -130,6 +186,11 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
     [
       applyLocal,
       commands,
+      idleSubmissions,
+      presentIdleSubmission,
+      failIdleSubmission,
+      conversations.closed,
+      closeAgent,
       labels,
       live,
       loadOlder,
