@@ -142,6 +142,37 @@ test("manual turn expansion survives interruption without inventing an unloaded 
   ).toBeVisible();
 });
 
+test("a failed command is named on the collapsed work header", async ({
+  page,
+  request,
+}) => {
+  const snapshot = await uiMission(request, "ui-turn-failed");
+  snapshot.transcript = [
+    uiItem(snapshot, 100, "user", "Run the tests"),
+    uiItem(snapshot, 101, "tool_call", "", {
+      toolInput: { command: "pnpm test" },
+      toolName: "Execute",
+      toolUseId: "fail-1",
+    }),
+    uiItem(snapshot, 102, "tool_result", "exit 1", {
+      isError: true,
+      toolUseId: "fail-1",
+    }),
+    uiItem(snapshot, 103, "assistant", "The tests failed"),
+  ];
+  await mountUI(page, snapshot);
+  const header = page.getByTestId("turn-group").getByRole("button");
+  await expect(header).toContainText("Worked");
+  await expect(header).toContainText("Failed");
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(
+    page.getByText("The tests failed", { exact: true })
+  ).toBeVisible();
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("pnpm test", { exact: true })).toBeVisible();
+});
+
 test("agent messages use one measurable clamp and preserve text selection", async ({
   page,
   request,

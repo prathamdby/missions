@@ -110,6 +110,14 @@ describe("idle-send presentation", () => {
     ).toStrictEqual([]);
   });
 
+  it("hides inline sends that the queue removed or discarded", () => {
+    for (const state of ["removed", "discarded"] as const) {
+      expect(
+        inlineIdleSubmissions(submissions, { a: entry("a", state) }, [])
+      ).toStrictEqual([]);
+    }
+  });
+
   it("returns failed and uncertain sends to the retry tray", () => {
     for (const state of ["failed", "unknown"] as const) {
       const queue = { a: entry("a", state) };

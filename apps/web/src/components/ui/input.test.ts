@@ -95,6 +95,34 @@ describe("existing field defaults", () => {
     expect(markup).toContain('type="text"');
   });
 
+  it("mirrors a leading skill token on the bare composer only", () => {
+    const highlighted = renderToStaticMarkup(
+      createElement(Textarea, {
+        highlightLength: 7,
+        onChange: vi.fn<() => void>(),
+        value: "/review these files",
+        variant: "bare",
+      })
+    );
+    expect(highlighted).toContain("<mark");
+    expect(highlighted).toContain("/review</mark>");
+    expect(renderedClasses(highlighted).has("text-transparent")).toBeTruthy();
+    for (const props of [
+      { highlightLength: 0, variant: "bare" as const },
+      { highlightLength: 7, variant: "field" as const },
+    ]) {
+      const markup = renderToStaticMarkup(
+        createElement(Textarea, {
+          ...props,
+          onChange: vi.fn<() => void>(),
+          value: "/review these files",
+        })
+      );
+      expect(markup).not.toContain("<mark");
+      expect(renderedClasses(markup).has("text-transparent")).toBeFalsy();
+    }
+  });
+
   it.each(["bare", "field"] as const)(
     "keeps %s textareas content-sized and non-resizable",
     (variant) => {
