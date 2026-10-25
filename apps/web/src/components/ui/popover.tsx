@@ -11,6 +11,7 @@ export const PopoverAnchor = PopoverPrimitive.Anchor;
 export const PopoverClose = PopoverPrimitive.Close;
 
 const WIDTH = {
+  composer: "w-[min(340px,calc(100vw-var(--spacing-2xl)))]",
   /** PNO workspace picker. */
   lg: "w-[min(400px,calc(100vw-2rem))]",
   /** LTT project picker. */

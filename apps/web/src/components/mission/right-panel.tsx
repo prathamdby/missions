@@ -14,13 +14,16 @@ import { cn } from "@/lib/utils";
 const Body = ({
   children,
   gap,
+  fixed = false,
 }: {
   children: ReactNode;
   gap: "gutter" | "lg" | "section" | "xl";
+  fixed?: boolean;
 }) => (
   <div
     className={cn(
-      "flex min-h-full flex-col px-gutter pt-xl pb-lg",
+      "flex flex-col px-gutter pt-xl pb-lg",
+      fixed ? "h-full min-h-0 overflow-hidden" : "min-h-full",
       gap === "gutter" && "gap-gutter",
       gap === "section" && "gap-section",
       gap === "xl" && "gap-xl",
@@ -54,20 +57,16 @@ export const RightPanel = ({
         </TabsTrigger>
       </TabsList>
     </div>
-    <ScrollArea asChild axis="y" overscroll="contain">
-      <TabsContent value="overview">
-        <Body gap="gutter">
-          <OverviewTab />
-        </Body>
-      </TabsContent>
-    </ScrollArea>
-    <ScrollArea asChild axis="y" overscroll="contain">
-      <TabsContent value="digest">
-        <Body gap="section">
-          <DigestTab />
-        </Body>
-      </TabsContent>
-    </ScrollArea>
+    <TabsContent value="overview">
+      <Body fixed gap="gutter">
+        <OverviewTab />
+      </Body>
+    </TabsContent>
+    <TabsContent value="digest">
+      <Body fixed gap="section">
+        <DigestTab />
+      </Body>
+    </TabsContent>
     <ScrollArea asChild axis="y" overscroll="contain">
       <TabsContent value="files">
         <Body gap="xl">

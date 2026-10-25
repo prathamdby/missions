@@ -1,6 +1,7 @@
 "use client";
 
 import type { MessageParty, TranscriptItem } from "@missions/protocol/missions";
+import { useState } from "react";
 
 import {
   ChevronDownIcon,
@@ -8,12 +9,12 @@ import {
   SwapIcon,
 } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleHeader,
-} from "@/components/ui/collapsible";
 import { Markdown } from "@/components/ui/markdown";
+import {
+  ClampHeader,
+  ClampedContent,
+  useOverflow,
+} from "@/components/ui/overflow-area";
 import { deliveryOf } from "@/lib/mission/queue";
 import type { DeliveryState } from "@/lib/mission/queue";
 import { cn } from "@/lib/utils";
@@ -79,6 +80,8 @@ export const AgentMessages = ({
   items: readonly TranscriptItem[];
 }) => {
   const nameOf = usePartyName();
+  const [expanded, setExpanded] = useState(false);
+  const { content, overflow, viewport } = useOverflow(4);
   const [first] = items;
   if (!first) {
     return null;
@@ -95,12 +98,13 @@ export const AgentMessages = ({
   ];
   const exchange = items.length > 1;
   return (
-    <Collapsible
-      data-testid={exchange ? "agent-exchange" : "agent-message"}
-      defaultOpen
-    >
+    <div data-testid={exchange ? "agent-exchange" : "agent-message"}>
       <div className="flex min-w-0 flex-col gap-md wrap-anywhere">
-        <CollapsibleHeader>
+        <ClampHeader
+          expandable={overflow}
+          expanded={expanded}
+          onToggle={() => setExpanded(!expanded)}
+        >
           <SwapIcon className="text-text-tertiary" />
           <span className="sr-only">
             {exchange ? `${items.length} messages from` : "Message from"}
@@ -114,37 +118,66 @@ export const AgentMessages = ({
               {purposes.join(" · ")}
             </span>
           ) : null}
-          <ChevronDownIcon className="size-3 text-text-tertiary transition-transform duration-fast group-data-[state=closed]/disclosure:-rotate-90" />
-        </CollapsibleHeader>
-        <CollapsibleContent className="flex min-w-0">
+          {overflow ? (
+            <ChevronDownIcon
+              className={cn(
+                "size-3 text-text-tertiary",
+                !expanded && "-rotate-90"
+              )}
+            />
+          ) : null}
+        </ClampHeader>
+        <div className="flex min-w-0">
           <span
             aria-hidden="true"
             className="w-2 shrink-0 border-r border-border"
           />
-          <div className="flex min-w-0 flex-1 flex-col gap-md pl-xl">
-            {exchange ? (
-              <ol className="flex flex-col gap-control">
-                {items.map((item) => (
-                  <li className="flex gap-control" key={item.id}>
-                    <span className="w-18 shrink-0 truncate text-xs leading-chat font-book tracking-tight text-text-tertiary">
-                      {nameOf(item.sender, item.agentId)}
-                    </span>
-                    <div className="flex min-w-0 flex-1 flex-col gap-xs">
-                      <Markdown>{item.text}</Markdown>
-                      <DeliveryNote item={item} />
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="flex max-w-prose flex-col gap-xs">
-                <Markdown appearance="panel">{first.text}</Markdown>
-                <DeliveryNote item={first} />
-              </div>
-            )}
+          <div
+            className="flex min-w-0 flex-1 flex-col gap-md pl-xl"
+            onPointerUp={(event) => {
+              if (
+                event.button === 0 &&
+                overflow &&
+                !window.getSelection()?.toString() &&
+                !(
+                  event.target instanceof Element &&
+                  event.target.closest("a,button")
+                )
+              ) {
+                setExpanded(!expanded);
+              }
+            }}
+          >
+            <ClampedContent
+              contentRef={content}
+              expanded={expanded}
+              faded={overflow}
+              viewportRef={viewport}
+            >
+              {exchange ? (
+                <ol className="flex flex-col gap-control">
+                  {items.map((item) => (
+                    <li className="flex gap-control" key={item.id}>
+                      <span className="w-18 shrink-0 truncate text-xs leading-chat font-book tracking-tight text-text-tertiary">
+                        {nameOf(item.sender, item.agentId)}
+                      </span>
+                      <div className="flex min-w-0 flex-1 flex-col gap-xs">
+                        <Markdown>{item.text}</Markdown>
+                        <DeliveryNote item={item} />
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <div className="flex max-w-prose flex-col gap-xs">
+                  <Markdown appearance="panel">{first.text}</Markdown>
+                  <DeliveryNote item={first} />
+                </div>
+              )}
+            </ClampedContent>
           </div>
-        </CollapsibleContent>
+        </div>
       </div>
-    </Collapsible>
+    </div>
   );
 };

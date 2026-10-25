@@ -15,6 +15,7 @@ import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { Button, IconButton } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { inlineIdleSubmissions } from "@/lib/mission/idle-send";
 import {
   deliveredRequestIds,
   goalRequestId,
@@ -291,7 +292,7 @@ const QueueRow = ({
 
 /** Queue items the tray shows: pending ones and recently settled ones. */
 export const useVisibleQueue = () => {
-  const { live, missionId } = useMission();
+  const { idleSubmissions, live, missionId } = useMission();
   const now = useNow();
   const goalId = goalRequestId(missionId);
   const goal = live.queue[goalId];
@@ -302,8 +303,13 @@ export const useVisibleQueue = () => {
       new Set([
         ...deliveredRequestIds(Object.values(live.transcript)),
         ...(goalRetryable ? [] : [goalId]),
+        ...inlineIdleSubmissions(
+          idleSubmissions,
+          live.queue,
+          Object.values(live.transcript)
+        ).map((item) => item.id),
       ]),
-    [live.transcript, goalId, goalRetryable]
+    [live.transcript, live.queue, idleSubmissions, goalId, goalRetryable]
   );
   return visibleQueue(Object.values(live.queue), now, hidden);
 };

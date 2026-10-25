@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
+import { FileTextIcon, SkillIcon, TerminalIcon } from "@/components/ui/icons";
 import { Listbox, ListOption } from "@/components/ui/list-row";
 import { PopoverContent } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -10,7 +11,19 @@ export interface ComposerSuggestion {
   value: string;
   label?: string;
   description?: string;
+  kind?: "command" | "skill";
 }
+
+const SuggestionIcon = ({ kind }: { kind: ComposerSuggestion["kind"] }) => {
+  if (kind === "skill") {
+    return <SkillIcon tone="tertiary" />;
+  }
+  return kind === "command" ? (
+    <TerminalIcon tone="tertiary" />
+  ) : (
+    <FileTextIcon tone="secondary" />
+  );
+};
 
 export const ComposerSuggestions = ({
   activeIndex,
@@ -44,6 +57,7 @@ export const ComposerSuggestions = ({
       onCloseAutoFocus={(event) => event.preventDefault()}
       onOpenAutoFocus={(event) => event.preventDefault()}
       side="top"
+      size="composer"
     >
       <ScrollArea axis="y">
         <Listbox aria-label="Composer suggestions" id={id}>
@@ -55,16 +69,17 @@ export const ComposerSuggestions = ({
               onMouseDown={(event) => event.preventDefault()}
               ref={index === activeIndex ? selected : undefined}
               selected={index === activeIndex}
+              size="suggestion"
+              title={item.description}
               virtualFocus
             >
-              <span className="flex min-w-0 flex-col gap-2xs text-left">
+              <SuggestionIcon kind={item.kind} />
+              <span className="flex min-w-0 flex-1 flex-col text-left">
                 <span className="truncate font-mono text-xs leading-sm">
                   {item.label ?? item.value}
                 </span>
                 {item.description ? (
-                  <span className="truncate text-xs leading-sm text-text-tertiary">
-                    {item.description}
-                  </span>
+                  <span className="sr-only">{item.description}</span>
                 ) : null}
               </span>
             </ListOption>

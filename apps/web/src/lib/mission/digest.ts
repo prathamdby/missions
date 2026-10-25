@@ -19,6 +19,7 @@ export type DigestNeed =
   | { at: string; id: string; kind: "question"; question: Question };
 
 export interface DigestItem {
+  agentId?: string | null;
   at: string;
   detail: string;
   icon: DigestIcon;
@@ -103,6 +104,7 @@ const recentOf = (input: DigestInput): DigestItem[] => {
   for (const assignment of Object.values(input.assignments)) {
     if (assignment.status === "handed_off") {
       items.push({
+        agentId: assignment.workerAgentId,
         at: assignment.updatedAt,
         detail:
           assignment.handoff?.summary ??
@@ -126,6 +128,7 @@ const recentOf = (input: DigestInput): DigestItem[] => {
   }
   for (const artifact of Object.values(input.artifacts)) {
     items.push({
+      agentId: artifact.agentId,
       at: artifact.createdAt,
       detail: artifact.agentId
         ? workerName(input, artifact.agentId)
@@ -153,6 +156,7 @@ const inProgressOf = (input: DigestInput): DigestItem[] => {
       : undefined;
     const name = workerName(input, assignment.workerAgentId);
     items.push({
+      agentId: assignment.workerAgentId,
       at: assignment.createdAt,
       detail: agent?.workingState ? `${name} · ${agent.workingState}` : name,
       icon: "working",
@@ -164,6 +168,7 @@ const inProgressOf = (input: DigestInput): DigestItem[] => {
     for (const todo of Object.values(input.todos).flat()) {
       if (todo.status === "in_progress") {
         items.push({
+          agentId: todo.agentId,
           at: input.mission.updatedAt,
           detail: todo.agentId ? workerName(input, todo.agentId) : "Mission",
           icon: "working",
