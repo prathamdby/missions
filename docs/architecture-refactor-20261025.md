@@ -13,7 +13,7 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - [x] P2: Narrow publishing access.
 - [x] P3: Reject delivery extraction under the approved benefit rule.
 - [x] P4: Reject lifecycle extraction under the approved benefit rule.
-- [ ] P5: Subtract unreachable permission completion machinery.
+- [x] P5: Subtract unreachable permission completion machinery.
 - [ ] P6: Hide mount-scoped command/sink assembly.
 - [ ] P7: Extract pure conversation projection at existing memo boundaries.
 - [ ] P8: Final equivalence, structural restrictions, rollback and tool report.
@@ -82,6 +82,17 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - Rejection: a registry-only module would expose the owner objects, iteration, phase, epoch, occupancy and retirement resetting. A full extraction requires callbacks for all these features and relocates workspace exclusion, synchronous fences, immediate-turn yields and service-wide joining. Neither hides more knowledge than its interface exposes.
 - Boundaries retained: runtime readiness is awaited outside the canonical workspace gate; closeRuntime remains synchronous before its returned promise; execute invokes the effect synchronously; leases/occupancy release only after confirmed shutdown. No LiveAgent split, duplicate owner or transition queue.
 - Deletion/revert: none. The proposed extraction is rejected, not implemented. Existing deferred-start/Pause/shutdown/model/Worker/question/Plan assertions and executable equivalence remain intact.
+
+### P5, unreachable permission completion
+
+- Base: `105f2b7`. Action: remove Pending, the never-populated private Map, completion resolver/persistence, grant writes and their private clock helper.
+- Reason: repository-wide reference inspection and the complete file show no insertion into the ECMAScript-private Map, including construction/recovery. No caller can supply a live Pending entry.
+- Proof: before subtraction, new HTTP characterization passes every decision for historical/missing/wrong-Mission requests before and after restart. Restart already marks the stored request stale; the original assumption that it stayed pending failed against the old build and was corrected there. The observed HTTP errors, no added writes/events/grants and synchronous exact StaleDecisionError are retained.
+- Proof: classification, mandatoryDenial, ask, acquireLease and the live abort loop are byte-identical to this slice's base. The 30-second timer, random cancellation keys, attribution, revalidation and lease ownership are unchanged. Store/options/public callable signatures and historical endpoint remain.
+- Compatibility entrypoints now reference shared stateless function values, rather than retaining a phantom instance Map merely to satisfy class-methods-use-this. There is no per-instance function closure, added owner, new promise, lint exemption or forwarding module.
+- Proof: 203 focused tests pass. Gate: 104 files / 1,095 tests; complete desktop/mobile browser suite: 62/62. Logs: `p5-before.log`, `p5-focused.log`, `p5-gate.log`, `p5-e2e.log`. The initial new fixture omitted its required version field; typecheck caught it and it was supplied before the passing gate.
+- Deletion: unreachable completion only; broker policy, exported classifications, live cancellation, database schema and route/service validation remain.
+- Revert: this subtraction commit after stopping the app/daemon pair. It changes no persisted representation and undoes no external action.
 
 ### Deferred observations and blockers
 
