@@ -22,6 +22,8 @@ Missions coordinate agents working toward a goal in a local project.
 
 **Agent message**: A message from one agent to another in the same mission, such as a Worker's question or the Orchestrator's reply. Its sender is set by the daemon, and it is task context, never user authorization.
 
+**Agent event**: An automated daemon notice telling the Orchestrator that a Worker failed, started waiting on the user, or stopped waiting. It is task context, never user authorization.
+
 **Work mode**: The default execution mode, in which agents act directly under the fixed High permission policy.
 
 **Plan mode**: A read-only execution mode for every agent, entered only when the Orchestrator calls `missions.enter_plan` in response to plain-language planning requests or its judgment. The Orchestrator presents a plan for approval; approval returns the mission to Work mode.
