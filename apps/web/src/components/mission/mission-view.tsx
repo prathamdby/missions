@@ -22,13 +22,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage, isApiError } from "@/lib/api/api-error";
 import { agentLabels } from "@/lib/format";
 import { useMissionLive } from "@/lib/live/hooks";
-import {
-  attachMissionSink,
-  missionCommandsFor,
-} from "@/lib/mission/command-registry";
 import { conversationTabs } from "@/lib/mission/conversation-tabs";
 import type { IdleSubmission } from "@/lib/mission/idle-send";
 import { inlineIdleSubmissions } from "@/lib/mission/idle-send";
+import { useMissionCommands } from "@/lib/mission/use-mission-commands";
 import { useMediaQuery, WIDE_QUERY } from "@/lib/use-media-query";
 
 const MissionPlaceholder = ({ error }: { error: unknown }) => {
@@ -150,11 +147,7 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
     () => (agents ? agentLabels(Object.values(agents)) : {}),
     [agents]
   );
-  const commands = missionCommandsFor(client, missionId);
-  useEffect(
-    () => attachMissionSink(client, missionId, { apply: applyLocal, refresh }),
-    [client, missionId, applyLocal, refresh]
-  );
+  const commands = useMissionCommands(client, missionId, applyLocal, refresh);
   const { removed } = mission;
   useEffect(() => {
     if (removed) {

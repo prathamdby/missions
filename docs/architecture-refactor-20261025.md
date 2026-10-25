@@ -14,7 +14,7 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - [x] P3: Reject delivery extraction under the approved benefit rule.
 - [x] P4: Reject lifecycle extraction under the approved benefit rule.
 - [x] P5: Subtract unreachable permission completion machinery.
-- [ ] P6: Hide mount-scoped command/sink assembly.
+- [x] P6: Hide mount-scoped command/sink assembly.
 - [ ] P7: Extract pure conversation projection at existing memo boundaries.
 - [ ] P8: Final equivalence, structural restrictions, rollback and tool report.
 
@@ -93,6 +93,17 @@ This is a structural refactor, not a behavior improvement. Preserve UI, keys, mo
 - Proof: 203 focused tests pass. Gate: 104 files / 1,095 tests; complete desktop/mobile browser suite: 62/62. Logs: `p5-before.log`, `p5-focused.log`, `p5-gate.log`, `p5-e2e.log`. The initial new fixture omitted its required version field; typecheck caught it and it was supplied before the passing gate.
 - Deletion: unreachable completion only; broker policy, exported classifications, live cancellation, database schema and route/service validation remain.
 - Revert: this subtraction commit after stopping the app/daemon pair. It changes no persisted representation and undoes no external action.
+
+### P6, mount-scoped command binding
+
+- Base: `9c870ab`. Action: put existing command lookup and sink-effect assembly in useMissionCommands, called exactly where the original effect was called.
+- Reason: MissionView no longer knows the command registry's sink assembly. The sidebar retains direct admission access; it does not own an open-view sink.
+- Proof: a restriction with forbidden/allowed view/hook/sidebar fixtures rejects the old view. The registry, WeakMap, cleanup identity, local live store, QueryClient location and detached global-summary/resource/removal paths are untouched. All four effect dependencies and its effect-time sink allocation are identical; no new state, memo, effect, owner or network request.
+- Proof: 25 focused command/intent/transport/live-store/global-cache files, 173 tests pass. Gate: 105 files / 1,097 tests. Full desktop/mobile E2E, including unchanged zero-pixel baselines and mount/failure/reset flows, 62/62. Logs: `p6-focused.log`, `p6-gate.log`, `p6-e2e-recovered.log`.
+- Interruption: the first browser run was cancelled after the gate. A restart detected occupied test ports; only identified orphan servers from this checkout were stopped. The complete subsequent run passed. Partial logs are retained and are not counted as completed validation.
+- Deletion: command/sink assembly and its registry import from MissionView. applyLocal, refresh, mount-owned Files/drafts and existing rendering remain.
+- Revert: the hook/import commit; no persisted representation or external effect.
+- Delivery procedure: scoped commits use the prath-mode commit leaf, hooks on, conventional messages, denied identity/harness trailers and verified diffs. Final delivery uses ship (implementation, deslop, commit, make-pr), with one normally pushed PR to main and immediate T3 linking.
 
 ### Deferred observations and blockers
 
