@@ -7,7 +7,13 @@ import { CheckIcon, CloseIcon, PauseIcon } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { DotLoader } from "@/components/mission/panel-kit";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  ConversationTab,
+  Tabs,
+  TabsContent,
+  TabsList,
+} from "@/components/ui/tabs";
+import { orderedAgents } from "@/lib/mission/conversation-tabs";
 import { WAITING, waitingOf } from "@/lib/mission/waiting";
 
 /** Waiting for the agent's own progress, not for the user. */
@@ -57,11 +63,16 @@ const AgentState = ({ agent }: { agent: Agent }) => {
 
 /** Paper's horizontal, independently selectable agent conversations. */
 export const AgentConversations = () => {
-  const { agentLabels, live, selectedAgentId, showAgent } = useMission();
-  const agents = Object.values(live.agents).toSorted(
-    (a, b) =>
-      Number(b.role === "orchestrator") - Number(a.role === "orchestrator") ||
-      a.createdAt.localeCompare(b.createdAt)
+  const {
+    agentLabels,
+    closeAgent,
+    closedAgentIds,
+    live,
+    selectedAgentId,
+    showAgent,
+  } = useMission();
+  const agents = orderedAgents(Object.values(live.agents)).filter(
+    (agent) => !closedAgentIds.includes(agent.id)
   );
   const selected =
     agents.find((agent) => agent.id === selectedAgentId) ?? agents[0];
@@ -77,20 +88,30 @@ export const AgentConversations = () => {
       <ScrollArea asChild axis="x">
         <div className="flex h-13 shrink-0 items-center border-b border-border-subtle px-lg">
           <TabsList aria-label="Agent conversations" variant="conversation">
-            {agents.map((agent) => (
-              <TabsTrigger
-                variant="conversation"
-                key={agent.id}
-                value={agent.id}
-              >
-                {agent.role === "orchestrator"
+            {agents.map((agent) => {
+              const label =
+                agent.role === "orchestrator"
                   ? "Orchestrator"
                   : (live.assignments[agent.assignmentId ?? ""]?.title ??
                     agentLabels[agent.id] ??
-                    agent.title)}
-                <AgentState agent={agent} />
-              </TabsTrigger>
-            ))}
+                    agent.title);
+              return (
+                <ConversationTab
+                  key={agent.id}
+                  label={label}
+                  onClose={
+                    agent.role === "orchestrator"
+                      ? undefined
+                      : () => closeAgent(agent.id)
+                  }
+                  selected={selected.id === agent.id}
+                  value={agent.id}
+                >
+                  {label}
+                  <AgentState agent={agent} />
+                </ConversationTab>
+              );
+            })}
           </TabsList>
         </div>
       </ScrollArea>

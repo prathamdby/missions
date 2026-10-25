@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { ChatCard } from "@/components/mission/chat-cards";
 import { CloseIcon } from "@/components/mission/icons";
 import { useMissionCommand } from "@/components/mission/use-mission-command";
+import { AnswerRow } from "@/components/ui/answer-row";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
@@ -258,24 +259,18 @@ const AnsweredQuestions = ({ question }: { question: Question }) => {
       <h3 className="pb-md text-xs leading-sm font-medium tracking-tight text-text-secondary">
         Answered {count} {count === 1 ? "question" : "questions"}
       </h3>
-      <dl className="flex flex-col">
+      <div className="flex flex-col">
         {question.questions.map((item) => {
           const answer = answers.find((entry) => entry.index === item.index);
           return (
-            <div
-              className="flex gap-lg border-t border-border-subtle py-md text-xs leading-sm tracking-tight"
+            <AnswerRow
+              answer={answer ? answerLabel(item.options, answer.answer) : "—"}
               key={item.index}
-            >
-              <dt className="w-50 shrink-0 font-book text-text-tertiary">
-                {item.question}
-              </dt>
-              <dd className="min-w-0 flex-1 font-medium text-text">
-                {answer ? answerLabel(item.options, answer.answer) : "—"}
-              </dd>
-            </div>
+              question={item.question}
+            />
           );
         })}
-      </dl>
+      </div>
     </section>
   );
 };

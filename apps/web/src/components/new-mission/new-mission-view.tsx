@@ -235,7 +235,7 @@ const ChangedFiles = ({ files }: { files: readonly string[] }) => (
         Uncommitted in your checkout
       </p>
       <ScrollArea asChild axis="y">
-        <ul className="flex max-h-60 flex-col px-md pb-md">
+        <ul className="max-h-60 px-md pb-md">
           {files.map((file) => (
             <li
               className="truncate py-2xs font-mono text-2xs leading-xs text-text-secondary"

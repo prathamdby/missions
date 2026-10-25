@@ -213,8 +213,6 @@ const ArtifactPreview = ({ artifact }: { artifact: Artifact }) => {
   );
 };
 
-const MAX_FILE_CARDS = 5;
-
 const Files = () => {
   const { live, missionId } = useMission();
   const now = useNow();
@@ -226,8 +224,8 @@ const Files = () => {
   }
   return (
     <PanelSection count={artifacts.length} gap="lg" title="Files">
-      <ul className="flex gap-control overflow-hidden">
-        {artifacts.slice(0, MAX_FILE_CARDS).map((artifact) => {
+      <ul className="flex flex-wrap gap-control">
+        {artifacts.map((artifact) => {
           const agent = artifact.agentId
             ? live.agents[artifact.agentId]
             : undefined;

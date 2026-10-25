@@ -14,6 +14,69 @@ import {
 
 const SETTLED = /^awaiting_approval(?:,(?:idle|waiting_permission))+$/u;
 
+test("sending from earlier history returns to the bottom and re-pins", async ({
+  page,
+  request,
+}) => {
+  const project = await addProject(request, gitRepo("transcript-send-scroll"));
+  const mission = await createMission(request, project.id);
+  await expect
+    .poll(
+      async () =>
+        MissionSnapshotSchema.parse(await missionSnapshot(request, mission.id))
+          .mission.status,
+      { timeout: 30_000 }
+    )
+    .toBe("awaiting_approval");
+  const snapshot = MissionSnapshotSchema.parse(
+    await missionSnapshot(request, mission.id)
+  );
+  const agentId = snapshot.agents[0]?.id;
+  if (!agentId) {
+    throw new Error("Missing scripted agent");
+  }
+  snapshot.transcript = Array.from({ length: 40 }, (_, index) =>
+    TranscriptItemSchema.parse({
+      agentId,
+      createdAt: new Date(
+        Date.parse(snapshot.mission.createdAt) + index * 1000
+      ).toISOString(),
+      id: `scroll-${index}`,
+      isError: false,
+      kind: index % 2 ? "assistant" : "user",
+      missionId: mission.id,
+      requestId: null,
+      seq: 100 + index,
+      text: `History ${index}: ${"Keep the public interface unchanged. ".repeat(8)}`,
+      toolName: null,
+      toolUseId: null,
+    })
+  );
+  await page.route(`**/missions/${mission.id}/snapshot`, (route) =>
+    route.fulfill({ json: snapshot })
+  );
+  await page.goto(`/missions/${mission.id}`);
+  const conversation = page.getByRole("region", {
+    exact: true,
+    name: "Conversation",
+  });
+  const bottomDistance = () =>
+    conversation.evaluate(
+      (node) => node.scrollHeight - node.scrollTop - node.clientHeight
+    );
+  await expect.poll(bottomDistance).toBeLessThan(2);
+  await conversation.evaluate((node) => {
+    node.scrollTop = 0;
+  });
+  await expect.poll(bottomDistance).toBeGreaterThan(500);
+  // Reject transport: sending itself must re-pin, not a later SSE update.
+  await page.route("**/messages", (route) => route.abort("failed"));
+  const composer = page.getByTestId("composer-input");
+  await composer.fill("Continue from here");
+  await composer.press("Enter");
+  await expect.poll(bottomDistance).toBeLessThan(2);
+});
+
 test("earlier transcript failures stay visible and retry loads the missing page", async ({
   page,
   request,

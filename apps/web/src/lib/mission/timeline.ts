@@ -441,3 +441,170 @@ export const transcriptRows = (
   }
   return rows;
 };
+
+const NO_DELIVERIES: ReadonlySet<string> = new Set();
+
+export const startsTurn = (
+  entry: TimelineEntry,
+  agentId: string,
+  delivered: ReadonlySet<string> = NO_DELIVERIES
+) =>
+  entry.kind === "user" ||
+  entry.kind === "system" ||
+  (entry.kind === "agent_message" &&
+    entry.item.recipient?.agentId === agentId &&
+    entry.item.requestId !== null &&
+    delivered.has(entry.item.requestId));
+
+const entryTime = (entry: TimelineEntry): string | null => {
+  if ("item" in entry) {
+    return entry.item.createdAt;
+  }
+  if (entry.kind === "tools") {
+    return (
+      entry.calls.at(-1)?.result?.createdAt ??
+      entry.calls.at(-1)?.call?.createdAt ??
+      null
+    );
+  }
+  return null;
+};
+
+const groupedWork = (entry: TimelineEntry) =>
+  entry.kind === "tools" ||
+  entry.kind === "thinking" ||
+  entry.kind === "assistant" ||
+  entry.kind === "preview";
+
+const failedCalls = (entry: TimelineEntry) =>
+  entry.kind === "tools"
+    ? entry.calls.filter((call) => call.result?.isError === true).length
+    : 0;
+
+/**
+ * Tool groups are rebuilt when earlier calls join them, so their entry id
+ * changes. Call and result ids survive that merge.
+ */
+const workEntryKeys = (entry: TimelineEntry) => {
+  if (entry.kind !== "tools") {
+    return [entry.id];
+  }
+  const ids = entry.calls.flatMap((call) =>
+    call.result ? [call.id, call.result.id] : [call.id]
+  );
+  return ids.length > 0 ? ids : [entry.id];
+};
+
+/** Manual open state follows the leaves, not the work part id. */
+export const rememberWorkOpen = (
+  manual: ReadonlyMap<string, boolean>,
+  entries: readonly TimelineEntry[],
+  open: boolean
+) => {
+  const next = new Map(manual);
+  for (const id of entries.flatMap(workEntryKeys)) {
+    next.set(id, open);
+  }
+  return next;
+};
+
+/** A stored choice wins when any current leaf was already toggled. */
+export const storedWorkOpen = (
+  manual: ReadonlyMap<string, boolean>,
+  entries: readonly TimelineEntry[],
+  running: boolean
+) => {
+  for (const id of entries.flatMap(workEntryKeys)) {
+    const open = manual.get(id);
+    if (open !== undefined) {
+      return open;
+    }
+  }
+  return running;
+};
+
+export type TurnPart =
+  | { kind: "entries"; id: string; entries: TimelineEntry[] }
+  | {
+      kind: "work";
+      id: string;
+      entries: TimelineEntry[];
+      failures: number;
+      running: boolean;
+      start: string | null;
+      end: string | null;
+    };
+
+const partitionTurns = (
+  entries: readonly TimelineEntry[],
+  agentId: string,
+  delivered: ReadonlySet<string>
+) => {
+  const turns: TimelineEntry[][] = [];
+  let current: TimelineEntry[] = [];
+  for (const entry of entries) {
+    if (startsTurn(entry, agentId, delivered) && current.length) {
+      turns.push(current);
+      current = [];
+    }
+    current.push(entry);
+  }
+  if (current.length) {
+    turns.push(current);
+  }
+  return turns;
+};
+
+/** One work disclosure per turn; decisions and errors remain visible outside. */
+export const turnParts = (
+  entries: readonly TimelineEntry[],
+  agentId: string,
+  running: boolean,
+  delivered: ReadonlySet<string> = NO_DELIVERIES
+): TurnPart[] => {
+  const turns = partitionTurns(entries, agentId, delivered);
+  const parts: TurnPart[] = [];
+  for (const [index, turn] of turns.entries()) {
+    const [first] = turn;
+    if (!first) {
+      continue;
+    }
+    const active = running && index === turns.length - 1;
+    const hasTools = turn.some((entry) => entry.kind === "tools");
+    const lastWork = turn.findLast(groupedWork);
+    const final =
+      !active && lastWork?.kind === "assistant" ? lastWork : undefined;
+    const start = startsTurn(first, agentId, delivered)
+      ? entryTime(first)
+      : null;
+    const lastTimed = turn.findLast((entry) => entryTime(entry) !== null);
+    const end = entryTime(final ?? lastTimed ?? first);
+    let work: Extract<TurnPart, { kind: "work" }> | null = null;
+    for (const entry of turn) {
+      if (hasTools && groupedWork(entry) && entry !== final) {
+        if (!work) {
+          work = {
+            end,
+            entries: [],
+            failures: 0,
+            id: `work:${first.id}:${entry.id}`,
+            kind: "work",
+            running: active,
+            start,
+          };
+          parts.push(work);
+        }
+        work.failures += failedCalls(entry);
+        work.entries.push(entry);
+      } else {
+        const last = parts.at(-1);
+        if (last?.kind === "entries") {
+          last.entries.push(entry);
+        } else {
+          parts.push({ entries: [entry], id: entry.id, kind: "entries" });
+        }
+      }
+    }
+  }
+  return parts;
+};

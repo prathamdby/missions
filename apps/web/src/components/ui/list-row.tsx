@@ -42,6 +42,7 @@ const listRowVariants = cva(
         sidebar: `h-7.5 gap-md rounded-sm px-md font-book text-text-secondary hover:bg-surface-overlay hover:text-text ${selectedFill}`,
         /** Desktop sidebar navigation rows, 30px, medium weight. */
         "sidebar-nav": `h-7.5 gap-md rounded-sm px-md font-medium text-text-secondary hover:bg-surface-overlay hover:text-text [&>svg]:size-4 [&>svg]:text-text-secondary ${selectedFill}`,
+        suggestion: `h-8 gap-control rounded-xs px-md font-book text-text hover:bg-surface-active ${menuIcon} ${selectedFill}`,
         /** Drawer mission rows, 40px. */
         touch: `h-10 gap-md rounded-sm px-control font-book text-text-secondary hover:bg-surface-overlay aria-[current=page]:font-medium ${selectedFill}`,
         /** Drawer navigation rows, 40px. */

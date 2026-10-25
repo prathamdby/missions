@@ -32,12 +32,11 @@ const useFiles = (
   };
 };
 
-const useCommands = (
+export const useComposerCatalog = (
   scope: ComposerScope | null,
-  query: string,
   enabled: boolean
-) => {
-  const catalog = useQuery({
+) =>
+  useQuery({
     enabled,
     queryFn: ({ signal }) =>
       scope
@@ -46,6 +45,13 @@ const useCommands = (
     queryKey: ["composer-catalog", scope?.kind, scope?.id],
     staleTime: 10 * 60_000,
   });
+
+const useCommands = (
+  scope: ComposerScope | null,
+  query: string,
+  enabled: boolean
+) => {
+  const catalog = useComposerCatalog(scope, enabled);
   const items: ComposerSuggestion[] = (catalog.data?.commands ?? [])
     .filter((command) =>
       command.name.toLowerCase().includes(query.toLowerCase())
@@ -54,6 +60,7 @@ const useCommands = (
       description: [command.description, command.argumentHint]
         .filter(Boolean)
         .join(" · "),
+      kind: command.kind,
       label: `/${command.name}`,
       value: command.name,
     }));

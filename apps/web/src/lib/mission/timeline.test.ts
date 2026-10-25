@@ -6,7 +6,13 @@ import type {
 } from "@missions/protocol/missions";
 import { describe, expect, it } from "vitest";
 
-import { buildTimeline, transcriptRows } from "./timeline";
+import {
+  buildTimeline,
+  rememberWorkOpen,
+  storedWorkOpen,
+  transcriptRows,
+  turnParts,
+} from "./timeline";
 import type { TimelineEntry, ToolCall } from "./timeline";
 import { argumentOf, inputOf, toolCardKind, toolSummary } from "./tool-output";
 
@@ -69,6 +75,257 @@ const permission = (second: number): PermissionRequest => ({
 });
 
 const empty = { permissions: [], plans: [], previews: [], questions: [] };
+
+const orch: MessageParty = {
+  agentId: "orch",
+  role: "orchestrator",
+  title: "Orchestrator",
+};
+const w1: MessageParty = { agentId: "w1", role: "worker", title: "Worker" };
+const w2: MessageParty = { agentId: "w2", role: "worker", title: "Worker 2" };
+const message = (seq: number, sender: MessageParty, recipient: MessageParty) =>
+  item(seq, "agent_message", {
+    agentId: sender.agentId,
+    purpose: "message",
+    recipient,
+    requestId: `q${seq}`,
+    sender,
+  });
+
+const turnTimeline = (transcript: TranscriptItem[]) =>
+  buildTimeline({ ...empty, transcript });
+
+describe("turn groups", () => {
+  it("groups intermediate output and standalone tools but leaves the final reply outside", () => {
+    const entries = turnTimeline([
+      item(1, "user"),
+      item(2, "assistant"),
+      item(3, "tool_call", { toolName: "Execute" }),
+      item(4, "thinking"),
+      item(5, "assistant"),
+    ]);
+    const finished = turnParts(entries, "orch", false);
+    expect(finished.map((part) => part.kind)).toStrictEqual([
+      "entries",
+      "work",
+      "entries",
+    ]);
+    expect(finished[1]).toMatchObject({
+      end: at(5),
+      entries: entries.slice(1, 4),
+      running: false,
+      start: at(1),
+    });
+    const running = turnParts(entries, "orch", true);
+    expect(running.at(-1)).toMatchObject({
+      entries: entries.slice(1),
+      kind: "work",
+      running: true,
+    });
+  });
+
+  it("never folds decisions or errors and does not invent a final reply on interruption", () => {
+    const entries = buildTimeline({
+      ...empty,
+      permissions: [permission(4)],
+      transcript: [
+        item(1, "user"),
+        item(2, "assistant"),
+        item(3, "tool_call"),
+        item(5, "error"),
+      ],
+    });
+    const parts = turnParts(entries, "orch", false);
+    expect(
+      parts
+        .filter((part) => part.kind === "work")
+        .flatMap((part) => part.entries.map((entry) => entry.kind))
+    ).toStrictEqual(["assistant", "tools"]);
+    expect(
+      parts
+        .filter((part) => part.kind === "entries")
+        .flatMap((part) => part.entries.map((entry) => entry.kind))
+    ).toStrictEqual(["user", "permission", "error"]);
+  });
+
+  it("does not group turns without tools and omits an unloaded start", () => {
+    expect(
+      turnParts(
+        turnTimeline([
+          item(1, "user"),
+          item(2, "thinking"),
+          item(3, "assistant"),
+        ]),
+        "orch",
+        false
+      )
+    ).toHaveLength(1);
+    expect(
+      turnParts(
+        turnTimeline([item(2, "tool_call"), item(3, "assistant")]),
+        "orch",
+        false
+      )[0]
+    ).toMatchObject({ kind: "work", start: null });
+  });
+
+  it("keeps every decision kind and assignment outside work in timeline order", () => {
+    const entries = buildTimeline({
+      ...empty,
+      assignments: [
+        {
+          createdAt: at(6),
+          epoch: 0,
+          handoff: null,
+          id: "assignment",
+          instructions: "Review changes",
+          missionId: "m1",
+          needsWrite: false,
+          status: "running",
+          title: "Review",
+          updatedAt: at(6),
+          workerAgentId: "w1",
+        },
+      ],
+      permissions: [permission(4)],
+      planAgentId: "orch",
+      planInFlight: true,
+      plans: [{ ...plan(2, 3), actionable: true }],
+      questions: [
+        {
+          agentId: "orch",
+          answers: null,
+          createdAt: at(5),
+          epoch: 0,
+          id: "question",
+          missionId: "m1",
+          questions: [
+            {
+              index: 1,
+              multiSelect: false,
+              options: [],
+              question: "Ship?",
+              topic: "Ship",
+            },
+          ],
+          status: "pending",
+        },
+      ],
+      transcript: [
+        item(1, "system"),
+        item(2, "tool_call"),
+        item(5, "assistant"),
+        item(7, "tool_call"),
+        item(8, "assistant"),
+      ],
+    });
+    const parts = turnParts(entries, "orch", false);
+    expect(parts.filter((part) => part.kind === "work")).toHaveLength(1);
+    expect(
+      parts
+        .filter((part) => part.kind === "work")
+        .flatMap((part) => part.entries.map((entry) => entry.kind))
+    ).toStrictEqual(["tools", "assistant", "tools"]);
+    expect(
+      parts
+        .filter((part) => part.kind === "entries")
+        .flatMap((part) => part.entries.map((entry) => entry.kind))
+    ).toStrictEqual([
+      "system",
+      "permission",
+      "question",
+      "assignment",
+      "assistant",
+      "plan",
+    ]);
+  });
+
+  it("starts a new turn only for delivered messages addressed to the current agent", () => {
+    const entries = turnTimeline([
+      item(1, "user"),
+      item(2, "tool_call"),
+      message(3, orch, w1),
+      item(4, "tool_call"),
+      message(5, w1, orch),
+      item(6, "tool_call"),
+    ]);
+    const work = turnParts(entries, "orch", true, new Set(["q3", "q5"])).filter(
+      (part) => part.kind === "work"
+    );
+    expect(work.map((part) => [part.start, part.running])).toStrictEqual([
+      [at(1), false],
+      [at(5), true],
+    ]);
+    expect(
+      turnParts(entries, "orch", true)
+        .filter((part) => part.kind === "work")
+        .every((part) => part.start === at(1))
+    ).toBeTruthy();
+  });
+
+  it("counts failed tool results on the work disclosure", () => {
+    const entries = turnTimeline([
+      item(1, "user"),
+      item(2, "tool_call", { toolName: "Read", toolUseId: "ok" }),
+      item(3, "tool_result", { toolUseId: "ok" }),
+      item(4, "tool_call", { toolName: "Execute", toolUseId: "bad" }),
+      item(5, "tool_result", { isError: true, toolUseId: "bad" }),
+      item(6, "assistant"),
+    ]);
+    expect(
+      turnParts(entries, "orch", false).find((part) => part.kind === "work")
+    ).toMatchObject({ failures: 1, kind: "work" });
+  });
+
+  it("keeps a manual disclosure choice when earlier history rebuilds the work id", () => {
+    const partial = turnParts(
+      turnTimeline([
+        item(4, "tool_call", { toolUseId: "c" }),
+        item(5, "assistant"),
+      ]),
+      "orch",
+      false
+    ).find((part) => part.kind === "work");
+    const loaded = turnParts(
+      turnTimeline([
+        item(1, "user"),
+        item(2, "tool_call", { toolUseId: "b" }),
+        item(3, "assistant"),
+        item(4, "tool_call", { toolUseId: "c" }),
+        item(5, "assistant"),
+      ]),
+      "orch",
+      false
+    ).find((part) => part.kind === "work");
+    if (partial?.kind !== "work" || loaded?.kind !== "work") {
+      throw new Error("Expected both timelines to contain work");
+    }
+    expect(loaded.id).not.toBe(partial.id);
+    const opened = rememberWorkOpen(new Map(), partial.entries, true);
+    expect(storedWorkOpen(opened, loaded.entries, false)).toBeTruthy();
+    const closed = rememberWorkOpen(opened, partial.entries, false);
+    const running = turnParts(
+      turnTimeline([
+        item(1, "user"),
+        item(2, "tool_call", { toolUseId: "b" }),
+        item(4, "tool_call", { toolUseId: "c" }),
+      ]),
+      "orch",
+      true
+    ).find((part) => part.kind === "work");
+    if (running?.kind !== "work") {
+      throw new Error("Expected the running timeline to contain work");
+    }
+    expect(storedWorkOpen(closed, running.entries, true)).toBeFalsy();
+    expect(
+      storedWorkOpen(
+        closed,
+        turnTimeline([item(8, "tool_call", { toolUseId: "z" })]),
+        true
+      )
+    ).toBeTruthy();
+  });
+});
 
 const tool = (
   name: string,
@@ -353,22 +610,6 @@ describe(buildTimeline, () => {
     ).toStrictEqual(["user", "hello world", "late"]);
   });
 });
-
-const orch: MessageParty = {
-  agentId: "orch",
-  role: "orchestrator",
-  title: "Orchestrator",
-};
-const w1: MessageParty = { agentId: "w1", role: "worker", title: "Worker" };
-const w2: MessageParty = { agentId: "w2", role: "worker", title: "Worker 2" };
-const message = (seq: number, sender: MessageParty, recipient: MessageParty) =>
-  item(seq, "agent_message", {
-    agentId: sender.agentId,
-    purpose: "message",
-    recipient,
-    requestId: `q${seq}`,
-    sender,
-  });
 
 describe("agent messages", () => {
   it("groups an exchange between one pair until another row intervenes", () => {
