@@ -9,156 +9,16 @@ import type { DroidClientTransport } from "@factory/droid-sdk/node";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProcessSupervisor } from "../processes/process-supervisor";
-import { AgentRuntime, normalizeMessage } from "./agent-runtime";
+import type { Request } from "../test/droid-transport";
+import { MockTransport, message } from "../test/droid-transport";
+import {
+  AgentRuntime,
+  DENIAL_CONTEXT_TIMEOUT_MS,
+  normalizeMessage,
+} from "./agent-runtime";
 import type { AgentEvent, AgentRuntimeOptions } from "./agent-runtime";
 import { MAIN_PROMPT, WORKER_PROMPT } from "./prompts";
 import { SESSION_START_TIMEOUT_MS } from "./startup";
-
-type WireMessage = Parameters<DroidClientTransport["send"]>[0];
-interface Request {
-  id: string;
-  method: string;
-  params: Record<string, unknown>;
-}
-
-const message = (id: string, text: string, requestId?: string) => ({
-  content: [{ text, type: "text" }],
-  createdAt: 1,
-  id,
-  role: "user",
-  updatedAt: 1,
-  ...(requestId ? { requestId } : {}),
-});
-
-/**
- * The ordinary adapter tests use the actual DroidClient and its Zod/wire
- * handling, replacing only the external runner transport.
- */
-class MockTransport implements DroidClientTransport {
-  readonly sent: WireMessage[] = [];
-  readonly requests: Request[] = [];
-  isConnected = true;
-  close = vi.fn<() => Promise<void>>(() => Promise.resolve());
-  onRequest: ((request: Request) => void) | null = null;
-  rejectMethod: string | null = null;
-  failMethod: string | null = null;
-  deferMethod: string | null = null;
-  initializeResult = {
-    availableModels: [
-      {
-        defaultReasoningEffort: "high",
-        displayName: "Next",
-        id: "next",
-        modelProvider: "factory",
-        shortDisplayName: "Next",
-        supportedReasoningEfforts: ["low", "high"],
-      },
-      {
-        defaultReasoningEffort: "none",
-        displayName: "Plain",
-        id: "plain",
-        modelProvider: "factory",
-        shortDisplayName: "Plain",
-        supportedReasoningEfforts: [],
-      },
-    ],
-    session: { messages: [] as unknown[] },
-    sessionId: "session",
-    settings: { modelId: "model", reasoningEffort: "medium" },
-  };
-  loadResult = {
-    availableModels: this.initializeResult.availableModels,
-    cwd: "/workspace",
-    pendingMessageRequestIds: ["pending"],
-    queuedMessages: [
-      { queuePlacement: "end_of_loop", requestId: "queued", text: "queued" },
-    ],
-    session: { messages: [] as unknown[] },
-    settings: { modelId: "model", reasoningEffort: "medium" },
-    workingState: "idle",
-  };
-  mcpResult = {
-    servers: [] as unknown[],
-    summary: { connected: 0, connecting: 0, failed: 0, total: 0 },
-  };
-  #handler: ((message: WireMessage) => void) | null = null;
-  #errorHandler: ((error: Error) => void) | null = null;
-
-  onMessage(handler: (message: WireMessage) => void) {
-    this.#handler = handler;
-  }
-
-  onError(handler: (error: Error) => void) {
-    this.#errorHandler = handler;
-  }
-
-  fail(error: Error) {
-    this.#errorHandler?.(error);
-  }
-
-  receive(payload: Record<string, unknown>) {
-    this.#handler?.({
-      factoryApiVersion: "1.0.0",
-      jsonrpc: "2.0",
-      ...payload,
-    } as WireMessage);
-  }
-
-  userMessage(id: string, text: string, requestId?: string) {
-    this.receive({
-      method: "droid.session_notification",
-      params: {
-        notification: {
-          message: message(id, text),
-          type: "create_message",
-          ...(requestId ? { requestId } : {}),
-        },
-      },
-      type: "notification",
-    });
-  }
-
-  send(wire: WireMessage): Promise<void> {
-    this.sent.push(wire);
-    if (wire.type !== "request") {
-      return Promise.resolve();
-    }
-    const request: Request = {
-      id: String(wire.id),
-      method: wire.method,
-      params: wire.params as Record<string, unknown>,
-    };
-    this.requests.push(request);
-    this.onRequest?.(request);
-    if (request.method === this.failMethod) {
-      return Promise.reject(new Error("Disconnected before response"));
-    }
-    if (request.method === this.rejectMethod) {
-      this.receive({
-        error: { code: -32_602, message: "Request rejected" },
-        id: request.id,
-        type: "response",
-      });
-      return Promise.resolve();
-    }
-    if (request.method !== this.deferMethod) {
-      this.respond(request);
-    }
-    return Promise.resolve();
-  }
-
-  respond(request: Request) {
-    let result: unknown = {};
-    if (request.method === "droid.initialize_session") {
-      result = this.initializeResult;
-    } else if (request.method === "droid.load_session") {
-      result = this.loadResult;
-    } else if (request.method === "droid.list_mcp_servers") {
-      result = this.mcpResult;
-    }
-    this.receive({ id: request.id, result, type: "response" });
-  }
-}
 
 const setup = (overrides: Partial<AgentRuntimeOptions> = {}) => {
   const transport = new MockTransport();
@@ -178,7 +38,7 @@ const setup = (overrides: Partial<AgentRuntimeOptions> = {}) => {
     modelId: "model",
     onAskUser: () => Promise.resolve({ answers: [], cancelled: true }),
     onEvent: (event) => events.push(event),
-    onPermission: () => Promise.resolve(true),
+    onPermission: () => Promise.resolve({ approved: true, via: "policy" }),
     reasoningEffort: null,
     role: "worker",
     supervisor,
@@ -1216,6 +1076,205 @@ describe(AgentRuntime, () => {
     });
     await runtime.close();
   });
+
+  it.each(["policy", "exception", "missing-once", "empty-reason"] as const)(
+    "returns an actionable denial comment and acknowledged hidden context for %s",
+    async (scenario) => {
+      const { events, runtime, transport } = setup({
+        onPermission: () => {
+          if (scenario === "exception") {
+            throw new Error("broker unavailable");
+          }
+          return Promise.resolve(
+            scenario === "missing-once"
+              ? { approved: true, via: "policy" }
+              : {
+                  approved: false,
+                  attribution: "policy",
+                  reason:
+                    scenario === "empty-reason" ? "  " : "Read-only assignment",
+                }
+          );
+        },
+      });
+      await runtime.start();
+      transport.receive({
+        id: "denied",
+        method: "droid.request_permission",
+        params: {
+          options: [
+            ...(scenario === "missing-once"
+              ? []
+              : [
+                  { label: "Once", value: ToolConfirmationOutcome.ProceedOnce },
+                ]),
+            { label: "Always", value: ToolConfirmationOutcome.ProceedAlways },
+            { label: "Cancel", value: ToolConfirmationOutcome.Cancel },
+          ],
+          toolUses: [],
+        },
+        type: "request",
+      });
+      await vi.waitFor(() =>
+        expect(transport.sent).toContainEqual(
+          expect.objectContaining({ id: "denied", type: "response" })
+        )
+      );
+      const reason = {
+        "empty-reason": "without a reason",
+        exception: "broker unavailable",
+        "missing-once": "did not offer one-time",
+        policy: "Read-only assignment",
+      }[scenario];
+      const response = transport.sent.find(
+        (wire) => wire.type === "response" && wire.id === "denied"
+      );
+      expect(response).toMatchObject({
+        result: {
+          comment: expect.stringContaining(reason),
+          selectedOption: ToolConfirmationOutcome.Cancel,
+        },
+      });
+      expect(
+        transport.requests.find(
+          (request) => request.method === "droid.add_user_message"
+        )
+      ).toMatchObject({
+        params: {
+          role: "system",
+          skipAgentLoop: true,
+          text: expect.stringContaining(reason),
+          visibility: "llm_only",
+        },
+      });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          reason: expect.stringContaining(reason),
+          type: "permission_denied",
+        })
+      );
+      await runtime.close();
+    }
+  );
+
+  it("labels actual user plan rejection separately from automatic policy feedback", async () => {
+    const { runtime, transport } = setup({
+      onPermission: () =>
+        Promise.resolve({
+          approved: false,
+          attribution: "user",
+          reason: "The user requested plan changes",
+        }),
+    });
+    await runtime.start();
+    transport.receive({
+      id: "user-plan",
+      method: "droid.request_permission",
+      params: {
+        options: [{ label: "Cancel", value: ToolConfirmationOutcome.Cancel }],
+        toolUses: [],
+      },
+      type: "request",
+    });
+    await vi.waitFor(() =>
+      expect(transport.sent).toContainEqual(
+        expect.objectContaining({ id: "user-plan", type: "response" })
+      )
+    );
+    const context = transport.requests.find(
+      (request) => request.params.role === "system"
+    );
+    expect(context?.params.text).toContain("user's explicit plan decision");
+    expect(context?.params.text).not.toContain("not a user cancellation");
+    await runtime.close();
+  });
+
+  it.each(["reject", "timeout"] as const)(
+    "bounds and reports denial context %s before answering Cancel",
+    async (failure) => {
+      const { runtime, transport, events } = setup({
+        onPermission: () =>
+          Promise.resolve({
+            approved: false,
+            attribution: "policy",
+            reason: "Plan mode",
+          }),
+      });
+      await runtime.start();
+      vi.useFakeTimers();
+      if (failure === "reject") {
+        transport.rejectMethod = "droid.add_user_message";
+      } else {
+        transport.deferMethod = "droid.add_user_message";
+      }
+      transport.receive({
+        id: "denied",
+        method: "droid.request_permission",
+        params: {
+          options: [{ label: "Cancel", value: ToolConfirmationOutcome.Cancel }],
+          toolUses: [],
+        },
+        type: "request",
+      });
+      await vi.advanceTimersByTimeAsync(DENIAL_CONTEXT_TIMEOUT_MS);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          errorType: "PermissionContextError",
+          message: expect.stringContaining(
+            failure === "timeout"
+              ? "timed out"
+              : "Add user message request failed"
+          ),
+          type: "error",
+        })
+      );
+      expect(transport.sent).toContainEqual(
+        expect.objectContaining({
+          id: "denied",
+          result: {
+            comment: "Plan mode",
+            selectedOption: ToolConfirmationOutcome.Cancel,
+          },
+        })
+      );
+      const pending = transport.requests.find(
+        (r) => r.method === "droid.add_user_message"
+      );
+      if (failure === "timeout" && pending) {
+        transport.receive({
+          error: { code: -32_602, message: "late denial" },
+          id: pending.id,
+          type: "response",
+        });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      await runtime.close();
+    }
+  );
+
+  it.each([0, 7])(
+    "preserves SDK error exit code %s, including zero",
+    async (exitCode) => {
+      const { runtime, transport, events } = setup();
+      await runtime.start();
+      transport.notify({
+        errorType: "SessionError",
+        exitCode,
+        message: "session failed",
+        timestamp: new Date().toISOString(),
+        type: "error",
+      });
+      await vi.waitFor(() =>
+        expect(events).toContainEqual({
+          errorType: "SessionError",
+          exitCode,
+          message: "session failed",
+          type: "error",
+        })
+      );
+      await runtime.close();
+    }
+  );
 
   it("answers SDK permission requests once, never with persistent approval", async () => {
     const { runtime, transport } = setup();

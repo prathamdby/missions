@@ -55,7 +55,12 @@ describe("live attachment delivery", () => {
             output += event.message.text;
           }
         },
-        onPermission: () => Promise.resolve(false),
+        onPermission: () =>
+          Promise.resolve({
+            approved: false,
+            attribution: "policy",
+            reason: "Tools are disabled in this fixture",
+          }),
         reasoningEffort: null,
         role: "orchestrator",
         supervisor: new ProcessSupervisor({

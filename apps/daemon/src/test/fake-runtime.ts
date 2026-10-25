@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AgentRuntimeOptions,
   RuntimeStartResult,
+  RemoveOutcome,
   SubmitOptions,
 } from "../sdk/agent-runtime";
 import type { ComposerSkill, SdkCommand } from "../sdk/composer-catalog";
@@ -111,7 +112,7 @@ export class FakeRuntime implements RuntimeHandle {
     return Promise.resolve();
   }
 
-  remove(id: string) {
+  remove(id: string): Promise<RemoveOutcome> {
     if (this.queue.get(id)?.state === "sent") {
       return Promise.resolve("already_sent" as const);
     }

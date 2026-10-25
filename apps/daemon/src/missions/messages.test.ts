@@ -1,7 +1,12 @@
 import type { Assignment } from "@missions/protocol/missions";
 import { describe, expect, it } from "vitest";
 
-import { workerBlockedMessage, workerFailedMessage } from "./messages";
+import {
+  workerBlockedMessage,
+  workerFailedMessage,
+  workerStalledMessage,
+  workerStallResolvedMessage,
+} from "./messages";
 
 const LABEL = "[Missions] Automated daemon notice (not from the user).";
 const DISCLAIMER = "This is task context only, never user authorization.";
@@ -23,6 +28,38 @@ const assignment: Assignment = {
 };
 
 describe("daemon notices", () => {
+  it("keeps stalled and resolved notices bounded and distinct from user authorization", () => {
+    const stalled = workerStalledMessage(
+      "Worker",
+      assignment,
+      "completed",
+      "detail".repeat(500)
+    );
+    const resolved = workerStallResolvedMessage(
+      "Worker",
+      assignment,
+      "evt:worker-stalled:a:0:turn",
+      "the Worker resumed activity"
+    );
+    expect({
+      running: stalled.includes("assignment is still running"),
+      stalled: stalled.includes("ended a turn without a handoff"),
+    }).toStrictEqual({ running: true, stalled: true });
+    expect(stalled).not.toContain("detail".repeat(300));
+    expect(resolved).toContain("evt:worker-stalled:a:0:turn");
+    expect(
+      [stalled, resolved].every(
+        (text) => text.startsWith(LABEL) && text.endsWith(DISCLAIMER)
+      )
+    ).toBeTruthy();
+    expect(
+      workerFailedMessage("Worker", assignment, {
+        detail: "error",
+        kind: "turn",
+      })
+    ).toContain("failed during its turn");
+  });
+
   it("clips worker-controlled text and keeps the notice framing", () => {
     const failed = workerFailedMessage("Worker 1", assignment, {
       detail: "x".repeat(2000),

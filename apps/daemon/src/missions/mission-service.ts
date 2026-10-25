@@ -71,6 +71,7 @@ import type {
   AskUserAsk,
   EditOutcome,
   PermissionToolUse,
+  PermissionVerdict,
   RemoveOutcome,
   RuntimeStartResult,
   SubmitOptions,
@@ -95,6 +96,11 @@ import type {
   SendMessageInput,
   TodoInput,
 } from "../sdk/role-tools";
+import { withDeadline } from "../sdk/startup";
+import {
+  SUBMIT_ACK_TIMEOUT_MS,
+  SubmitAckTimeoutError,
+} from "../sdk/submit-ack-timeout";
 import type { ModelCatalog } from "../settings/models";
 import type { SettingsService } from "../settings/settings-service";
 import { WorkspaceOperationGate } from "../workspaces/workspace-operation-gate";
@@ -109,6 +115,8 @@ import {
   parseAgentEventId,
   workerBlockedId,
   workerFailedId,
+  workerStalledId,
+  workerStallResolvedId,
   workerUnblockedId,
 } from "./agent-events";
 import {
@@ -134,6 +142,8 @@ import {
   titleFromGoal,
   workerBlockedMessage,
   workerFailedMessage,
+  workerStalledMessage,
+  workerStallResolvedMessage,
   workerUnblockedMessage,
 } from "./messages";
 import type { WorkerFailure, WorkerWait } from "./messages";
@@ -154,6 +164,16 @@ import {
   toolResultItem,
 } from "./transcript";
 import type { NewTranscriptItem } from "./transcript";
+import {
+  workerCompletionOutcome,
+  workerEpisode,
+  workerEpisodeDetail,
+  workerEpisodeActivity,
+  workerTurnKey,
+} from "./worker-turns";
+import type { WorkerEpisode } from "./worker-turns";
+
+const NOTICE_WITHDRAW_TIMEOUT_MS = 5000;
 
 /** The subset of `AgentRuntime` the service drives; tests substitute a scripted runtime. */
 export interface RuntimeHandle extends ComposerRuntime {
@@ -228,12 +248,15 @@ interface LiveAgent {
   planGuidance: boolean;
   /** Request whose first streamed text has not been timed yet. */
   awaitingText: string | null;
+  episode: WorkerEpisode | null;
+  episodeCounter: number;
+  completedTurns: Set<string>;
 }
 
 /** A live native ExitSpecMode confirmation bound to one plan revision. */
 interface PlanBinding {
   live: LiveAgent;
-  resolve: (approved: boolean) => void;
+  resolve: (verdict: PermissionVerdict) => void;
 }
 
 interface PendingQuestion {
@@ -1211,6 +1234,9 @@ export class MissionService {
     const live = {
       agentId,
       awaitingText: null,
+      completedTurns: new Set(),
+      episode: null,
+      episodeCounter: 0,
       epoch: mission.epoch,
       fenced: Promise.withResolvers<undefined>(),
       id: randomUUID(),
@@ -1238,16 +1264,32 @@ export class MissionService {
       onEvent: (event) => this.#onAgentEvent(live, event),
       onPermission: async (ask) => {
         if (ask.agentId !== agentId || !this.#isCurrent(agentId, live)) {
-          return false;
+          return {
+            approved: false,
+            attribution: "lifecycle",
+            reason: "This agent execution is no longer active",
+          };
         }
         const plan = ask.toolUses.find(isExitSpecMode);
         if (plan) {
-          return ask.toolUses.length === 1 && agent.role === "orchestrator"
-            ? await this.#proposeNativePlan(live, plan)
-            : false;
+          if (ask.toolUses.length !== 1 || agent.role !== "orchestrator") {
+            return {
+              approved: false,
+              attribution: "policy",
+              reason:
+                "Only the main agent may propose a plan, in a standalone confirmation",
+            };
+          }
+          return await this.#proposeNativePlan(live, plan);
         }
         const result = await this.broker.ask(agentId, ask.toolUses);
-        return result.approved && this.#isCurrent(agentId, live) !== null;
+        return this.#isCurrent(agentId, live)
+          ? result
+          : {
+              approved: false,
+              attribution: "lifecycle",
+              reason: "This agent execution is no longer active",
+            };
       },
       onTiming: (stage, detail) =>
         this.#timing.mark(live.id, stage, ids, detail),
@@ -1701,6 +1743,12 @@ export class MissionService {
       return;
     }
     const { agent, mission } = current;
+    if (
+      agent.role === "worker" &&
+      (!live.episode || workerEpisodeActivity(event))
+    ) {
+      this.#beginWorkerEpisode(live);
+    }
     const base = { agentId, createdAt: this.#iso(), missionId: mission.id };
     switch (event.type) {
       case "text_delta":
@@ -1754,7 +1802,8 @@ export class MissionService {
             live,
             mission.id,
             result.toolUseId,
-            result.isError
+            result.isError,
+            result.content
           );
         }
         break;
@@ -1773,16 +1822,27 @@ export class MissionService {
         this.#appendTranscript(mission.id, [
           toolResultItem(base, event.toolUseId, event.content, event.isError),
         ]);
-        this.#afterToolResult(live, mission.id, event.toolUseId, event.isError);
+        this.#afterToolResult(
+          live,
+          mission.id,
+          event.toolUseId,
+          event.isError,
+          event.content
+        );
         break;
       }
       default: {
-        this.#onAgentStatusEvent(agent, mission, event);
+        this.#onAgentStatusEvent(live, agent, mission, event);
       }
     }
   }
 
-  #onAgentStatusEvent(agent: Agent, mission: Mission, event: AgentEvent) {
+  #onAgentStatusEvent(
+    live: LiveAgent,
+    agent: Agent,
+    mission: Mission,
+    event: AgentEvent
+  ) {
     switch (event.type) {
       case "working_state": {
         const waiting =
@@ -1810,6 +1870,9 @@ export class MissionService {
           this.leases.release(mission.workspace.path, agent.id);
         }
         this.#onAgentIdle(agent, mission);
+        if (agent.role === "worker") {
+          this.#completeWorkerTurn(live, agent, mission, event);
+        }
         break;
       }
       case "retry": {
@@ -1826,20 +1889,17 @@ export class MissionService {
         break;
       }
       case "error": {
-        this.#mutateMission(mission.id, (m) => ({
-          ...m,
-          lastError: {
-            code: event.errorType ?? "error",
-            message: event.message,
-            retryAfterMs: null,
-          },
-        }));
-        this.#notice(
-          mission.id,
-          "run_failed",
-          "error",
-          event.message || "The agent reported an error"
-        );
+        this.#onAgentError(live, agent, mission, event);
+        break;
+      }
+      case "permission_denied": {
+        if (live.episode) {
+          live.episode.denial =
+            `${event.attribution}: ${event.reason} [${event.toolUseIds.join(", ")}]`.slice(
+              0,
+              500
+            );
+        }
         break;
       }
       case "process_exit": {
@@ -1849,6 +1909,48 @@ export class MissionService {
       default: {
         break;
       }
+    }
+  }
+
+  #onAgentError(
+    live: LiveAgent,
+    agent: Agent,
+    mission: Mission,
+    event: Extract<AgentEvent, { type: "error" }>
+  ) {
+    if (live.episode) {
+      live.episode.sdkError =
+        `${event.errorType ?? "error"}: ${event.message}${event.exitCode === undefined ? "" : ` (exit code ${event.exitCode})`}`.slice(
+          0,
+          500
+        );
+    }
+    this.#mutateMission(mission.id, (m) => ({
+      ...m,
+      lastError: {
+        code: event.errorType ?? "error",
+        message: event.message,
+        retryAfterMs: null,
+      },
+    }));
+    this.#notice(
+      mission.id,
+      "run_failed",
+      "error",
+      event.message || "The agent reported an error"
+    );
+    if (
+      agent.role === "worker" &&
+      (event.errorType === "SessionError" ||
+        event.errorType === "ProcessExitError" ||
+        event.exitCode !== undefined)
+    ) {
+      this.#own(
+        this.#failWorkerRuntime(agent, mission, {
+          detail: live.episode?.sdkError ?? event.message,
+          kind: "turn",
+        })
+      );
     }
   }
 
@@ -1869,10 +1971,20 @@ export class MissionService {
     }
     // Recorded before cleanup, so the main agent hears about it at once and
     // decisions cancelled by cleanup find the assignment no longer running.
-    this.#recordWorkerFailure(agent, mission.epoch, {
+    await this.#failWorkerRuntime(agent, mission, {
       detail: message,
       kind: "exit",
     });
+  }
+
+  async #failWorkerRuntime(
+    agent: Agent,
+    mission: Mission,
+    failure: WorkerFailure
+  ) {
+    if (!this.#recordWorkerFailure(agent, mission.epoch, failure)) {
+      return;
+    }
     const result = await this.#closeRuntime(agent.id);
     if (agent.assignmentId && result.stopped) {
       await this.#pumpAssignments(mission.id);
@@ -1895,16 +2007,24 @@ export class MissionService {
       return;
     }
     live.toolCalls.set(toolUseId, call);
+    if (live.episode) {
+      live.episode.lastTool = `${call.name} [${toolUseId}]`;
+    }
   }
 
   #afterToolResult(
     live: LiveAgent,
     missionId: string,
     toolUseId: string,
-    isError: boolean
+    isError: boolean,
+    content: string
   ) {
     const { agentId } = live;
     const call = live.toolCalls.get(toolUseId);
+    if (isError && live.episode) {
+      live.episode.toolError =
+        `${call?.name ?? "Tool"} [${toolUseId}]: ${content}`.slice(0, 500);
+    }
     live.toolCalls.delete(toolUseId);
     if (!call) {
       return;
@@ -2162,7 +2282,16 @@ export class MissionService {
         status: "running",
       });
     });
-    binding.resolve(request.approve);
+    binding.resolve(
+      request.approve
+        ? { approved: true, via: "user" }
+        : {
+            approved: false,
+            attribution: "user",
+            reason:
+              "The user did not approve this plan. Review their feedback before implementing.",
+          }
+    );
     if (!request.approve) {
       void this.#systemSubmit(
         binding.live.agentId,
@@ -2178,10 +2307,14 @@ export class MissionService {
   async #proposeNativePlan(
     live: LiveAgent,
     use: PermissionToolUse
-  ): Promise<boolean> {
+  ): Promise<PermissionVerdict> {
     const current = this.#isCurrent(live.agentId, live);
     if (!current) {
-      return false;
+      return {
+        approved: false,
+        attribution: "lifecycle",
+        reason: "This plan belongs to an earlier execution",
+      };
     }
     const { agent, mission } = current;
     const title =
@@ -2206,10 +2339,14 @@ export class MissionService {
       title,
       toolUseId: use.toolUseId || null,
     };
-    const { promise, resolve } = Promise.withResolvers<boolean>();
+    const { promise, resolve } = Promise.withResolvers<PermissionVerdict>();
     this.#log.commit((emit) => {
       for (const previous of plans.filter((p) => p.status === "proposed")) {
-        this.#planBindings.get(previous.id)?.resolve(false);
+        this.#planBindings.get(previous.id)?.resolve({
+          approved: false,
+          attribution: "lifecycle",
+          reason: "This plan was superseded by a newer revision",
+        });
         this.#planBindings.delete(previous.id);
         this.#savePlan(
           { ...previous, actionable: false, status: "superseded" },
@@ -2231,8 +2368,14 @@ export class MissionService {
       waitingReason: "permission",
     });
     try {
-      const approved = await promise;
-      return approved && this.#isCurrent(live.agentId, live) !== null;
+      const verdict = await promise;
+      return this.#isCurrent(live.agentId, live)
+        ? verdict
+        : {
+            approved: false,
+            attribution: "lifecycle",
+            reason: "This plan belongs to an earlier execution",
+          };
     } finally {
       if (
         this.#isCurrent(live.agentId, live) &&
@@ -2253,7 +2396,11 @@ export class MissionService {
         continue;
       }
       this.#planBindings.delete(planId);
-      binding.resolve(false);
+      binding.resolve({
+        approved: false,
+        attribution: "lifecycle",
+        reason: "This plan request is no longer active",
+      });
       const plan = this.#store.plans
         .list(owner.missionId)
         .find((entry) => entry.id === planId);
@@ -2787,11 +2934,155 @@ export class MissionService {
     if (
       !mission ||
       FENCED.has(mission.status) ||
-      assignment?.status !== "running"
+      assignment?.status !== "running" ||
+      assignment.handoff !== null
     ) {
       return null;
     }
     return { assignment, mission, worker };
+  }
+
+  #beginWorkerEpisode(live: LiveAgent) {
+    if (!this.#runningWorker(live.agentId)) {
+      return null;
+    }
+    if (!live.episode || live.episode.closed) {
+      this.#resolveWorkerStall(live, "the Worker resumed activity");
+      live.episodeCounter += 1;
+      live.episode = workerEpisode(live.id, live.episodeCounter);
+    }
+    return live.episode;
+  }
+
+  #completeWorkerTurn(
+    live: LiveAgent,
+    agent: Agent,
+    mission: Mission,
+    event: Extract<AgentEvent, { type: "turn_completed" }>
+  ) {
+    const turnKey = event.turnId
+      ? workerTurnKey(live.runtime.sessionId ?? live.id, event.turnId)
+      : null;
+    if (turnKey && live.completedTurns.has(turnKey)) {
+      return;
+    }
+    const running = this.#runningWorker(agent.id);
+    let { episode } = live;
+    if (!episode || (episode.closed && turnKey)) {
+      episode = this.#beginWorkerEpisode(live);
+    }
+    if (!running || !episode || episode.closed) {
+      return;
+    }
+    if (turnKey) {
+      live.completedTurns.add(turnKey);
+      episode.key = turnKey;
+    }
+    episode.closed = true;
+    const detail = workerEpisodeDetail(episode);
+    if (workerCompletionOutcome(event.reason) === "failed") {
+      this.#own(
+        this.#failWorkerRuntime(agent, mission, {
+          detail: `${event.reason}${detail ? `; ${detail}` : ""}`,
+          kind: "turn",
+        })
+      );
+      return;
+    }
+    const id = workerStalledId(running.assignment.id, live.epoch, episode.key);
+    episode.noticeId = id;
+    this.#acceptDaemonEvent({
+      id,
+      recipient: this.#orchestrator(mission.id),
+      text: workerStalledMessage(
+        agent.title,
+        running.assignment,
+        event.reason,
+        detail
+      ),
+    });
+  }
+
+  #stallCurrent(event: {
+    assignmentId: string;
+    epoch: number;
+    turnKey: string;
+  }) {
+    const assignment = this.#store.assignments.get(event.assignmentId);
+    const live = assignment?.workerAgentId
+      ? this.#live.get(assignment.workerAgentId)
+      : null;
+    return Boolean(
+      live &&
+      this.#isCurrent(live.agentId, live) &&
+      live.epoch === event.epoch &&
+      live.episode?.key === event.turnKey &&
+      live.episode.closed &&
+      !live.episode.resolved &&
+      assignment?.status === "running"
+    );
+  }
+
+  #resolveWorkerStall(live: LiveAgent, outcome: string) {
+    const { episode } = live;
+    if (!episode?.closed || episode.resolved || !episode.noticeId) {
+      return;
+    }
+    episode.resolved = true;
+    const notice = this.#store.queue.get(episode.noticeId);
+    if (!notice) {
+      return;
+    }
+    if (notice.state === "accepted") {
+      this.#reviseAccepted(notice.id, { error: outcome, state: "discarded" });
+    } else if (["submitting", "queued", "removing"].includes(notice.state)) {
+      this.#own(this.#withdrawStall(notice, outcome));
+    } else if (notice.state === "sent" || notice.state === "unknown") {
+      this.#sendStallResolved(notice.id, outcome);
+    }
+  }
+
+  async #withdrawStall(notice: QueueItem, outcome: string) {
+    const removal = await this.#withdrawNotice(notice);
+    if (removal !== "removed") {
+      this.#sendStallResolved(notice.id, outcome);
+    }
+  }
+
+  #sendStallResolved(noticeId: string, outcome: string) {
+    const event = parseAgentEventId(noticeId);
+    if (
+      event?.kind !== "worker-stalled" ||
+      this.#stallCurrent(event) ||
+      this.#closing
+    ) {
+      return;
+    }
+    const assignment = this.#store.assignments.get(event.assignmentId);
+    const mission = assignment
+      ? this.#store.getMission(assignment.missionId)
+      : null;
+    if (
+      !assignment ||
+      !mission ||
+      FENCED.has(mission.status) ||
+      mission.epoch !== event.epoch
+    ) {
+      return;
+    }
+    const worker = assignment.workerAgentId
+      ? this.#store.getAgent(assignment.workerAgentId)
+      : null;
+    this.#acceptDaemonEvent({
+      id: workerStallResolvedId(event.assignmentId, event.epoch, event.turnKey),
+      recipient: this.#orchestrator(mission.id),
+      text: workerStallResolvedMessage(
+        worker?.title ?? "Worker",
+        assignment,
+        noticeId,
+        outcome
+      ),
+    });
   }
 
   /**
@@ -2827,6 +3118,10 @@ export class MissionService {
       text: workerFailedMessage(running.worker.title, failed, failure),
     });
     if (recorded) {
+      const live = this.#live.get(worker.id);
+      if (live) {
+        this.#resolveWorkerStall(live, "the assignment failed");
+      }
       if (failure.kind === "start") {
         this.#saveSharedFile(
           mission.id,
@@ -2899,7 +3194,13 @@ export class MissionService {
     wait: WorkerWaitRecord,
     outcome: string
   ) {
-    let removal: RemoveOutcome = "unconfirmed";
+    const removal = await this.#withdrawNotice(blocked);
+    if (removal !== "removed") {
+      this.#sendUnblocked(agentId, wait, outcome);
+    }
+  }
+
+  async #withdrawNotice(blocked: QueueItem): Promise<RemoveOutcome> {
     const live = this.#live.get(blocked.agentId);
     if (
       live &&
@@ -2907,16 +3208,18 @@ export class MissionService {
       live.phase === "ready"
     ) {
       try {
-        removal = await this.#execute(blocked.agentId, live.runtime, () =>
-          live.runtime.remove(blocked.id)
+        return await withDeadline(
+          this.#execute(blocked.agentId, live.runtime, () =>
+            live.runtime.remove(blocked.id)
+          ),
+          NOTICE_WITHDRAW_TIMEOUT_MS,
+          "Stale notice removal acknowledgement timed out"
         );
       } catch {
         // An unconfirmed delete may already have been read.
       }
     }
-    if (removal !== "removed") {
-      this.#sendUnblocked(agentId, wait, outcome);
-    }
+    return "unconfirmed";
   }
 
   /**
@@ -2925,6 +3228,13 @@ export class MissionService {
    */
   #blockedNoticeRead(itemId: string) {
     const event = parseAgentEventId(itemId);
+    if (event?.kind === "worker-stalled") {
+      this.#sendStallResolved(
+        itemId,
+        "the Worker resumed activity or the assignment ended"
+      );
+      return;
+    }
     if (event?.kind !== "worker-blocked") {
       return;
     }
@@ -2967,11 +3277,14 @@ export class MissionService {
     if (!event) {
       return true;
     }
-    if (event.kind === "worker-failed") {
+    if ("assignmentId" in event) {
       return agentEventStillValid(event, {
         assignmentStatus:
           this.#store.assignments.get(event.assignmentId)?.status ?? null,
         missionEpoch,
+        ...("turnKey" in event
+          ? { stallCurrent: this.#stallCurrent(event) }
+          : {}),
         wait: null,
       });
     }
@@ -3116,18 +3429,27 @@ export class MissionService {
         ...this.#submitOptions(latest),
         ...(await attachmentPayload(this.#attachments, latest)),
       };
-      await this.#execute(live.agentId, runtime, () => {
-        attempted = true;
-        return runtime.submit(
-          latest.id,
-          this.#nativeText(latest),
-          latest.mode,
-          options
-        );
-      });
+      await withDeadline(
+        this.#execute(live.agentId, runtime, () => {
+          attempted = true;
+          return runtime.submit(
+            latest.id,
+            this.#nativeText(latest),
+            latest.mode,
+            options
+          );
+        }),
+        SUBMIT_ACK_TIMEOUT_MS,
+        new SubmitAckTimeoutError()
+      );
       this.#timing.mark(item.id, "delivery.admitted", ids);
       return true;
     } catch (error) {
+      if (attempted && error instanceof SubmitAckTimeoutError) {
+        // Keep the native mirror uncertain too: cleanup must not restore a
+        // stale `submitting` state. Late ACKs/echoes remain stronger evidence.
+        runtime.queue.submitFailed(item.id, errorMessage(error), false);
+      }
       const after = this.#store.queue.get(item.id) ?? submitting;
       if (after.state === "submitting") {
         this.#saveQueueItem({
@@ -3138,29 +3460,44 @@ export class MissionService {
           updatedAt: this.#iso(),
         });
       }
-      // A definite rejection affects only this message; anything uncertain
-      // stops the pass so nothing races an ambiguous transport.
+      // A definite rejection affects only this message. An ACK timeout also
+      // releases the pass, but its uncertain message is never replayed.
       const outcome = this.#store.queue.get(item.id)?.state;
-      if (
-        latest.origin === "daemon" &&
-        (outcome === "unknown" || outcome === "failed") &&
-        this.#isCurrent(live.agentId, live)
-      ) {
-        this.#notice(
-          live.missionId,
-          "run_failed",
-          "warning",
-          `An automated notice to the main agent ${outcome === "failed" ? "was not delivered" : "may not have been delivered"} (${errorMessage(error)}). Notices are never sent again automatically.`
-        );
-      } else if (outcome === "unknown" && this.#isCurrent(live.agentId, live)) {
-        this.#notice(
-          live.missionId,
-          "run_failed",
-          "warning",
-          `Delivery of a message is uncertain (${errorMessage(error)}). It is never sent again automatically; check the conversation and retry it if needed.`
-        );
-      }
-      return outcome === "failed";
+      this.#reportDeliveryFailure(live, latest, outcome, error);
+      return (
+        ["failed", "sent"].includes(outcome ?? "") ||
+        (error instanceof SubmitAckTimeoutError &&
+          Boolean(this.#isCurrent(live.agentId, live)))
+      );
+    }
+  }
+
+  #reportDeliveryFailure(
+    live: LiveAgent,
+    item: QueueItem,
+    outcome: QueueItem["state"] | undefined,
+    error: unknown
+  ) {
+    if (!this.#isCurrent(live.agentId, live)) {
+      return;
+    }
+    if (
+      item.origin === "daemon" &&
+      (outcome === "unknown" || outcome === "failed")
+    ) {
+      this.#notice(
+        live.missionId,
+        "run_failed",
+        "warning",
+        `An automated notice to the main agent ${outcome === "failed" ? "was not delivered" : "may not have been delivered"} (${errorMessage(error)}). Notices are never sent again automatically.`
+      );
+    } else if (outcome === "unknown") {
+      this.#notice(
+        live.missionId,
+        "run_failed",
+        "warning",
+        `Delivery of a message is uncertain (${errorMessage(error)}). It is never sent again automatically; check the conversation and retry it if needed.`
+      );
     }
   }
 
@@ -3309,6 +3646,10 @@ export class MissionService {
       status: "handed_off",
       updatedAt: this.#iso(),
     };
+    const live = this.#live.get(agentId);
+    if (live) {
+      this.#resolveWorkerStall(live, "the Worker handed off the assignment");
+    }
     // The handoff and its outbound receipt persist together; native delivery follows.
     this.#acceptAgentMessage({
       alsoCommit: (emit) => {
