@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { createDaemon } from "../daemon";
 import { testConfig } from "../test/fixtures";
+import { bootDaemon, control, startMission } from "../test/mission-harness";
 import { PermissionBroker, StaleDecisionError } from "./permission-broker";
 
 const AT = "2026-10-25T12:00:00.000Z";
@@ -89,6 +90,76 @@ const verifyHistory = async (
 };
 
 describe("permission compatibility", () => {
+  it("never revives stored pending approvals during owner invalidation or deletion", async () => {
+    const booted = await bootDaemon([]);
+    const { daemon } = booted;
+    try {
+      const started = await startMission(booted);
+      const current = daemon.missions.get(started.missionId);
+      const request = {
+        agentId: started.orchestrator.options.agentId,
+        allowAlways: true,
+        createdAt: AT,
+        decidedAt: null,
+        decision: null,
+        epoch: current.epoch,
+        id: "pending-before-pause",
+        kind: "tool" as const,
+        missionId: current.id,
+        reason: null,
+        status: "pending" as const,
+        toolUses: [],
+      };
+      daemon.store.permissions.put(request);
+      expect(daemon.missions.broker.pending(current.id)).toStrictEqual([]);
+
+      await daemon.missions.pause(
+        current.id,
+        control(daemon, current.id, "invalidate-pending-owner")
+      );
+      expect({
+        closed: started.orchestrator.closed,
+        grants: daemon.store.listGrants(),
+        pending: daemon.missions.broker.pending(current.id),
+        stored: daemon.store.permissions.get(request.id),
+      }).toStrictEqual({
+        closed: true,
+        grants: [],
+        pending: [],
+        stored: request,
+      });
+      expect(() =>
+        daemon.missions.decidePermission(current.id, request.id, {
+          decision: "always_allow",
+          epoch: current.epoch,
+        })
+      ).toThrow("This approval is no longer pending");
+
+      await expect(
+        daemon.missions.remove(
+          current.id,
+          control(daemon, current.id, "delete-stored-pending")
+        )
+      ).resolves.toMatchObject({
+        operationId: "delete-stored-pending",
+        status: "accepted",
+      });
+      expect({
+        grants: daemon.store.listGrants(),
+        mission: daemon.store.getMission(current.id),
+        pending: daemon.missions.broker.pending(current.id),
+        stored: daemon.store.permissions.get(request.id),
+      }).toStrictEqual({
+        grants: [],
+        mission: null,
+        pending: [],
+        stored: null,
+      });
+    } finally {
+      await daemon.close();
+    }
+  });
+
   it("keeps historical, missing and wrong-mission HTTP errors through restart", async () => {
     const config = await testConfig();
     const options = {
