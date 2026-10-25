@@ -13,7 +13,7 @@ import { errorMessage } from "../lib/async";
 import type {
   PermissionToolUse,
   PermissionVerdict,
-} from "../sdk/agent-runtime";
+} from "../runtime/contracts";
 import { commandCategory, isHighImpactGit } from "./command-policy";
 import { StaleDecisionError } from "./stale-decision-error";
 

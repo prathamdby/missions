@@ -6,29 +6,29 @@ import {
   ProcessTransport,
   ToolConfirmationOutcome,
 } from "@factory/droid-sdk/node";
-import type {
-  DroidClientTransport,
-  SdkMcpServer,
-} from "@factory/droid-sdk/node";
-import type {
-  DeliveryMode,
-  ReasoningEffort,
-  Role,
-} from "@missions/protocol/common";
+import type { DroidClientTransport } from "@factory/droid-sdk/node";
+import type { DeliveryMode } from "@missions/protocol/common";
 import { AgentModelSettingsSchema } from "@missions/protocol/missions";
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import type { ModelOption } from "@missions/protocol/settings";
 
 import { errorMessage, sleep } from "../lib/async";
+import type { StopResult } from "../processes/process-supervisor";
 import type {
-  ProcessSupervisor,
-  StopResult,
-} from "../processes/process-supervisor";
+  AgentEvent,
+  AgentRuntimeOptions,
+  EditOutcome,
+  PermissionToolUse,
+  PermissionVerdict,
+  RemoveOutcome,
+  RuntimeMessage,
+  RuntimeSender,
+  RuntimeStartResult,
+  SubmitOptions,
+} from "../runtime/contracts";
 import { toModelOption } from "../settings/models";
-import type { SdkAttachments } from "./attachments";
 import { listCommands, listSkills } from "./composer-catalog";
 import { NativeQueueTracker } from "./native-queue";
-import type { NativeQueueEntry } from "./native-queue";
 import { SESSION_START_TIMEOUT_MS, withDeadline } from "./startup";
 
 /** SDK placement for each UI delivery mode. */
@@ -37,143 +37,7 @@ export const PLACEMENT = {
   steer: "end_of_turn",
 } as const satisfies Record<DeliveryMode, string>;
 
-export interface PermissionToolUse {
-  toolUseId: string;
-  toolName: string;
-  input: Record<string, unknown>;
-  confirmationType: string;
-  details: Record<string, unknown>;
-}
-
-export interface PermissionAsk {
-  agentId: string;
-  toolUses: PermissionToolUse[];
-}
-
-export type PermissionVerdict =
-  | { approved: true; via: "policy" | "grant" | "user" }
-  | {
-      approved: false;
-      reason: string;
-      attribution: "policy" | "lifecycle" | "runtime" | "user";
-    };
-
 export const DENIAL_CONTEXT_TIMEOUT_MS = 2000;
-
-export interface AskUserAsk {
-  agentId: string;
-  toolCallId: string;
-  questions: {
-    index: number;
-    topic: string;
-    question: string;
-    options: string[];
-    multiSelect: boolean;
-  }[];
-}
-
-export interface AskUserAnswer {
-  cancelled: boolean;
-  answers: { index: number; question: string; answer: string }[];
-}
-
-/** Structured native sender of an agent-to-agent message. */
-export type RuntimeSender =
-  | { kind: "orchestrator"; sessionId: string }
-  | { kind: "agent"; sessionId: string; title: string };
-
-export interface SubmitOptions extends SdkAttachments {
-  /** Server-bound sender identity; absent for user and daemon messages. */
-  sender?: RuntimeSender;
-}
-
-export interface RuntimeMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  sender: RuntimeSender | null;
-  text: string;
-  thinking: string;
-  toolUses: { id: string; name: string; input: Record<string, unknown> }[];
-  toolResults: { toolUseId: string; content: string; isError: boolean }[];
-  requestId: string | null;
-}
-
-export type AgentEvent =
-  | { type: "text_delta"; messageId: string; delta: string }
-  | { type: "thinking_delta"; messageId: string; delta: string }
-  | { type: "message"; message: RuntimeMessage }
-  | {
-      type: "tool_call";
-      toolUseId: string;
-      name: string;
-      input: Record<string, unknown>;
-    }
-  | {
-      type: "tool_result";
-      toolUseId: string;
-      content: string;
-      isError: boolean;
-    }
-  | { type: "tool_progress"; toolUseId: string; toolName: string; text: string }
-  | { type: "working_state"; state: string }
-  | { type: "turn_completed"; reason: string; turnId: string | null }
-  | { type: "queue"; entry: NativeQueueEntry }
-  | { type: "retry"; reason: string; attempt: number }
-  | {
-      type: "permission_denied";
-      toolUseIds: string[];
-      reason: string;
-      attribution: string;
-    }
-  | {
-      type: "error";
-      message: string;
-      errorType: string | null;
-      exitCode?: number;
-    }
-  | { type: "title"; title: string }
-  | { type: "process_exit"; message: string };
-
-export interface AgentRuntimeOptions {
-  agentId: string;
-  role: Role;
-  cwd: string;
-  modelId: string;
-  reasoningEffort: ReasoningEffort | null;
-  systemPrompt?: string;
-  mcpServers?: SdkMcpServer[];
-  disabledToolIds?: string[];
-  enabledToolIds?: string[];
-  supervisor: ProcessSupervisor;
-  onEvent: (event: AgentEvent) => void;
-  onPermission: (ask: PermissionAsk) => Promise<PermissionVerdict>;
-  onAskUser: (ask: AskUserAsk) => Promise<AskUserAnswer>;
-  /** Test seam: a fake transport exercises the adapter, not CLI scheduling. */
-  createTransport?: () => DroidClientTransport | Promise<DroidClientTransport>;
-  extraEnv?: Record<string, string>;
-  /**
-   * Per-session MCP readiness gating for agent turns. Omitted keeps the
-   * user's settings.json default.
-   */
-  blockOnMcpLoad?: boolean;
-  /** Content-free startup stage timings. */
-  onTiming?: (
-    stage: string,
-    detail: Record<string, string | number | boolean | null>
-  ) => void;
-}
-
-export interface RuntimeStartResult {
-  sessionId: string;
-  cwd: string | null;
-  messages: RuntimeMessage[];
-  queuedIds: string[] | undefined;
-  pendingIds: string[] | undefined;
-  workingState: string | null;
-}
-
-export type RemoveOutcome = "removed" | "already_sent" | "unconfirmed";
-export type EditOutcome = "replaced" | "already_sent" | "delete_unconfirmed";
 
 const CONSUMPTION_GRACE_MS = 400;
 const CLEANUP_TIMEOUT_MS = 1000;

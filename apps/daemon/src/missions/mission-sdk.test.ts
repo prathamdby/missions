@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDaemon } from "../daemon";
 import type { Daemon } from "../daemon";
+import type { AgentRuntimeOptions } from "../runtime/contracts";
 import { AgentRuntime } from "../sdk/agent-runtime";
-import type { AgentRuntimeOptions } from "../sdk/agent-runtime";
 import { SUBMIT_ACK_TIMEOUT_MS } from "../sdk/submit-ack-timeout";
 import { MockTransport } from "../test/droid-transport";
 import { gitRepo, tempDir, testConfig } from "../test/fixtures";
