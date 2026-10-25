@@ -265,6 +265,87 @@ describe(AgentRuntime, () => {
     }
   );
 
+  it.each([
+    { durationMs: 50, flapped: true, status: "failed" },
+    { durationMs: null, flapped: false, status: "connecting" },
+    { durationMs: null, flapped: true, status: "connecting" },
+  ])(
+    "reports MCP duration $durationMs while $status after reconnect: $flapped",
+    async ({ durationMs, flapped, status }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      const onTiming = vi.fn<NonNullable<AgentRuntimeOptions["onTiming"]>>();
+      const log = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const { runtime, transport } = setup({ onTiming });
+      const server = {
+        isManaged: false,
+        name: "fixture",
+        serverType: "stdio",
+        source: "project",
+      };
+      transport.mcpResult = {
+        servers: [{ ...server, status }],
+        summary: {
+          connected: 0,
+          connecting: status === "connecting" ? 1 : 0,
+          failed: status === "failed" ? 1 : 0,
+          total: 1,
+        },
+      };
+      transport.onRequest = (request) => {
+        if (request.method !== "droid.initialize_session") {
+          return;
+        }
+        const transitions = [
+          { at: 0, status: "connecting" },
+          { at: 10, status: "connecting" },
+          ...(flapped
+            ? [
+                { at: 30, status: "connected" },
+                { at: 100, status: "connecting" },
+              ]
+            : []),
+          ...(status === "failed" ? [{ at: 120, status }] : []),
+        ];
+        for (const transition of transitions) {
+          vi.setSystemTime(transition.at);
+          transport.receive({
+            method: "droid.session_notification",
+            params: {
+              notification: {
+                servers: [{ ...server, status: transition.status }],
+                summary: {
+                  connected: transition.status === "connected" ? 1 : 0,
+                  connecting: transition.status === "connecting" ? 1 : 0,
+                  failed: transition.status === "failed" ? 1 : 0,
+                  total: 1,
+                },
+                type: "mcp_status_changed",
+              },
+            },
+            type: "notification",
+          });
+        }
+        vi.setSystemTime(200);
+      };
+      await runtime.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onTiming).toHaveBeenCalledWith("startup.mcp.fixture", {
+        durationMs,
+        status,
+      });
+      expect(log).toHaveBeenCalledWith(
+        `${JSON.stringify({
+          event: "mcp.server_status",
+          ms: durationMs,
+          name: "fixture",
+          status,
+        })}\n`
+      );
+      await runtime.close();
+    }
+  );
+
   it("does not invent a connection duration when no transitions were observed", async () => {
     const onTiming = vi.fn<NonNullable<AgentRuntimeOptions["onTiming"]>>();
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
