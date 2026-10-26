@@ -161,7 +161,13 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
     typeof window === "undefined" ? "" : window.location.hash.slice(1);
   const handledLink = useRef<string | null>(null);
   useEffect(() => {
-    if (!linkedId.startsWith("m-") || agentId || handledLink.current === linkedId) {
+    // Worker columns show a slice of the transcript, so a mission link lands in
+    // the orchestrator's column only.
+    if (
+      !linkedId.startsWith("m-") ||
+      worker ||
+      handledLink.current === linkedId
+    ) {
       return;
     }
     const target = () => document.getElementById(linkedId);
@@ -196,7 +202,7 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
     return () => {
       stopped = true;
     };
-  }, [agentId, linkedId, live.transcriptHasMore, loadOlder]);
+  }, [worker, linkedId, live.transcriptHasMore, loadOlder]);
 
   const transcript = useMemo(
     () => conversationTranscript(live.transcript, agentId),
