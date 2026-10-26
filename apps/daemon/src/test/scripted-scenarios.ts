@@ -37,7 +37,7 @@ export const WORKER_INSTALL = "Run pnpm install before editing.";
 export const WORKER_GENERATED_UI = "Show a generated UI example.";
 
 export const generatedUiExample = (label: string) =>
-  `\`\`\`openui-lang\nroot = Stack([Text("${label}"), Badge("Ready", "success"), KeyValue("Checks", "Passed")])\n\`\`\``;
+  `\`\`\`openui-lang\nroot = Stack([Text("${label}"), Badge("Ready", "success"), KeyValue("Checks", "Passed"), Button("continue_conversation", "Use approach", "Use the recommended approach"), Form([Input("Project name", "name"), TextArea("Project notes", "notes"), Select("Approach", "approach", ["Small", "Complete"])], "Use these project details", "project", "Send details")])\n\`\`\``;
 
 const lines = (count: number, prefix: string) =>
   Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`).join(

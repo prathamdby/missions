@@ -89,4 +89,40 @@ describe("generated Markdown interfaces", () => {
     await render('```openui-lang\ncontent = Stack([Text("Recovered")])\n```');
     expect(host.textContent).toBe("Recovered");
   });
+
+  it("disables continuation controls without an actions context", async () => {
+    await render(
+      '```openui-lang\nroot = Stack([Button("continue_conversation", "Continue")])\n```'
+    );
+    expect(host.querySelector("button")?.disabled).toBeTruthy();
+  });
+
+  it("allows safe links in read-only interfaces without loading them", async () => {
+    await render(
+      '```openui-lang\nroot = Stack([Button("open_url", "Docs", null, "https://example.com/docs")])\n```'
+    );
+    const link = host.querySelector("a");
+    expect(link?.href).toBe("https://example.com/docs");
+    expect(link?.rel).toBe("noopener noreferrer");
+    expect(link?.target).toBe("_blank");
+  });
+
+  it("renders complete read-only forms using every field primitive", async () => {
+    await render(
+      '```openui-lang\nroot = Stack([Text("Orchestrator interface"), Badge("Ready", "success"), KeyValue("Checks", "Passed"), Button("continue_conversation", "Use approach", "Use the recommended approach"), Form([Input("Project name", "name"), TextArea("Project notes", "notes"), Select("Approach", "approach", ["Small", "Complete"])], "Use these project details", "project", "Send details")])\n```'
+    );
+    expect(host.textContent).not.toContain("Interface unavailable");
+    expect(host.querySelector("form")).not.toBeNull();
+    expect(host.querySelector("input")?.disabled).toBeTruthy();
+  });
+
+  it.each(["Query", "Mutation"])(
+    "rejects %s programs without a tool provider",
+    async (name) => {
+      await render(
+        `\`\`\`openui-lang\nremote = ${name}("remote_tool", {})\nroot = Stack([Text("No tools")])\n\`\`\``
+      );
+      expect(host.textContent).toContain("Interface unavailable");
+    }
+  );
 });

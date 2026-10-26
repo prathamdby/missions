@@ -1,6 +1,44 @@
 import { expect, test } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 
-import { addProject, createMission, gitRepo } from "./fixtures";
+import { SubmitMessageRequestSchema } from "../packages/protocol/src/commands";
+import { MissionSnapshotSchema } from "../packages/protocol/src/missions";
+import {
+  addProject,
+  createMission,
+  gitRepo,
+  missionSnapshot,
+} from "./fixtures";
+
+const interactiveMission = async (
+  page: Page,
+  request: APIRequestContext,
+  name: string
+) => {
+  const project = await addProject(request, gitRepo(name));
+  const mission = await createMission(
+    request,
+    project.id,
+    "Show generated UI",
+    { plan: false }
+  );
+  await expect
+    .poll(async () => {
+      const state = MissionSnapshotSchema.parse(
+        await missionSnapshot(request, mission.id)
+      );
+      return (
+        state.assignments.some(
+          (assignment) => assignment.status === "handed_off"
+        ) &&
+        state.agents.find((agent) => agent.role === "orchestrator")?.status ===
+          "idle"
+      );
+    })
+    .toBeTruthy();
+  await page.goto(`/missions/${mission.id}`);
+  return mission;
+};
 
 test("renders generated UI in both agent conversations and agent messages without egress", async ({
   page,
@@ -28,18 +66,126 @@ test("renders generated UI in both agent conversations and agent messages withou
   const message = page
     .getByTestId("agent-message")
     .or(page.getByTestId("agent-exchange"));
+  const messageUi = message
+    .locator('[data-slot="generated-ui"]')
+    .filter({ hasText: "Worker interface" })
+    .first();
+  await expect(messageUi).toBeVisible();
   await expect(
-    message
-      .locator('[data-slot="generated-ui"]')
-      .filter({ hasText: "Worker interface" })
-      .first()
-  ).toBeVisible();
+    messageUi.getByRole("button", { exact: true, name: "Use approach" })
+  ).toBeDisabled();
   await page.getByRole("tab", { name: "Generated UI Worker" }).click();
   await expect(
     ui.filter({ hasText: "Worker interface" }).first()
   ).toBeVisible();
   await expect(
+    ui
+      .filter({ hasText: "Worker interface" })
+      .first()
+      .getByRole("button", { exact: true, name: "Use approach" })
+  ).toBeDisabled();
+  await expect(
     page.getByText("Interface unavailable", { exact: true })
   ).toHaveCount(0);
   expect(outside).toStrictEqual([]);
+});
+
+test("a double click sends one visible user message and reaches sent", async ({
+  page,
+  request,
+}) => {
+  const mission = await interactiveMission(page, request, "generated-ui-click");
+  const sent: unknown[] = [];
+  page.on("request", (event) => {
+    if (
+      event.method() === "POST" &&
+      event.url().endsWith(`/missions/${mission.id}/messages`)
+    ) {
+      sent.push(event.postDataJSON());
+    }
+  });
+  const control = page
+    .locator('[data-slot="generated-ui"]')
+    .filter({ hasText: "Orchestrator interface" })
+    .last()
+    .getByRole("button", { exact: true, name: "Use approach" });
+  await expect(control).toBeEnabled();
+  await control.evaluate((node) => {
+    if (!(node instanceof HTMLButtonElement)) {
+      throw new TypeError("Missing action button");
+    }
+    node.click();
+    node.click();
+  });
+  const text = "Use the recommended approach";
+  await expect(page.getByText(text, { exact: true })).toBeVisible();
+  await expect
+    .poll(async () => {
+      const state = MissionSnapshotSchema.parse(
+        await missionSnapshot(request, mission.id)
+      );
+      return state.queue.find((item) => item.text === text)?.state;
+    })
+    .toBe("sent");
+  expect(sent).toHaveLength(1);
+  expect(SubmitMessageRequestSchema.parse(sent[0])).toStrictEqual({
+    mode: "steer",
+    operationId: expect.any(String),
+    text,
+  });
+  const state = MissionSnapshotSchema.parse(
+    await missionSnapshot(request, mission.id)
+  );
+  expect(
+    state.transcript.filter(
+      (item) => item.kind === "user" && item.text === text
+    )
+  ).toHaveLength(1);
+});
+
+test("submits input, textarea, and select values as the exact visible user message", async ({
+  page,
+  request,
+}) => {
+  const mission = await interactiveMission(page, request, "generated-ui-form");
+  const ui = page
+    .locator('[data-slot="generated-ui"]')
+    .filter({ hasText: "Orchestrator interface" })
+    .last();
+  await ui
+    .getByRole("textbox", { exact: true, name: "Project name" })
+    .fill("Demo");
+  await ui
+    .getByRole("textbox", { exact: true, name: "Project notes" })
+    .fill("Keep the public API.");
+  await ui.getByRole("combobox", { name: "Approach" }).click();
+  await page.getByRole("option", { exact: true, name: "Complete" }).click();
+  const values = {
+    project: {
+      approach: { componentType: "Select", value: "Complete" },
+      name: { componentType: "Input", value: "Demo" },
+      notes: { componentType: "TextArea", value: "Keep the public API." },
+    },
+  };
+  const response = page.waitForRequest(
+    (event) =>
+      event.method() === "POST" &&
+      event.url().endsWith(`/missions/${mission.id}/messages`)
+  );
+  await ui.getByRole("button", { exact: true, name: "Send details" }).click();
+  const submitted = await response;
+  const { text } = SubmitMessageRequestSchema.parse(submitted.postDataJSON());
+  const prefix = "Use these project details\n\nForm values:\n```json\n";
+  expect(text.startsWith(prefix)).toBeTruthy();
+  expect(text.endsWith("\n```")).toBeTruthy();
+  expect(JSON.parse(text.slice(prefix.length, -4))).toStrictEqual(values);
+  await expect(page.getByText(text, { exact: true })).toBeVisible();
+  await expect
+    .poll(async () => {
+      const state = MissionSnapshotSchema.parse(
+        await missionSnapshot(request, mission.id)
+      );
+      return state.queue.find((item) => item.text === text)?.state;
+    })
+    .toBe("sent");
 });

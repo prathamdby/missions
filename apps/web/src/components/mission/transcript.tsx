@@ -2,6 +2,7 @@
 
 import type { TranscriptItem } from "@missions/protocol/missions";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
 import {
   AttachmentPreview,
@@ -19,8 +20,11 @@ import { Thinking } from "@/components/mission/thinking";
 import { CommandCard, EditCard, RanRow } from "@/components/mission/tool-cards";
 import { ToolRun } from "@/components/mission/tool-group";
 import { TurnGroup } from "@/components/mission/turn-group";
+import { useSendMessage } from "@/components/mission/use-send-message";
 import { Callout } from "@/components/ui/callout";
+import { GeneratedUiActionsContext } from "@/components/ui/generated-ui-actions";
 import { Markdown } from "@/components/ui/markdown";
+import { latestOrchestratorReply } from "@/lib/mission/generated-ui";
 import type { DraftAttachment } from "@/lib/mission/message-draft";
 import { todoProgress } from "@/lib/mission/overview";
 import { goalRequestId } from "@/lib/mission/queue";
@@ -185,15 +189,37 @@ const EntryBody = ({ entry }: { entry: TimelineEntry }) => {
 const isGoal = (item: TranscriptItem, missionId: string) =>
   item.kind === "user" && item.requestId === goalRequestId(missionId);
 
+const InteractiveReply = ({ children }: { children: ReactNode }) => {
+  const { disabled, send, working } = useSendMessage();
+  return (
+    <GeneratedUiActionsContext
+      value={{
+        disabledReason: disabled
+          ? "Messaging is unavailable while this mission is stopped"
+          : null,
+        onContinue: (text, occurrence) =>
+          send({
+            input: { mode: working ? "queue" : "steer", text },
+            occurrence,
+          }),
+      }}
+    >
+      {children}
+    </GeneratedUiActionsContext>
+  );
+};
+
 /**
  * The Orchestrator's side of the mission: messages, tool runs, and decision
  * cards. The worktree line follows the goal.
  */
 const TranscriptRows = ({
   entries,
+  interactiveId,
   running,
 }: {
   entries: readonly TimelineEntry[];
+  interactiveId: string | undefined;
   running: boolean;
 }) => {
   const { missionId } = useMission();
@@ -239,7 +265,13 @@ const TranscriptRows = ({
         const goal = entry.kind === "user" && isGoal(entry.item, missionId);
         return (
           <li className="flex min-w-0 flex-col gap-lg" key={row.id}>
-            <EntryBody entry={entry} />
+            {entry.id === interactiveId ? (
+              <InteractiveReply>
+                <EntryBody entry={entry} />
+              </InteractiveReply>
+            ) : (
+              <EntryBody entry={entry} />
+            )}
             {goal ? <WorkspaceLine /> : null}
           </li>
         );
@@ -258,6 +290,8 @@ export const Transcript = ({
   now: number;
 }) => {
   const [manual, setManual] = useState(() => new Map<string, boolean>());
+  const { live } = useMission();
+  const interactiveId = latestOrchestratorReply(parts, live.agents);
   return (
     <ol aria-label="Mission transcript" className="flex flex-col gap-lg">
       {parts.map((part) => (
@@ -276,10 +310,18 @@ export const Transcript = ({
               running={part.running}
               start={part.start}
             >
-              <TranscriptRows entries={part.entries} running={part.running} />
+              <TranscriptRows
+                entries={part.entries}
+                interactiveId={interactiveId}
+                running={part.running}
+              />
             </TurnGroup>
           ) : (
-            <TranscriptRows entries={part.entries} running={running} />
+            <TranscriptRows
+              entries={part.entries}
+              interactiveId={interactiveId}
+              running={running}
+            />
           )}
         </li>
       ))}

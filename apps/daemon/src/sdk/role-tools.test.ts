@@ -111,12 +111,18 @@ describe("prompts", () => {
         "Steps",
         "Progress",
         "Code",
+        "Button",
+        "Buttons",
+        "Form",
+        "Input",
+        "TextArea",
+        "Select",
       ]) {
         expect(prompt).toContain(`${component}(`);
       }
       expect(prompt).toContain("main agent's latest reply");
     }
-    expect(SHARED_GUIDANCE.length).toBeLessThanOrEqual(6720);
+    expect(SHARED_GUIDANCE.length).toBeLessThanOrEqual(7911);
   });
 
   it("selects the prompt by role", () => {
