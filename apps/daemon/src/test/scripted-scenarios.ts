@@ -3,7 +3,12 @@
  * flow, so offline browser runs can reach states the default walk never
  * shows (clarifying questions, rate limits, blocked workers, startup failure).
  */
-export type Scenario = "blocked" | "default" | "explore" | "rate_limit";
+export type Scenario =
+  | "blocked"
+  | "default"
+  | "explore"
+  | "generated_ui"
+  | "rate_limit";
 
 export const PLAN_REQUEST = /\b(?:plan|scope|review) (?:it |this )?first\b/iu;
 
@@ -14,6 +19,9 @@ const EXPLORE = /\bflak(?:y|es)\b/iu;
 export const START_FAILURE = /fails to start/iu;
 
 export const scenarioOf = (goal: string): Scenario => {
+  if (goal.includes("generated UI")) {
+    return "generated_ui";
+  }
   if (RATE_LIMIT.test(goal)) {
     return "rate_limit";
   }
@@ -26,6 +34,10 @@ export const scenarioOf = (goal: string): Scenario => {
 /** Phrases the Orchestrator puts in worker instructions; Workers have no goal. */
 export const WORKER_RATE_LIMIT = "Expect provider rate limits.";
 export const WORKER_INSTALL = "Run pnpm install before editing.";
+export const WORKER_GENERATED_UI = "Show a generated UI example.";
+
+export const generatedUiExample = (label: string) =>
+  `\`\`\`openui-lang\nroot = Stack([Text("${label}"), Badge("Ready", "success"), KeyValue("Checks", "Passed"), Button("continue_conversation", "Use approach", "Use the recommended approach"), Form([Input("Project name", "name"), TextArea("Project notes", "notes"), Select("Approach", "approach", ["Small", "Complete"])], "Use these project details", "project", "Send details")])\n\`\`\``;
 
 const lines = (count: number, prefix: string) =>
   Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`).join(

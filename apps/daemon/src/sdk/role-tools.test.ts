@@ -1,7 +1,14 @@
+import { GENERATIVE_UI_PROMPT } from "@missions/protocol/generative-ui";
 import { describe, expect, it, vi } from "vitest";
 
 import { PLAN_GUIDANCE } from "./plan-guidance";
-import { MAIN_PROMPT, promptFor, WORKER_PROMPT } from "./prompts";
+import {
+  MAIN_PROMPT,
+  PROMPT_VERSION,
+  promptFor,
+  SHARED_GUIDANCE,
+  WORKER_PROMPT,
+} from "./prompts";
 import {
   createRoleToolServer,
   disabledToolIds,
@@ -93,9 +100,59 @@ describe("role tools", () => {
 });
 
 describe("prompts", () => {
+  it("teaches both agents the fenced interface library within its measured budget", () => {
+    for (const prompt of [MAIN_PROMPT, WORKER_PROMPT]) {
+      expect(prompt).toContain("```openui-lang");
+      for (const component of [
+        "Stack",
+        "Text",
+        "Callout",
+        "Badge",
+        "KeyValue",
+        "Table",
+        "Steps",
+        "Progress",
+        "Code",
+        "Button",
+        "Buttons",
+        "Form",
+        "Input",
+        "TextArea",
+        "Select",
+      ]) {
+        expect(prompt).toContain(`${component}(`);
+      }
+      expect(prompt).toContain("main agent's latest reply");
+    }
+    expect(SHARED_GUIDANCE.length).toBeLessThanOrEqual(8893);
+  });
+
   it("selects the prompt by role", () => {
     expect(promptFor("orchestrator")).toBe(MAIN_PROMPT);
     expect(promptFor("worker")).toBe(WORKER_PROMPT);
+  });
+
+  it("appends proactive OpenUI defaults for both roles after the library guidance", () => {
+    for (const prompt of [MAIN_PROMPT, WORKER_PROMPT]) {
+      expect(prompt).toContain(
+        `${GENERATIVE_UI_PROMPT}\n\nProactive OpenUI presentation:`
+      );
+      for (const clause of [
+        '"visualize"',
+        '"visualise"',
+        '"visual"',
+        '"visually"',
+        '"visualization"',
+        "use OpenUI by default for substantive results",
+        "without waiting for the user to request UI",
+        "This overrides the library's text-only and unchanged-dashboard guidance",
+        "explicit plain-text requests as text",
+        "The existing component, action, and read-only restrictions still apply",
+      ]) {
+        expect(prompt).toContain(clause);
+      }
+    }
+    expect(PROMPT_VERSION).toBe("5");
   });
 
   it("makes the main agent general purpose with Work mode as the default", () => {

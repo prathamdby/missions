@@ -35,4 +35,35 @@ describe(parsePlan, () => {
     expect(parsePlan("Just a paragraph.")).toBeNull();
     expect(parsePlan("1. Step\n\nTrailing prose")).toBeNull();
   });
+
+  it("preserves fenced interfaces before or inside numbered steps", () => {
+    const ui = '```openui-lang\nroot = Stack([Text("Approach")])\n```';
+    expect(parsePlan(`${ui}\n\n1. Implement it`)).toBeNull();
+    expect(
+      parsePlan(
+        `1. Implement it\n${ui
+          .split("\n")
+          .map((line) => `   ${line}`)
+          .join("\n")}`
+      )
+    ).toBeNull();
+  });
+
+  it.each(["```", "~~~", "````", "~~~~"])(
+    "preserves closed and unclosed %s fences before or inside steps",
+    (fence) => {
+      const opening = `${fence}openui-lang\nroot = Stack([Text("Approach")])`;
+      for (const ui of [opening, `${opening}\n${fence}`]) {
+        expect(parsePlan(`${ui}\n\n1. Implement it`)).toBeNull();
+        expect(
+          parsePlan(
+            `1. Implement it\n${ui
+              .split("\n")
+              .map((line) => `   ${line}`)
+              .join("\n")}`
+          )
+        ).toBeNull();
+      }
+    }
+  );
 });

@@ -52,3 +52,13 @@ Do not disable a rule to make code pass. Add a token, a component variant, or a 
 ## Diagrams
 
 Pele 1.10.0 is pinned, with an exact `minimumReleaseAgeExclude` entry because the integration was checked against this release's lazy mount API, published on October 24, 2026. The exception does not permit other versions. Its MIT package has no runtime dependencies. `aliases.pele` contains only color-token references and generates the scoped `.pele` variables. Fonts inherit from the host. Links, images, icons, and zoom are disabled, and parsed SVG is filtered before importing it into the document.
+
+## Generated interfaces
+
+`@openuidev/react-lang` is pinned to 1.0.1 in the browser only. Components compose Missions primitives and named spacing tokens; neither `@openuidev/react-ui` nor its CSS is used. There is no tool provider or observability publishing. The `lang-core` postinstall sends telemetry, so it stays outside `allowBuilds` and is explicitly ignored. The initial install reported `Ignored build scripts: @openuidev/lang-core@1.0.1`.
+
+The protocol prompt is a file snapshot of the browser library. Regenerate with `pnpm exec vitest run apps/web/src/components/ui/generated-ui-library.test.ts --update`; a normal test run checks drift. Oxfmt ignores the generated module because its string-quote normalization changes the snapshot bytes. Each fenced program is standalone. Prompt version 5 replaces resumed agent sessions, including Workers, so they receive the new guidance. Both roles proactively use OpenUI for visual requests and substantive result summaries, while respecting explicit plain-text requests.
+
+pnpm 12 removed `ignoredBuiltDependencies`. `permissions["@openuidev/lang-core"].build: false` records the denial without adding it to `allowBuilds` or weakening the strict build policy.
+
+Only the latest Orchestrator reply can send messages. Streaming previews, older replies, Worker conversations, agent messages, plans, and other Markdown panels remain read-only. Form submissions and continuation buttons first show the exact outgoing message, including serialized form values and the protocol length cap; a separate Send message confirmation uses the composer's message command and optimistic presentation. Mission-owned per-reply, per-fence admission survives tab switches: pending and successful sends cannot be repeated. An uncertain delivery requires an explicit retry of its captured text, delivery mode, occurrence, and operation ID, even if the Orchestrator starts working or fields change. Links require absolute HTTP(S) URLs and an explicit click.

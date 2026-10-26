@@ -25,10 +25,12 @@ import {
   RICH_TODOS,
   START_FAILURE,
   TEST_RUN,
+  WORKER_GENERATED_UI,
   WORKER_INSTALL,
   WORKER_RATE_LIMIT,
   WORKER_TODOS,
   scenarioOf,
+  generatedUiExample,
 } from "./scripted-scenarios";
 import type { Scenario, ScriptedTool } from "./scripted-scenarios";
 
@@ -382,6 +384,10 @@ export class ScriptedRuntime implements RuntimeHandle {
       return;
     }
     if (text.includes("finished assignment")) {
+      if (this.#scenario === "generated_ui") {
+        this.#say(generatedUiExample("Orchestrator interface"));
+        return;
+      }
       await this.#read(NOTES_FILE, "# Notes");
       const finished =
         this.#scenario === "default"
@@ -423,6 +429,15 @@ export class ScriptedRuntime implements RuntimeHandle {
     if (this.#turns === 0) {
       this.#initialText = text;
       this.#scenario = scenarioOf(text);
+    }
+    if (this.#turns === 0 && this.#scenario === "generated_ui") {
+      await this.#roleTool("dispatch_worker", {
+        instructions: WORKER_GENERATED_UI,
+        needsWrite: false,
+        title: "Generated UI Worker",
+      });
+      this.#say(generatedUiExample("Orchestrator interface"));
+      return;
     }
     if (this.#turns === 0 && this.#scenario !== "default") {
       await this.#explore();
@@ -550,6 +565,7 @@ export class ScriptedRuntime implements RuntimeHandle {
       blocked: ` ${WORKER_INSTALL}`,
       default: "",
       explore: "",
+      generated_ui: "",
       rate_limit: ` ${WORKER_RATE_LIMIT}`,
     }[this.#scenario];
     this.#say("Starting with the clock. A worker is on it.");
@@ -585,6 +601,22 @@ export class ScriptedRuntime implements RuntimeHandle {
   }
 
   async #workerTurn(text: string) {
+    if (text.includes(WORKER_GENERATED_UI)) {
+      const summary = generatedUiExample("Worker interface");
+      this.#say(summary);
+      await this.#roleTool("send_message", {
+        messageId: this.#id("message"),
+        text: summary,
+        to: "main",
+      });
+      await this.#roleTool("submit_handoff", {
+        checks: [],
+        filesChanged: [],
+        followUps: [],
+        summary,
+      });
+      return;
+    }
     if (!text.includes("Assignment")) {
       this.#say(`Understood: ${text.slice(0, 200)}`);
       return;
