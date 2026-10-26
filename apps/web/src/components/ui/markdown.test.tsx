@@ -91,6 +91,14 @@ describe("syntax highlighting", () => {
 });
 
 describe("markdown safety", () => {
+  it("leaves stray json-render tags as literal text", () => {
+    const markup = render('<json-render>{"type":"Table"}</json-render>');
+    expect(markup).toContain("&lt;json-render&gt;");
+    expect(markup).toContain("&lt;/json-render&gt;");
+    expect(markup).not.toContain("<json-render>");
+    expect(markup).not.toContain("<table");
+  });
+
   it("shows raw HTML as text instead of rendering it", () => {
     const markup = render(
       'Hi <b>bold</b> <script>alert(1)</script> <img src=x onerror="alert(1)">\n\n<div onclick="steal()">block</div>'
@@ -152,5 +160,117 @@ describe("long transcripts", () => {
     console.info(`Rendered 200 messages in ${elapsed.toFixed(0)}ms`);
     expect(markup.match(/<pre/gu)).toHaveLength(200);
     expect(elapsed).toBeLessThan(10_000);
+  });
+});
+
+describe("math", () => {
+  it.each(["Energy $$E=mc^2$$.", "$$E=mc^2$$", "$a+b$", String.raw`\(a\)`])(
+    "renders inline math without a block: %s",
+    (source) => {
+      const markup = render(source);
+      expect(markup).toContain("<math");
+      expect(markup).not.toContain('display="block"');
+      expect(markup).not.toContain('data-slot="math"');
+    }
+  );
+
+  it.each(["$$\nb\n$$", String.raw`\[b\]`])(
+    "renders display math with scrolling and a TeX copy control: %s",
+    (source) => {
+      const markup = render(source);
+      expect(markup).toContain('data-slot="math"');
+      expect(markup).toContain('display="block"');
+      expect(markup).toContain("overflow-x-auto");
+      expect(markup).toContain('aria-label="Copy TeX"');
+    }
+  );
+
+  it.each([
+    "$5 and $10",
+    String.raw`Cost \$5; \$x\$`,
+    "`$a$ $$b$$ \\(c\\) \\[d\\]`",
+    "```text\n$a$ $$b$$ \\(c\\) \\[d\\]\n```",
+    "~~~text\n$a$ $$b$$ \\(c\\) \\[d\\]\n~~~",
+    String.raw`\[unfinished`,
+  ])("leaves currency, escaped delimiters and code literal: %s", (source) => {
+    expect(render(source)).not.toContain("<math");
+  });
+
+  it("keeps currency literal next to real math", () => {
+    const markup = render("Prices: $5 and $10. Formula: $x$.");
+    expect(markup).toContain("$5 and $10");
+    expect(markup.match(/<math[ >]/gu)).toHaveLength(1);
+    expect(markup).not.toContain("Formula unavailable");
+  });
+
+  it.each([false, true])(
+    "keeps blank lines and Markdown-looking formula content in one display block (streaming=%s)",
+    (streaming) => {
+      const markup = render("Before\n\n$$\na\n\n- x\n$$\n\nAfter", streaming);
+      expect(markup.match(/<math[ >]/gu)).toHaveLength(1);
+      expect(markup).toContain('display="block"');
+      expect(markup).not.toContain("<li");
+      expect(markup).toContain("Before");
+      expect(markup).toContain("After");
+    }
+  );
+
+  it("does not expose display delimiters while a formula streams", () => {
+    const markup = render("$$\n\\int_0^1", true);
+    expect(markup).not.toContain("$$");
+    expect(markup).toContain("<math");
+  });
+
+  it("strips agent math colors", () => {
+    const markup = render(String.raw`$$\color{red}{x}$$`);
+    expect(markup).toContain("<math");
+    expect(markup).not.toMatch(/href=|javascript:|mathcolor=|style="color/iu);
+  });
+
+  it.each([
+    String.raw`\href{javascript:alert(1)}{x}`,
+    String.raw`\class{injected}{x}`,
+  ])("shows untrusted commands only as inert source: %s", (tex) => {
+    const markup = render(`$$${tex}$$`);
+    expect(markup).toContain("Formula unavailable");
+    expect(markup).not.toMatch(/<a |href=|mathcolor=|style="color/iu);
+    expect(markup).not.toContain('class="injected"');
+  });
+
+  it("shows invalid source and a caption only after streaming finishes", () => {
+    const source = "$$\\frac{a}{$$";
+    const finished = render(source);
+    expect(finished).toContain("Formula unavailable");
+    expect(finished).toContain("\\frac{a}{");
+    const streaming = render(source, true);
+    expect(streaming).toContain("\\frac{a}{");
+    expect(streaming).toContain("text-text-tertiary");
+    expect(streaming).not.toContain("Formula unavailable");
+  });
+
+  it.each(["default", "panel", "thought"] as const)(
+    "renders math in the %s appearance",
+    (appearance) => {
+      const markup = renderToStaticMarkup(
+        <Markdown appearance={appearance}>$$E=mc^2$$</Markdown>
+      );
+      expect(markup).toContain("<math");
+    }
+  );
+
+  it("renders five formulas across 200 messages within the transcript budget", () => {
+    const message = String.raw`A $a+b$, B \(x^2\), C $$E=mc^2$$.
+
+\[
+\frac{1}{2}
+\]
+
+$$
+\int_0^1 x\,dx
+$$`;
+    const started = performance.now();
+    const markup = Array.from({ length: 200 }, () => render(message)).join("");
+    expect(markup.match(/<math[ >]/gu)).toHaveLength(1000);
+    expect(performance.now() - started).toBeLessThan(10_000);
   });
 });

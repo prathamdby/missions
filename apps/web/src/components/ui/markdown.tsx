@@ -1,10 +1,12 @@
 "use client";
 
 import { GENERATIVE_UI_FENCE } from "@missions/protocol/generative-ui";
-import { createContext, use } from "react";
+import { createContext, use, useMemo } from "react";
 import type { ComponentProps } from "react";
+import remarkMath from "remark-math";
 import {
   defaultRehypePlugins,
+  defaultRemarkPlugins,
   Streamdown,
   useIsCodeFenceIncomplete,
 } from "streamdown";
@@ -13,6 +15,8 @@ import type { Components, ExtraProps, StreamdownProps } from "streamdown";
 import { CodeBlock, InlineCode } from "@/components/ui/code-block";
 import { Diagram } from "@/components/ui/diagram";
 import { GeneratedUi } from "@/components/ui/generated-ui";
+import { MathFormula } from "@/components/ui/math";
+import { normalizeMathDelimiters } from "@/components/ui/math-delimiters";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   codePlugin,
@@ -146,9 +150,28 @@ const Image = ({ alt, node: _node, src }: Props<"img">) =>
     </a>
   ) : null;
 
-const Inline = ({ node: _node, ...props }: Props<"code">) => (
-  <InlineCode {...props} />
-);
+const Inline = ({
+  children,
+  className,
+  node: _node,
+  ...props
+}: Props<"code">) => {
+  const streaming = use(StreamingContext);
+  if (LANGUAGE.exec(className ?? "")?.groups?.lang === "math") {
+    return (
+      <MathFormula
+        display={false}
+        streaming={streaming}
+        tex={String(children ?? "")}
+      />
+    );
+  }
+  return (
+    <InlineCode className={className} {...props}>
+      {children}
+    </InlineCode>
+  );
+};
 
 /** A fenced block: app code chrome around Shiki tokens colored by design tokens. */
 const Fence = ({ children, className, node }: Props<"code">) => {
@@ -158,6 +181,9 @@ const Fence = ({ children, className, node }: Props<"code">) => {
   const lang = LANGUAGE.exec(className ?? "")?.groups?.lang ?? "";
   const code = String(children ?? "").replace(TRAILING_NEWLINE, "");
   const highlighted = useHighlightedCode(code, lang, incomplete);
+  if (lang === "math") {
+    return <MathFormula display streaming={streaming} tex={code} />;
+  }
   if (lang === GENERATIVE_UI_FENCE && !thought) {
     const blockId = JSON.stringify([node?.position?.start.offset ?? 0, code]);
     return (
@@ -303,6 +329,10 @@ const REHYPE_PLUGINS: StreamdownProps["rehypePlugins"] = [
 
 const PLUGINS: StreamdownProps["plugins"] = { code: codePlugin };
 const LINK_SAFETY: StreamdownProps["linkSafety"] = { enabled: false };
+const REMARK_PLUGINS: StreamdownProps["remarkPlugins"] = [
+  ...Object.values(defaultRemarkPlugins),
+  [remarkMath, { singleDollarTextMath: false }],
+];
 
 /**
  * Agent-authored Markdown. Raw HTML is never rendered. `streaming` renders a
@@ -319,28 +349,35 @@ export const Markdown = ({
   className?: string;
   appearance?: keyof typeof APPEARANCES;
   streaming?: boolean;
-}) => (
-  <ThoughtContext value={appearance === "thought"}>
-    <StreamingContext value={streaming}>
-      <Streamdown
-        className={cn(
-          // space-y-0 replaces Streamdown's root spacing; blocks use our gap instead.
-          "flex min-w-0 flex-col space-y-0 break-words select-text",
-          appearance === "default" ? "gap-md" : "gap-sm",
-          className
-        )}
-        components={APPEARANCES[appearance]}
-        controls={false}
-        isAnimating={streaming}
-        lineNumbers={false}
-        linkSafety={LINK_SAFETY}
-        mode={streaming ? "streaming" : "static"}
-        parseIncompleteMarkdown={streaming}
-        plugins={PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
-      >
-        {children}
-      </Streamdown>
-    </StreamingContext>
-  </ThoughtContext>
-);
+}) => {
+  const normalized = useMemo(
+    () => normalizeMathDelimiters(children),
+    [children]
+  );
+  return (
+    <ThoughtContext value={appearance === "thought"}>
+      <StreamingContext value={streaming}>
+        <Streamdown
+          className={cn(
+            // space-y-0 replaces Streamdown's root spacing; blocks use our gap instead.
+            "flex min-w-0 flex-col space-y-0 break-words select-text",
+            appearance === "default" ? "gap-md" : "gap-sm",
+            className
+          )}
+          components={APPEARANCES[appearance]}
+          controls={false}
+          isAnimating={streaming}
+          lineNumbers={false}
+          linkSafety={LINK_SAFETY}
+          mode={streaming ? "streaming" : "static"}
+          parseIncompleteMarkdown={streaming}
+          plugins={PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          remarkPlugins={REMARK_PLUGINS}
+        >
+          {normalized}
+        </Streamdown>
+      </StreamingContext>
+    </ThoughtContext>
+  );
+};
