@@ -4,6 +4,8 @@ import type { Role } from "@missions/protocol/common";
 // The SDK tool helper expects Zod 3 shapes; app contracts use Zod 4.
 import { z } from "zod3";
 
+import { AGENT_TEXT_FORMAT, USER_SUMMARY_FORMAT } from "./prompts";
+
 export const ROLE_TOOL_SERVER = "missions";
 
 /** Agent message bodies; larger reports belong in shared files. */
@@ -98,8 +100,8 @@ const sendMessageTool = (
   tool(
     "send_message",
     role === "orchestrator"
-      ? "Send a message to a running Worker. to is the Worker's assignment id. It is delivered at the Worker's next tool boundary. messageId is your idempotency key: use a new one per message and reuse it only to retry the same message."
-      : 'Send a message to the main agent (to="main"): a question, blocker or progress note. It is delivered at the main agent\'s next tool boundary. messageId is your idempotency key: use a new one per message and reuse it only to retry the same message.',
+      ? `Send a message to a running Worker. to is the Worker's assignment id. It is delivered at the Worker's next tool boundary. messageId is your idempotency key: use a new one per message and reuse it only to retry the same message. Text format: ${AGENT_TEXT_FORMAT}`
+      : `Send a message to the main agent (to="main"): a question, blocker or progress note. It is delivered at the main agent's next tool boundary. messageId is your idempotency key: use a new one per message and reuse it only to retry the same message. Text format: ${AGENT_TEXT_FORMAT}`,
     {
       messageId: z
         .string()
@@ -129,7 +131,7 @@ const orchestratorTools = (
 ): DroidTool[] => [
   tool(
     "dispatch_worker",
-    "Assign a bounded task to a Worker agent that shares your workspace and branch. Its reports and handoff arrive as messages; end your turn while you wait. Set needsWrite=false for research or review.",
+    `Assign a bounded task to a Worker agent that shares your workspace and branch. Its reports and handoff arrive as messages; end your turn while you wait. Set needsWrite=false for research or review. Instructions format: ${AGENT_TEXT_FORMAT}`,
     {
       instructions: z.string().min(1).max(20_000),
       needsWrite: z.boolean().default(true),
@@ -141,7 +143,7 @@ const orchestratorTools = (
   sendMessageTool(agentId, handlers, "orchestrator"),
   tool(
     "message_worker",
-    "Deprecated alias of send_message: sends text to the Worker running assignmentId. Prefer send_message.",
+    `Deprecated alias of send_message: sends text to the Worker running assignmentId. Prefer send_message. Text format: ${AGENT_TEXT_FORMAT}`,
     {
       assignmentId: z.string().min(1),
       mode: z.enum(["steer", "queue"]).default("steer"),
@@ -167,7 +169,7 @@ const orchestratorTools = (
   readHistoryTool(agentId, handlers),
   tool(
     "complete_mission",
-    "Finish the whole mission after verifying the work: stops every agent so the user can review and publish. Not needed after each request.",
+    `Finish the whole mission after verifying the work: stops every agent so the user can review and publish. Not needed after each request. Summary format: ${USER_SUMMARY_FORMAT}`,
     {
       checks: z.array(checkShape).max(50).default([]),
       summary: z.string().min(1).max(20_000),
@@ -187,7 +189,7 @@ const workerTools = (
   readHistoryTool(agentId, handlers),
   tool(
     "submit_handoff",
-    "Finish your assignment: summarize what you changed and how you verified it. Call this exactly once when done.",
+    `Finish your assignment: summarize what you changed and how you verified it. Call this exactly once when done. Summary format: ${USER_SUMMARY_FORMAT}`,
     {
       checks: z.array(checkShape).max(50).default([]),
       filesChanged: z.array(z.string()).max(500).default([]),
