@@ -6,20 +6,77 @@ import { describe, expect, it } from "vitest";
 
 import { missionsLibrary } from "./generated-ui-library";
 
+const CORRECTIONS = [
+  {
+    issue: "Named arguments are not supported; use positional arguments.",
+    kind: "syntax",
+    right: 'root = Stack([Badge("Ready", "success")])',
+    wrong: 'root = Stack([Badge(text: "Ready", tone: "success")])',
+  },
+  {
+    issue:
+      "A missing root does not render; start every fence with root = Stack(...).",
+    kind: "syntax",
+    right: 'root = Stack([status])\nstatus = Badge("Ready")',
+    wrong: 'status = Badge("Ready")',
+  },
+  {
+    issue:
+      "Card, Chart and Image are not listed components; use a Table, Callout or KeyValue instead.",
+    kind: "semantic",
+    right:
+      'root = Stack([Callout("Checks passed", "Overview", "success"), Table(["Check", "Result"], [["Tests", "Passed"]])])',
+    wrong:
+      'root = Stack([Card("Overview"), Chart([1, 2]), Image("https://example.com/image.png")])',
+  },
+  {
+    issue:
+      "Never nest Forms; put fields in one Form with unique Form and field names.",
+    kind: "semantic",
+    right:
+      'root = Stack([Form([Input("Name", "name")], "Use these details", "detailsForm", "Continue")])',
+    wrong:
+      'root = Stack([Form([Form([Input("Name", "name")], "Details", "inner")], "Submit", "outer")])',
+  },
+  {
+    issue:
+      "No Query, Mutation, @Run or $var bindings. Gather facts with Droid tools first, then render literal values. Only Buttons and Forms provide actions, after an explicit user action; URLs must be absolute http(s).",
+    kind: "semantic",
+    right: 'root = Stack([KeyValue("Checks passed", "12")])',
+    wrong:
+      'root = Stack([Text($var), Button(@Run("refresh"), "Refresh")])\nvar = Query("checks")\nrefresh = Mutation("checks")',
+  },
+  {
+    issue:
+      "Never emit <json-render> or other render tags; put the program in an openui-lang fence, with prose outside it.",
+    kind: "semantic",
+    right: 'root = Stack([Text("Checks passed")])',
+    wrong: '<json-render>{"type":"Text","text":"Checks passed"}</json-render>',
+  },
+] as const;
+
 const PROMPT_OPTIONS: PromptOptions = {
   additionalRules: [
-    "Each fence is a standalone interface, not a patch: always include root and every referenced statement. This overrides inline-mode patch guidance.",
-    "Use unique Form and field names within each interface. Do not nest Forms. Buttons and forms send only after an explicit user action. Only absolute http(s) URLs can open.",
+    "Each fence is a standalone program, never a patch: include root and every referenced statement. Write root = Stack(...) first. Use only listed components, positional arguments and double-quoted strings. All component text is plain text, not Markdown or HTML.",
+    ...CORRECTIONS.map(
+      ({ issue, wrong, right }) => `${issue}\nWRONG: ${wrong}\nRIGHT: ${right}`
+    ),
+    "Pre-send checklist: use an openui-lang fence; root = Stack(...) is first; every reference is defined and reachable from root; only listed components, positional arguments and double-quoted strings; no nested Forms, Query/Mutation/@Run/$var or render tags; facts are literal values; actions only in the latest main-agent reply, otherwise display components only.",
   ],
   bindings: false,
   builtinFunctions: false,
   examples: [
-    'root = Stack([Text("Checks passed"), Progress("Verification", 100)])',
+    'root = Stack([Table(["Check", "Result"], [["Typecheck", "Passed"], ["Tests", "Passed"]])])',
+    'root = Stack([Steps([{label: "Inspect", state: "done"}, {label: "Verify", state: "active"}, {label: "Publish", state: "pending"}]), Progress("Verification", 67)])',
+    'root = Stack([Callout("All checks passed", "Ready", "success"), KeyValue("Tests", "12 passed")])',
+    'root = Stack([Badge("Passed", "success"), Badge("Review required", "warning")])',
+    'root = Stack([Buttons([Button("continue_conversation", "Show details", "Show the verification details"), Button("open_url", "Documentation", "", "https://example.com/docs")])])',
     'root = Stack([Form([Input("Name", "name"), TextArea("Details", "details"), Select("Approach", "approach", ["Small", "Complete"])], "Use these details", "detailsForm", "Continue")])',
+    'root = Stack([Code("pnpm gate\\n# Verify before publishing")])',
   ],
-  inlineMode: true,
+  inlineMode: false,
   preamble:
-    "Missions interfaces: use an openui-lang fence within ordinary Markdown when an interface helps. Use only this library. All text is plain text. Never use Query, Mutation, remote images, HTML, or custom actions.",
+    'Missions interfaces: put each standalone program in an openui-lang fence within ordinary Markdown. Keep prose outside fences, for example:\n\nChecks passed.\n\n```openui-lang\nroot = Stack([Text("Checks passed")])\n```\n\nUse only the listed components with positional arguments and double-quoted strings. Start with root = Stack(...). All component text is plain text. Never use Query, Mutation, remote images, HTML, or custom actions.',
   toolCalls: false,
 };
 
@@ -27,9 +84,94 @@ const moduleSource = (prompt: string) =>
   `// Generated by generated-ui-library.test.ts. Update with pnpm test --update.\nexport const GENERATIVE_UI_PROMPT =\n  ${JSON.stringify(prompt)};\n`;
 
 describe("generated interface prompt", () => {
+  it("uses standalone fenced programs without upstream inline or tool guidance", () => {
+    expect(PROMPT_OPTIONS).toMatchObject({
+      inlineMode: false,
+      toolCalls: false,
+    });
+    expect(PROMPT_OPTIONS.preamble).toContain("```openui-lang\nroot = Stack(");
+    expect(PROMPT_OPTIONS.examples).toHaveLength(7);
+    const prompt = missionsLibrary.prompt(PROMPT_OPTIONS);
+    for (const stale of [
+      "Inline Mode",
+      "RootComp",
+      "dashboard stays unchanged",
+    ]) {
+      expect(prompt).not.toContain(stale);
+    }
+    for (const rule of [
+      "WRONG",
+      "RIGHT",
+      "Card",
+      "Chart",
+      "Image",
+      "Query",
+      "Mutation",
+      "@Run",
+      "$var",
+      "<json-render>",
+      "Pre-send checklist",
+    ]) {
+      expect(prompt).toContain(rule);
+    }
+  });
+
+  it("parses every literal fenced example in the generated prompt", () => {
+    const fences = [
+      ...missionsLibrary
+        .prompt(PROMPT_OPTIONS)
+        .matchAll(/```openui-lang\n(?<source>[\s\S]*?)\n```/gu),
+    ];
+    expect(fences.length).toBeGreaterThan(0);
+    for (const { groups } of fences) {
+      const result = createParser(
+        missionsLibrary.toJSONSchema(),
+        missionsLibrary.root
+      ).parse(groups?.source ?? "");
+      expect(result.meta.errors).toStrictEqual([]);
+      expect(result.root).not.toBeNull();
+    }
+  });
+
+  it.each(CORRECTIONS)("parses the RIGHT correction: $issue", ({ right }) => {
+    expect(right).toMatch(/^root = Stack\(/u);
+    const result = createParser(
+      missionsLibrary.toJSONSchema(),
+      missionsLibrary.root
+    ).parse(right);
+    expect(result.meta.errors).toStrictEqual([]);
+    expect(result.root).not.toBeNull();
+  });
+
+  it.each(CORRECTIONS.filter(({ kind }) => kind === "syntax"))(
+    "rejects the syntax-invalid WRONG example: $issue",
+    ({ wrong }) => {
+      const result = createParser(
+        missionsLibrary.toJSONSchema(),
+        missionsLibrary.root
+      ).parse(wrong);
+      expect(
+        result.meta.errors.length > 0 || result.root === null
+      ).toBeTruthy();
+    }
+  );
+
+  // The parser is permissive, not an application-policy validator. Nested
+  // Forms, unsupported components/actions and render tags violate the contract
+  // even when a partial AST can be recovered, so do not assert syntax errors.
+  it.each(CORRECTIONS.filter(({ kind }) => kind === "semantic"))(
+    "documents the semantic-invalid WRONG example: $issue",
+    ({ issue, wrong, right }) => {
+      expect(missionsLibrary.prompt(PROMPT_OPTIONS)).toContain(
+        `${issue}\nWRONG: ${wrong}\nRIGHT: ${right}`
+      );
+    }
+  );
+
   it.each(PROMPT_OPTIONS.examples ?? [])(
     "parses the documented example %s",
     (source) => {
+      expect(source).toMatch(/^root = Stack\(/u);
       const result = createParser(
         missionsLibrary.toJSONSchema(),
         missionsLibrary.root
