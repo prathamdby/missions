@@ -754,15 +754,9 @@ export class AgentRuntime {
       modelId,
       worktree: false,
       ...(reasoningEffort ? { reasoningEffort: reasoningEffort as never } : {}),
-      ...(systemPrompt
-        ? {
-            systemPrompt: {
-              append: systemPrompt,
-              preset: "droid",
-              type: "preset",
-            } as never,
-          }
-        : {}),
+      // A string replaces the CLI's Droid base. A preset append would keep
+      // official CLI behavior this app does not use.
+      ...(systemPrompt ? { systemPrompt } : {}),
       ...(disabledToolIds?.length ? { disabledToolIds } : {}),
       ...(enabledToolIds?.length ? { enabledToolIds } : {}),
       ...(blockOnMcpLoad === undefined ? {} : { blockOnMcpLoad }),

@@ -160,8 +160,9 @@ describe("prompts", () => {
       }
       expect(prompt).toContain("main agent's latest reply");
     }
-    // Measured v6 guidance: 11,313 characters, plus 5% headroom.
-    expect(SHARED_GUIDANCE.length).toBeLessThanOrEqual(11_879);
+    // The sent base is the role prompt, not SHARED_GUIDANCE alone.
+    expect(promptFor("orchestrator").length).toBeLessThanOrEqual(16_000);
+    expect(promptFor("worker").length).toBeLessThanOrEqual(15_000);
   });
 
   it("selects the prompt by role", () => {
@@ -188,14 +189,20 @@ describe("prompts", () => {
         expect(prompt).toContain(clause);
       }
     }
-    expect(PROMPT_VERSION).toBe("6");
+    expect(PROMPT_VERSION).toBe("7");
   });
 
   it.each([MAIN_PROMPT, WORKER_PROMPT])(
     "enforces user, tool-argument and math output formats",
     (prompt) => {
       for (const clause of [
-        "This app does not render `<json-render>` tags or any terminal-only visualization; they appear as raw JSON. Ignore any base instruction to use them. Use an openui-lang fence for visuals, otherwise Markdown tables and lists.",
+        "Use an openui-lang fence for visuals, otherwise Markdown tables and lists.",
+        "Do not push, open a pull request, post, or write through MCP or a connector unless the user asked",
+        "Never send personal data to a third party",
+        "Keep secrets and user-generated content out of code, logs and replies",
+        "Do not edit unless the user also asked for a change",
+        "Harness reminders are runtime context",
+        "Pass absolute paths",
         "$…$ / $$…$$; never inside openui-lang.",
         "JSON \\n escapes",
         "display components only",
@@ -210,6 +217,9 @@ describe("prompts", () => {
         "unchanged-dashboard",
         "dashboard stays unchanged",
         "overrides inline-mode patch guidance",
+        "Ignore any base instruction",
+        "# Rich terminal output",
+        "Sparkline(",
       ]) {
         expect(prompt).not.toContain(stale);
       }
@@ -222,6 +232,9 @@ describe("prompts", () => {
     expect(MAIN_PROMPT).toContain("missions.enter_plan");
     expect(MAIN_PROMPT).not.toContain("propose_plan");
     expect(MAIN_PROMPT).toContain("repository administration");
+    expect(MAIN_PROMPT).toContain(
+      "Push or open a pull request only when the user asked"
+    );
   });
 
   it("keeps Workers out of repository administration and delegation", () => {

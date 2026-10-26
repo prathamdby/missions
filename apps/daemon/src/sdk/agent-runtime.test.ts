@@ -258,18 +258,14 @@ describe(AgentRuntime, () => {
     { role: "orchestrator" as const, systemPrompt: MAIN_PROMPT },
     { role: "worker" as const, systemPrompt: WORKER_PROMPT },
   ])(
-    "appends $role guidance without replacing the SDK Droid preset",
+    "sends the $role prompt as the whole base, not a Droid preset append",
     async (options) => {
       const { runtime, transport } = setup(options);
       await runtime.start();
       const initialize = transport.requests.find(
         (request) => request.method === "droid.initialize_session"
       );
-      expect(initialize?.params.systemPrompt).toStrictEqual({
-        append: options.systemPrompt,
-        preset: "droid",
-        type: "preset",
-      });
+      expect(initialize?.params.systemPrompt).toBe(options.systemPrompt);
       await runtime.close();
     }
   );
