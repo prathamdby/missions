@@ -44,6 +44,18 @@ describe("message actions", () => {
     expect(forkGoal(items, "missing")).toBeNull();
   });
 
+  it("orders by sequence and clips a long message", () => {
+    const items = [
+      item("u2", "user", "Second", 4),
+      item("u1", "user", "x".repeat(600), 1),
+    ];
+    const goal = forkGoal(items, "u2");
+    const [first, second] =
+      goal?.split("\n").filter((line) => line.startsWith("- ")) ?? [];
+    expect(first).toBe(`- User: ${"x".repeat(500)}…`);
+    expect(second).toBe("- User: Second");
+  });
+
   it("copies a link whose hash is the message anchor", () => {
     expect(messageLink("http://localhost:4318", "m-1", "t-4")).toBe(
       "http://localhost:4318/missions/m-1#m-t-4"

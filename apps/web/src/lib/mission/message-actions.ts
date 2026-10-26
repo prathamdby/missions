@@ -13,11 +13,12 @@ export const forkGoal = (
   items: readonly TranscriptItem[],
   throughId: string
 ): string | null => {
-  const end = items.findIndex((item) => item.id === throughId);
+  const ordered = items.toSorted((left, right) => left.seq - right.seq);
+  const end = ordered.findIndex((item) => item.id === throughId);
   if (end === -1) {
     return null;
   }
-  const kept = items
+  const kept = ordered
     .slice(0, end + 1)
     .filter((item) => item.kind === "user" || item.kind === "agent_message");
   const lines = [
