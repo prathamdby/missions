@@ -159,16 +159,19 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
 
   const linkedId =
     typeof window === "undefined" ? "" : window.location.hash.slice(1);
+  const handledLink = useRef<string | null>(null);
   useEffect(() => {
-    if (!linkedId.startsWith("m-") || agentId) {
+    if (!linkedId.startsWith("m-") || agentId || handledLink.current === linkedId) {
       return;
     }
     const target = () => document.getElementById(linkedId);
     if (target()) {
       target()?.scrollIntoView({ block: "center" });
+      handledLink.current = linkedId;
       return;
     }
     if (!live.transcriptHasMore) {
+      handledLink.current = linkedId;
       return;
     }
     let stopped = false;
@@ -183,6 +186,7 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
         const found = target();
         if (found) {
           found.scrollIntoView({ block: "center" });
+          handledLink.current = linkedId;
         } else if (!stopped) {
           page().catch(() => undefined);
         }
