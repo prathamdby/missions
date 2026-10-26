@@ -9,6 +9,11 @@ const config: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   transpilePackages: ["@missions/protocol"],
+  turbopack: {
+    resolveAlias: {
+      "@openuidev/devtools": "./src/lib/openui-devtools-off.tsx",
+    },
+  },
 };
 
 export default config;
