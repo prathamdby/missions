@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Markdown } from "./markdown";
 
@@ -21,6 +21,7 @@ describe("generated Markdown interfaces", () => {
   afterEach(async () => {
     await act(() => root.unmount());
     host.remove();
+    vi.restoreAllMocks();
   });
 
   const render = async (
@@ -106,6 +107,56 @@ describe("generated Markdown interfaces", () => {
     expect(link?.rel).toBe("noopener noreferrer");
     expect(link?.target).toBe("_blank");
   });
+
+  it.each([
+    { streaming: true, url: "https://example.com/docs" },
+    { streaming: false, url: ["javascript", "alert(1)"].join(":") },
+    { streaming: false, url: "data:text/html,unsafe" },
+    { streaming: false, url: "file:///tmp/secret" },
+    { streaming: false, url: "/relative" },
+    { streaming: false, url: "//example.com/docs" },
+  ])(
+    "blocks link clicks for $url with streaming=$streaming",
+    async (options) => {
+      const open = vi.spyOn(window, "open").mockReturnValue(null);
+      await render(
+        `\`\`\`openui-lang\nroot = Button("open_url", "Open", null, ${JSON.stringify(options.url)})\n\`\`\``,
+        { streaming: options.streaming }
+      );
+      const control = host.querySelector("button");
+      await act(() => control?.click());
+      expect(control?.disabled).toBeTruthy();
+      expect(host.querySelector("a")).toBeNull();
+      expect(open).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["http://example.com/docs", "https://example.com/docs"])(
+    "allows an explicit native link click only after streaming completes: %s",
+    async (url) => {
+      const open = vi.spyOn(window, "open").mockReturnValue(null);
+      const source = `\`\`\`openui-lang\nroot = Button("open_url", "Open", null, "${url}")\n\`\`\``;
+      await render(source, { streaming: true });
+      expect(host.querySelector("a")).toBeNull();
+      await render(source);
+      const link = host.querySelector("a");
+      if (!link) {
+        throw new Error("Missing safe link");
+      }
+      const clicked = vi.fn<(url: string) => void>();
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        clicked(link.href);
+      });
+      await act(() => link.click());
+      expect(clicked).toHaveBeenCalledExactlyOnceWith(url);
+      expect([link.target, link.rel]).toStrictEqual([
+        "_blank",
+        "noopener noreferrer",
+      ]);
+      expect(open).not.toHaveBeenCalled();
+    }
+  );
 
   it("renders complete read-only forms using every field primitive", async () => {
     await render(

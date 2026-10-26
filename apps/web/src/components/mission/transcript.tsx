@@ -189,19 +189,30 @@ const EntryBody = ({ entry }: { entry: TimelineEntry }) => {
 const isGoal = (item: TranscriptItem, missionId: string) =>
   item.kind === "user" && item.requestId === goalRequestId(missionId);
 
-const InteractiveReply = ({ children }: { children: ReactNode }) => {
+const InteractiveReply = ({
+  children,
+  replyId,
+}: {
+  children: ReactNode;
+  replyId: string;
+}) => {
+  const { commands } = useMission();
   const { disabled, send, working } = useSendMessage();
+  const keyFor = (blockId: string) => JSON.stringify([replyId, blockId]);
   return (
     <GeneratedUiActionsContext
       value={{
         disabledReason: disabled
           ? "Messaging is unavailable while this mission is stopped"
           : null,
-        onContinue: (text, occurrence) =>
-          send({
-            input: { mode: working ? "queue" : "steer", text },
-            occurrence,
-          }),
+        onContinue: (blockId, text) =>
+          commands.generatedUi.send(
+            keyFor(blockId),
+            { mode: working ? "queue" : "steer", text },
+            send
+          ),
+        snapshot: (blockId) => commands.generatedUi.snapshot(keyFor(blockId)),
+        subscribe: commands.generatedUi.subscribe,
       }}
     >
       {children}
@@ -266,7 +277,7 @@ const TranscriptRows = ({
         return (
           <li className="flex min-w-0 flex-col gap-lg" key={row.id}>
             {entry.id === interactiveId ? (
-              <InteractiveReply>
+              <InteractiveReply replyId={entry.id}>
                 <EntryBody entry={entry} />
               </InteractiveReply>
             ) : (

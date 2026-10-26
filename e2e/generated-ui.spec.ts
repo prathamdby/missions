@@ -90,7 +90,7 @@ test("renders generated UI in both agent conversations and agent messages withou
   expect(outside).toStrictEqual([]);
 });
 
-test("a double click sends one visible user message and reaches sent", async ({
+test("confirmation double clicks and tab switches send one visible user message", async ({
   page,
   request,
 }) => {
@@ -118,6 +118,32 @@ test("a double click sends one visible user message and reaches sent", async ({
     node.click();
   });
   const text = "Use the recommended approach";
+  const review = page.getByRole("region", { name: "Message to send" });
+  await expect(review.locator("pre")).toHaveText(text);
+  expect(sent).toHaveLength(0);
+  const delivery = Promise.withResolvers<boolean>();
+  await page.route(`**/missions/${mission.id}/messages`, async (route) => {
+    await delivery.promise;
+    await route.continue();
+  });
+  try {
+    await review
+      .getByRole("button", { name: "Send message" })
+      .evaluate((node) => {
+        if (!(node instanceof HTMLButtonElement)) {
+          throw new TypeError("Missing confirmation button");
+        }
+        node.click();
+        node.click();
+      });
+    await expect.poll(() => sent.length).toBe(1);
+    await page.getByRole("tab", { name: "Generated UI Worker" }).click();
+    await page.getByRole("tab", { name: "Orchestrator" }).click();
+    await expect(control).toBeDisabled();
+    expect(sent).toHaveLength(1);
+  } finally {
+    delivery.resolve(true);
+  }
   await expect(page.getByText(text, { exact: true })).toBeVisible();
   await expect
     .poll(async () => {
@@ -173,9 +199,13 @@ test("submits input, textarea, and select values as the exact visible user messa
       event.url().endsWith(`/missions/${mission.id}/messages`)
   );
   await ui.getByRole("button", { exact: true, name: "Send details" }).click();
+  const review = ui.getByRole("region", { name: "Message to send" });
+  const preview = await review.locator("pre").textContent();
+  await review.getByRole("button", { name: "Send message" }).click();
   const submitted = await response;
   const { text } = SubmitMessageRequestSchema.parse(submitted.postDataJSON());
   const prefix = "Use these project details\n\nForm values:\n```json\n";
+  expect(text).toBe(preview);
   expect(text.startsWith(prefix)).toBeTruthy();
   expect(text.endsWith("\n```")).toBeTruthy();
   expect(JSON.parse(text.slice(prefix.length, -4))).toStrictEqual(values);

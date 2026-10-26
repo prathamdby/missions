@@ -3,11 +3,15 @@
 import type { ActionEvent } from "@openuidev/react-lang";
 import { createContext } from "react";
 
+import type { GeneratedUiSubmission } from "@/lib/mission/generated-ui";
+
 export const GENERATED_UI_MESSAGE_LIMIT = 100_000;
 
 export const GeneratedUiActionsContext = createContext<{
   disabledReason: string | null;
-  onContinue: (text: string, occurrence: string) => Promise<boolean>;
+  onContinue: (blockId: string, text: string) => Promise<void>;
+  snapshot: (blockId: string) => GeneratedUiSubmission;
+  subscribe: (listener: () => void) => () => void;
 } | null>(null);
 
 export const GeneratedUiBlockContext = createContext<string | null>(
