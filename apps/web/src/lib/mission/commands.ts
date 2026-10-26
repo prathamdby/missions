@@ -24,6 +24,7 @@ import type {
 } from "@missions/protocol/missions";
 
 import { OperationIntents, operationIntentKey } from "../api/operation-intents";
+import { GeneratedUiSubmissions } from "./generated-ui";
 import type { ModelRole } from "./model-settings";
 
 type WithoutOperation<T> = Omit<T, "operationId">;
@@ -95,6 +96,7 @@ export const CONTROL_BUSY =
  * The transport is the HTTP/reconciliation adapter in production, a fake in tests.
  */
 export class MissionCommands {
+  readonly generatedUi = new GeneratedUiSubmissions();
   private readonly transport: MissionCommandTransport;
   private readonly intents: OperationIntents;
   private readonly missionId: string;

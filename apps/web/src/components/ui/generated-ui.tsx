@@ -2,9 +2,10 @@
 
 import { Renderer } from "@openuidev/react-lang";
 import type { ActionEvent } from "@openuidev/react-lang";
-import { Component, use, useRef, useState } from "react";
+import { Component, use, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
 import {
   GeneratedUiActionsContext,
@@ -13,6 +14,17 @@ import {
 } from "@/components/ui/generated-ui-actions";
 import { missionsLibrary } from "@/components/ui/generated-ui-library";
 import { Spinner } from "@/components/ui/spinner";
+import { EMPTY_GENERATED_UI_SUBMISSION } from "@/lib/mission/generated-ui";
+
+const subscribeToNothing = () => () => {
+  // Read-only Markdown has no submission store to unsubscribe from.
+};
+const STATUS_REASONS = {
+  failed: "Retry the original message below",
+  ready: null,
+  sending: "Sending…",
+  sent: "Message sent",
+};
 
 const Unavailable = ({ source }: { source: string }) => (
   <figure className="flex min-w-0 flex-col gap-xs">
@@ -46,28 +58,32 @@ class RenderBoundary extends Component<
 }
 
 export const GeneratedUi = ({
+  blockId,
   source,
   streaming = false,
 }: {
+  blockId: string;
   source: string;
   streaming?: boolean;
 }) => {
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const actions = use(GeneratedUiActionsContext);
-  const [status, setStatus] = useState<"ready" | "sending" | "sent" | "failed">(
-    "ready"
+  const submission = useSyncExternalStore(
+    actions?.subscribe ?? subscribeToNothing,
+    () => actions?.snapshot(blockId) ?? EMPTY_GENERATED_UI_SUBMISSION,
+    () => EMPTY_GENERATED_UI_SUBMISSION
   );
-  const busy = useRef(false);
-  const occurrence = useRef<string | null>(null);
-  let disabledReason = actions
-    ? actions.disabledReason
-    : "This interface is read-only";
-  if (streaming) {
-    disabledReason = "Wait for this interface to finish";
-  } else if (status === "sending" || status === "sent") {
-    disabledReason = status === "sending" ? "Sending…" : "Message sent";
-  }
-  const onAction = async (event: ActionEvent) => {
+  const { status } = submission;
+  const [review, setReview] = useState<string | null>(null);
+  const reviewText =
+    review ?? (status === "failed" ? submission.delivery?.input.text : null);
+  const canContinue =
+    actions !== null && actions.disabledReason === null && !streaming;
+  const disabledReason = streaming
+    ? "Wait for this interface to finish"
+    : (STATUS_REASONS[status] ??
+      (actions ? actions.disabledReason : "This interface is read-only"));
+  const onAction = (event: ActionEvent) => {
     const action = mapGeneratedUiAction(event);
     if (!action || streaming) {
       return;
@@ -76,22 +92,10 @@ export const GeneratedUi = ({
       window.open(action.url, "_blank", "noopener,noreferrer");
       return;
     }
-    if (!actions || disabledReason || busy.current) {
+    if (!canContinue || status !== "ready") {
       return;
     }
-    busy.current = true;
-    if (!occurrence.current) {
-      occurrence.current = crypto.randomUUID();
-    }
-    setStatus("sending");
-    try {
-      const sent = await actions.onContinue(action.text, occurrence.current);
-      busy.current = sent;
-      setStatus(sent ? "sent" : "failed");
-    } catch {
-      busy.current = false;
-      setStatus("failed");
-    }
+    setReview(action.text);
   };
   if (failedSource === source) {
     return <Unavailable source={source} />;
@@ -130,8 +134,38 @@ export const GeneratedUi = ({
           />
           {status === "failed" ? (
             <p className="mt-xs type-caption text-danger" role="alert">
-              Message not sent. Try again.
+              Delivery not confirmed. Retry will reuse the original message.
             </p>
+          ) : null}
+          {reviewText ? (
+            <section
+              aria-label="Message to send"
+              className="mt-md flex min-w-0 flex-col gap-sm"
+            >
+              <p className="type-caption text-text-secondary">
+                Review the message before sending.
+              </p>
+              <CodeBlock code={reviewText} />
+              <div className="flex gap-sm">
+                <Button
+                  disabled={
+                    !canContinue || status === "sending" || status === "sent"
+                  }
+                  onClick={() => {
+                    if (actions && canContinue) {
+                      setReview(null);
+                      void actions.onContinue(blockId, reviewText);
+                    }
+                  }}
+                  variant="primary"
+                >
+                  {status === "failed" ? "Retry message" : "Send message"}
+                </Button>
+                {status === "ready" ? (
+                  <Button onClick={() => setReview(null)}>Cancel</Button>
+                ) : null}
+              </div>
+            </section>
           ) : null}
         </div>
       </GeneratedUiBlockContext>

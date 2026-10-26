@@ -8,7 +8,7 @@ import {
   Streamdown,
   useIsCodeFenceIncomplete,
 } from "streamdown";
-import type { Components, StreamdownProps } from "streamdown";
+import type { Components, ExtraProps, StreamdownProps } from "streamdown";
 
 import { CodeBlock, InlineCode } from "@/components/ui/code-block";
 import { Diagram } from "@/components/ui/diagram";
@@ -26,9 +26,8 @@ const TRAILING_NEWLINE = /\n$/u;
 const ThoughtContext = createContext(false);
 const StreamingContext = createContext(false);
 
-type Props<T extends keyof React.JSX.IntrinsicElements> = ComponentProps<T> & {
-  node?: unknown;
-};
+type Props<T extends keyof React.JSX.IntrinsicElements> = ComponentProps<T> &
+  ExtraProps;
 
 const Paragraph = ({ node: _node, ...props }: Props<"p">) => (
   <p className="type-body text-text" {...props} />
@@ -152,7 +151,7 @@ const Inline = ({ node: _node, ...props }: Props<"code">) => (
 );
 
 /** A fenced block: app code chrome around Shiki tokens colored by design tokens. */
-const Fence = ({ children, className }: Props<"code">) => {
+const Fence = ({ children, className, node }: Props<"code">) => {
   const thought = use(ThoughtContext);
   const streaming = use(StreamingContext);
   const incomplete = useIsCodeFenceIncomplete();
@@ -160,7 +159,15 @@ const Fence = ({ children, className }: Props<"code">) => {
   const code = String(children ?? "").replace(TRAILING_NEWLINE, "");
   const highlighted = useHighlightedCode(code, lang, incomplete);
   if (lang === GENERATIVE_UI_FENCE && !thought) {
-    return <GeneratedUi source={code} streaming={streaming || incomplete} />;
+    const blockId = JSON.stringify([node?.position?.start.offset ?? 0, code]);
+    return (
+      <GeneratedUi
+        blockId={blockId}
+        key={blockId}
+        source={code}
+        streaming={streaming || incomplete}
+      />
+    );
   }
   if (lang === "mermaid" && !incomplete) {
     return <Diagram text={code} />;
