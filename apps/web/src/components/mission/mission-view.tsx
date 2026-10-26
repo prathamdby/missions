@@ -182,7 +182,15 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
               if (!goal) {
                 return;
               }
-              saveForkGoal(goal);
+              if (!saveForkGoal(goal)) {
+                toast({
+                  description:
+                    "The browser blocked storage, so the new mission could not be prepared.",
+                  title: "Could not fork",
+                  tone: "danger",
+                });
+                return;
+              }
               router.push("/");
             },
             idleSubmissions,
