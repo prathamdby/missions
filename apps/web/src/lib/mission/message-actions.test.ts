@@ -56,6 +56,18 @@ describe("message actions", () => {
     expect(second).toBe("- User: Second");
   });
 
+  it("drops the oldest lines once the goal reaches the server limit", () => {
+    const items = Array.from({ length: 50 }, (_, index) =>
+      item(`u${index}`, "user", `message ${index} ${"y".repeat(480)}`, index)
+    );
+    const goal = forkGoal(items, "u49");
+    expect(goal).not.toBeNull();
+    expect(goal?.length).toBeLessThanOrEqual(20_000);
+    expect(goal).toContain("message 49");
+    expect(goal).toContain("earlier messages omitted to fit");
+    expect(goal).not.toContain("message 0");
+  });
+
   it("copies a link whose hash is the message anchor", () => {
     expect(messageLink("http://localhost:4318", "m-1", "t-4")).toBe(
       "http://localhost:4318/missions/m-1#m-t-4"
