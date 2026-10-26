@@ -66,3 +66,13 @@ The development inspector is disabled in all builds: the Next.js Turbopack alias
 pnpm 12 removed `ignoredBuiltDependencies`. `permissions["@openuidev/lang-core"].build: false` records the denial without adding it to `allowBuilds` or weakening the strict build policy.
 
 Only the latest Orchestrator reply can send messages. Streaming previews, older replies, Worker conversations, agent messages, plans, and other Markdown panels remain read-only. Form submissions and continuation buttons first show the exact outgoing message, including serialized form values and the protocol length cap; a separate Send message confirmation uses the composer's message command and optimistic presentation. Mission-owned per-reply, per-fence admission survives tab switches: pending and successful sends cannot be repeated. An uncertain delivery requires an explicit retry of its captured text, delivery mode, occurrence, and operation ID, even if the Orchestrator starts working or fields change. Links require absolute HTTP(S) URLs and an explicit click.
+
+## Math
+
+Every agent Markdown appearance renders TeX with Temml 0.14.0 as browser-native MathML, without raw HTML insertion. User bubbles and OpenUI Text remain plain text. `$$…$$`, `\(…\)`, and `\[…\]` are math delimiters; single-dollar math follows Pandoc's rule: no whitespace after the opening dollar or before the closing dollar, and no digit immediately after the closing dollar. Code and escaped dollars stay literal. Display math is normalized to one streaming block and scrolls horizontally, with a hover or keyboard-focus control to copy the TeX.
+
+Code boundaries come from `mdast-util-from-markdown` 2.1.0, the same CommonMark parser already used by Streamdown. This preserves nested and unfinished code fences without maintaining a second code grammar.
+
+`temml/dist/Temml-Local.css` is a vendored stylesheet exception, outside `AUTHORED_CSS`. Its font stack is `"Cambria Math", "STIXTwoMath-Regular", "NotoSansMath-Regular", math`; the bundled 9.4 KB Temml glyph patch supplies script capitals and prime glyphs, not a full math font. Inline math inherits the surrounding size and color. No full math font is bundled.
+
+Rendering disables trusted commands, uses fresh macros, limits each formula to 4,000 characters and 1,000 expansions, and caps TeX dimensions. The parsed result crosses an inert MathML element and attribute allowlist before conversion to React elements. Links, event handlers, arbitrary classes, agent colors, and background styles are removed. Invalid or untrusted formulas remain literal source, muted while streaming and labeled "Formula unavailable" when finished. A 256-entry LRU shares rendered nodes across transcript remounts.
