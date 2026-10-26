@@ -186,6 +186,35 @@ describe("math", () => {
   );
 
   it.each([
+    [String.raw`- \[x\]`, "li"],
+    [String.raw`> \[x\]`, "blockquote"],
+    [String.raw`> - \[x\]`, "li"],
+    ["- \\[\n  x\n  \\]", "li"],
+    ["> $$\n> x\n> $$", "blockquote"],
+    [String.raw`- before \[x\] after`, "li"],
+  ])("renders display math inside its container: %s", (source, tag) => {
+    const markup = render(source);
+    const opening = markup.indexOf(`<${tag}`);
+    const math = markup.indexOf("<math");
+    const closing = markup.indexOf(`</${tag}>`);
+    expect(opening).toBeGreaterThanOrEqual(0);
+    expect(math).toBeGreaterThan(opening);
+    expect(closing).toBeGreaterThan(math);
+    expect(markup).toContain('display="block"');
+    expect(markup.match(/<math[ >]/gu)).toHaveLength(1);
+  });
+
+  it("preserves link destinations and literal HTML while normalizing labels", () => {
+    const markup = render(
+      '[label $x$](https://example.com/$a$)\n\n<div title="$b$">$c$</div>'
+    );
+    expect(markup).toContain('href="https://example.com/$a$"');
+    expect(markup).toContain("$b$");
+    expect(markup).toContain("$c$");
+    expect(markup.match(/<math[ >]/gu)).toHaveLength(1);
+  });
+
+  it.each([
     "$5 and $10",
     String.raw`Cost \$5; \$x\$`,
     "`$a$ $$b$$ \\(c\\) \\[d\\]`",
