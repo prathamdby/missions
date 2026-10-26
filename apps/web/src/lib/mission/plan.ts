@@ -13,6 +13,7 @@ const HEADING = /^#{1,6}\s/u;
 const BOLD_LEAD = /^\*\*(?<title>.+?)\*\*\s*[—–:-]?\s*(?<detail>.*)$/u;
 const DASH_SPLIT = /\s[—–]\s/u;
 const INLINE_MARKS = /\*\*|__|`/gu;
+const FENCE = /^(?:`{3,}|~{3,})/u;
 
 const plain = (text: string) => text.replaceAll(INLINE_MARKS, "").trim();
 
@@ -34,6 +35,9 @@ export const parsePlan = (markdown: string): ParsedPlan | null => {
   const steps: PlanStep[] = [];
   for (const raw of markdown.split("\n")) {
     const line = raw.trim();
+    if (FENCE.test(line)) {
+      return null;
+    }
     if (!line || HEADING.test(line)) {
       continue;
     }

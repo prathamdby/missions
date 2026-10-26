@@ -2,7 +2,6 @@
 
 import type { DeliveryMode } from "@missions/protocol/common";
 import type { MissionStatus } from "@missions/protocol/missions";
-import { useMutation } from "@tanstack/react-query";
 import { useMemo, useSyncExternalStore } from "react";
 
 import { ComposerField } from "@/components/composer/composer-field";
@@ -14,8 +13,8 @@ import {
 } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
 import { QueueTray } from "@/components/mission/queue-tray";
-import { reportMutationError } from "@/components/mission/report-error";
 import { useMissionControl } from "@/components/mission/use-mission-control";
+import { useSendMessage } from "@/components/mission/use-send-message";
 import { Spinner } from "@/components/ui/spinner";
 import { Hint } from "@/components/ui/tooltip";
 import { canResume } from "@/lib/format";
@@ -25,8 +24,6 @@ import type { ComposerAction } from "@/lib/mission/composer-action";
 import { modeStatus } from "@/lib/mission/execution-mode";
 import { orchestratorTurnRunning } from "@/lib/mission/idle-send";
 import { MessageDraft } from "@/lib/mission/message-draft";
-import type { MessageDelivery } from "@/lib/mission/message-draft";
-import { markReceipt, markSubmit } from "@/lib/perf-marks";
 
 const placeholderFor = (status: MissionStatus) => {
   if (status === "archived") {
@@ -149,8 +146,7 @@ const ComposerActionButton = ({
  * Alt+Enter queues (delivered when the turn ends) while agents are working.
  */
 export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
-  const { commands, failIdleSubmission, live, presentIdleSubmission, refresh } =
-    useMission();
+  const { live } = useMission();
   const { mission } = live;
   const draft = useMemo(() => new MessageDraft(), []);
   const text = useSyncExternalStore(
@@ -163,28 +159,11 @@ export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
     draft.attachmentSnapshot,
     draft.attachmentSnapshot
   );
-  const working = orchestratorTurnRunning(
-    mission.status,
-    Object.values(live.agents)
-  );
-  const capabilities = missionCapabilities(mission.status);
-  const disabled = !capabilities.message;
-  const status = modeStatus(mission);
-
-  // Not single-flight: a second message typed while the first is in flight
-  // is a separate intent and must not be dropped.
-  const send = useMutation({
-    mutationFn: (delivery: MessageDelivery & { inlineId: string | null }) =>
-      commands.run("message", delivery.input, delivery.occurrence),
-    onError: (error, delivery) => {
-      if (delivery.inlineId) {
-        failIdleSubmission(delivery.inlineId);
-      }
-      draft.restore(delivery);
-      return reportMutationError(error, refresh, "Message not sent");
-    },
-    onSuccess: (item, delivery) => markReceipt(item.id, delivery.occurrence),
+  const { disabled, send, working } = useSendMessage({
+    onError: (delivery) => draft.restore(delivery),
+    onSend,
   });
+  const status = modeStatus(mission);
 
   const submit = (mode: DeliveryMode) => {
     if (disabled) {
@@ -192,20 +171,7 @@ export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
     }
     const delivery = draft.take(mode);
     if (delivery) {
-      onSend();
-      const inlineId = working
-        ? null
-        : commands.messageIdFor(delivery.input, delivery.occurrence);
-      if (inlineId) {
-        presentIdleSubmission({
-          attachments: delivery.attachments ?? [],
-          failed: false,
-          id: inlineId,
-          text: delivery.input.text,
-        });
-      }
-      markSubmit(delivery.occurrence);
-      send.mutate({ ...delivery, inlineId });
+      void send(delivery);
     }
   };
 

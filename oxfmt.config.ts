@@ -14,6 +14,8 @@ export default defineConfig({
   ignorePatterns: [
     ...(ultracite.ignorePatterns ?? []),
     "apps/web/src/styles/tokens.css",
+    // File snapshot: preserve byte-for-byte prompt generation, including string quoting.
+    "packages/protocol/src/generative-ui-prompt.ts",
     ...DOTMATRIX_VENDORED,
   ],
   // Without the real theme, Paper utilities sort as unknown custom classes.
