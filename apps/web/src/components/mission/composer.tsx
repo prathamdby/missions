@@ -2,7 +2,7 @@
 
 import type { DeliveryMode } from "@missions/protocol/common";
 import type { MissionStatus } from "@missions/protocol/missions";
-import { useMemo, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 import { ComposerField } from "@/components/composer/composer-field";
 import {
@@ -23,7 +23,6 @@ import { composerAction } from "@/lib/mission/composer-action";
 import type { ComposerAction } from "@/lib/mission/composer-action";
 import { modeStatus } from "@/lib/mission/execution-mode";
 import { orchestratorTurnRunning } from "@/lib/mission/idle-send";
-import { MessageDraft } from "@/lib/mission/message-draft";
 
 const placeholderFor = (status: MissionStatus) => {
   if (status === "archived") {
@@ -146,9 +145,8 @@ const ComposerActionButton = ({
  * Alt+Enter queues (delivered when the turn ends) while agents are working.
  */
 export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
-  const { live } = useMission();
+  const { draft, live } = useMission();
   const { mission } = live;
-  const draft = useMemo(() => new MessageDraft(), []);
   const text = useSyncExternalStore(
     draft.subscribe,
     draft.snapshot,

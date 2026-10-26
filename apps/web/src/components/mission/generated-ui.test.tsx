@@ -23,6 +23,7 @@ import {
 } from "@/lib/live/test-adapters";
 import { missionCommandTransport } from "@/lib/mission/command-transport";
 import { MissionCommands } from "@/lib/mission/commands";
+import { MessageDraft } from "@/lib/mission/message-draft";
 import type { TurnPart } from "@/lib/mission/timeline";
 
 import { MissionProvider } from "./mission-context";
@@ -39,7 +40,10 @@ const partsFor = (items: TranscriptItem[]): TurnPart[] => [
       agentId: item.agentId,
       id: item.id,
       item,
-      kind: "assistant",
+      kind:
+        item.kind === "user" || item.kind === "agent_message"
+          ? item.kind
+          : "assistant",
     })),
     id: "entries",
     kind: "entries",
@@ -94,7 +98,9 @@ describe("generated UI message admission", () => {
           return `operation-ui-${operation}`;
         })
       ),
+      draft: new MessageDraft(),
       failIdleSubmission: vi.fn<MissionContextValue["failIdleSubmission"]>(),
+      forkFrom: vi.fn<MissionContextValue["forkFrom"]>(),
       idleSubmissions: {},
       live: fromSnapshot(
         snapshot({
@@ -109,6 +115,7 @@ describe("generated UI message admission", () => {
       presentIdleSubmission:
         vi.fn<MissionContextValue["presentIdleSubmission"]>(),
       refresh,
+      rewindFrom: vi.fn<MissionContextValue["rewindFrom"]>(),
       selectedAgentId: null,
       sessionError: null,
       showAgent: vi.fn<MissionContextValue["showAgent"]>(),

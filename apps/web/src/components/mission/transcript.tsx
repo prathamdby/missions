@@ -12,6 +12,7 @@ import { AgentMessages } from "@/components/mission/agent-message";
 import { AssignmentCard } from "@/components/mission/assignment-card";
 import { EventLine } from "@/components/mission/chat-cards";
 import { CheckIcon, MergeIcon } from "@/components/mission/icons";
+import { MessageFooter } from "@/components/mission/message-footer";
 import { useMission } from "@/components/mission/mission-context";
 import { PermissionCard } from "@/components/mission/permission-card";
 import { PlanCard } from "@/components/mission/plan-card";
@@ -140,7 +141,12 @@ const EntryBody = ({ entry }: { entry: TimelineEntry }) => {
   switch (entry.kind) {
     case "user": {
       return (
-        <UserMessage requestId={entry.item.requestId} text={entry.item.text} />
+        <MessageFooter item={entry.item}>
+          <UserMessage
+            requestId={entry.item.requestId}
+            text={entry.item.text}
+          />
+        </MessageFooter>
       );
     }
     case "assistant": {
@@ -255,9 +261,11 @@ const TranscriptRows = ({
           );
         }
         if (row.kind === "messages") {
+          const [lead] = row.items;
+          const body = <AgentMessages items={row.items} />;
           return (
             <li className="flex min-w-0 flex-col" key={row.id}>
-              <AgentMessages items={row.items} />
+              {lead ? <MessageFooter item={lead}>{body}</MessageFooter> : body}
             </li>
           );
         }

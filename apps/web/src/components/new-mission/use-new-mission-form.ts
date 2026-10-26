@@ -14,6 +14,7 @@ import {
   useSettings,
   useWorktrees,
 } from "@/lib/api/queries";
+import { takeForkGoal } from "@/lib/mission/fork-draft";
 import { MessageDraft } from "@/lib/mission/message-draft";
 
 import {
@@ -132,7 +133,14 @@ export const useNewMissionForm = () => {
   const [workspaceChoice, setWorkspaceChoice] =
     useState<PerProject<WorkspaceChoice> | null>(null);
   const [acknowledged, setAcknowledged] = useState<string | null>(null);
-  const messageDraft = useMemo(() => new MessageDraft(), []);
+  const messageDraft = useMemo(() => {
+    const draft = new MessageDraft();
+    const goal = takeForkGoal();
+    if (goal) {
+      draft.change(goal);
+    }
+    return draft;
+  }, []);
   const goal = useSyncExternalStore(
     messageDraft.subscribe,
     messageDraft.snapshot,

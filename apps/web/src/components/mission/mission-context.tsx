@@ -1,11 +1,13 @@
 "use client";
 
+import type { TranscriptItem } from "@missions/protocol/missions";
 import { createContext, use } from "react";
 
 import type { MissionLiveState } from "@/lib/live/mission-state";
 import type { LocalEntity } from "@/lib/live/mission-store";
 import type { MissionCommands } from "@/lib/mission/commands";
 import type { IdleSubmission } from "@/lib/mission/idle-send";
+import type { MessageDraft } from "@/lib/mission/message-draft";
 
 export type PanelTab = "changes" | "digest" | "files" | "overview";
 
@@ -27,6 +29,12 @@ export interface MissionContextValue {
   showAgent: (agentId: string) => void;
   /** Opens the details panel on a tab (docked or as a sheet). */
   showPanel: (tab: PanelTab) => void;
+  /** The composer's draft, so Edit from here can restore a message unsent. */
+  draft: MessageDraft;
+  /** Restores a user message into the composer. Sends nothing. */
+  rewindFrom: (item: TranscriptItem) => void;
+  /** Opens a new mission whose goal is the conversation through this message. */
+  forkFrom: (item: TranscriptItem) => void;
 }
 
 const MissionContext = createContext<MissionContextValue | null>(null);
