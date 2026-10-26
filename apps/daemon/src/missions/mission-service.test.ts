@@ -16,6 +16,7 @@ import type { Daemon } from "../daemon";
 import { pollUntil } from "../lib/async";
 import { ProcessRecordRepository } from "../processes/process-record-repository";
 import type { AgentEvent, PermissionToolUse } from "../runtime/contracts";
+import { PROMPT_VERSION } from "../sdk/prompts";
 import { SUBMIT_ACK_TIMEOUT_MS } from "../sdk/submit-ack-timeout";
 import type { ModelLoader } from "../settings/models";
 import { FakeRuntime } from "../test/fake-runtime";
@@ -526,6 +527,62 @@ describe("mission service", () => {
     ]);
     expect(ctx.runtimes.at(-1)?.sessionId).toBe(worker?.sessionId);
   });
+
+  it.each(["5", null, PROMPT_VERSION])(
+    "resumes only matching prompt versions for both agent roles: %s",
+    async (promptVersion) => {
+      const ctx = await startMission();
+      await startWorker(ctx, "Read", false);
+      const paused = await ctx.daemon.missions.pause(ctx.missionId, {
+        expectedRevision: ctx.daemon.missions.get(ctx.missionId).revision,
+        operationId: "prompt-version-pause",
+      });
+      const saved = ctx.daemon.store.listAgents(ctx.missionId).map((agent) => ({
+        ...agent,
+        promptVersion,
+        sessionId: `saved-session-${agent.id}`,
+      }));
+      for (const agent of saved) {
+        ctx.daemon.store.putAgent(agent);
+      }
+      const start = vi.spyOn(FakeRuntime.prototype, "start");
+      try {
+        await ctx.daemon.missions.resume(ctx.missionId, {
+          expectedRevision: paused.revision,
+          operationId: "prompt-version-resume",
+        });
+        expect(start).toHaveBeenCalledTimes(2);
+        const resumed = ctx.runtimes.slice(2);
+        expect(
+          resumed.map((runtime) => runtime.options.role).toSorted()
+        ).toStrictEqual(["orchestrator", "worker"]);
+        for (const agent of saved) {
+          const runtime = resumed.find(
+            (entry) => entry.options.agentId === agent.id
+          );
+          if (!runtime) {
+            throw new Error("Agent did not restart");
+          }
+          const matches = promptVersion === PROMPT_VERSION;
+          const call = start.mock.contexts.indexOf(runtime);
+          expect(start.mock.calls[call]).toStrictEqual([
+            matches ? agent.sessionId : undefined,
+          ]);
+          expect(runtime.sessionId).toBe(
+            matches ? agent.sessionId : `session-${agent.id}`
+          );
+          expect(ctx.daemon.store.getAgent(agent.id)).toMatchObject({
+            previousSessionIds: matches ? [] : [agent.sessionId],
+            promptVersion: PROMPT_VERSION,
+            sessionGeneration: matches ? 0 : 1,
+            sessionId: runtime.sessionId,
+          });
+        }
+      } finally {
+        start.mockRestore();
+      }
+    }
+  );
 
   it("surfaces saved-worker load failures instead of silently replacing the worker", async () => {
     const booted = await boot(undefined, (runtime, index) => {

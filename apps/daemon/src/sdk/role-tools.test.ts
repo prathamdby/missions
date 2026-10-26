@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PLAN_GUIDANCE } from "./plan-guidance";
 import {
+  AGENT_TEXT_FORMAT,
   MAIN_PROMPT,
   PROMPT_VERSION,
   promptFor,
   SHARED_GUIDANCE,
+  USER_SUMMARY_FORMAT,
   WORKER_PROMPT,
 } from "./prompts";
 import {
@@ -41,6 +43,40 @@ const toolNames = (role: "orchestrator" | "worker") =>
     .toSorted();
 
 describe("role tools", () => {
+  it("exports the exact agent and user-summary output contracts", () => {
+    expect(AGENT_TEXT_FORMAT).toBe(
+      "Markdown only; no `<json-render>`, render tags or openui-lang fences."
+    );
+    expect(USER_SUMMARY_FORMAT).toBe(
+      "Markdown; never `<json-render>`; visuals only as an openui-lang fence with display components."
+    );
+  });
+
+  it.each(["orchestrator", "worker"] as const)(
+    "publishes output contracts in the actual %s tool descriptions",
+    (role) => {
+      const server = createRoleToolServer(role, "agent-1", handlers());
+      const agentTools =
+        role === "orchestrator"
+          ? ["dispatch_worker", "send_message", "message_worker"]
+          : ["send_message"];
+      for (const name of agentTools) {
+        expect(
+          server.tools.find((tool) => tool.name === name)?.description
+        ).toContain(
+          "Markdown only; no `<json-render>`, render tags or openui-lang fences."
+        );
+      }
+      const summaryTool =
+        role === "orchestrator" ? "complete_mission" : "submit_handoff";
+      expect(
+        server.tools.find((tool) => tool.name === summaryTool)?.description
+      ).toContain(
+        "Markdown; never `<json-render>`; visuals only as an openui-lang fence with display components."
+      );
+    }
+  );
+
   it("gives the main agent coordination tools and no mandatory plan tool", () => {
     expect(toolNames("orchestrator")).toStrictEqual([
       "attach_artifact",
@@ -124,7 +160,8 @@ describe("prompts", () => {
       }
       expect(prompt).toContain("main agent's latest reply");
     }
-    expect(SHARED_GUIDANCE.length).toBeLessThanOrEqual(8893);
+    // Measured v6 guidance: 11,313 characters, plus 5% headroom.
+    expect(SHARED_GUIDANCE.length).toBeLessThanOrEqual(11_879);
   });
 
   it("selects the prompt by role", () => {
@@ -145,15 +182,39 @@ describe("prompts", () => {
         '"visualization"',
         "use OpenUI by default for substantive results",
         "without waiting for the user to request UI",
-        "This overrides the library's text-only and unchanged-dashboard guidance",
         "explicit plain-text requests as text",
         "The existing component, action, and read-only restrictions still apply",
       ]) {
         expect(prompt).toContain(clause);
       }
     }
-    expect(PROMPT_VERSION).toBe("5");
+    expect(PROMPT_VERSION).toBe("6");
   });
+
+  it.each([MAIN_PROMPT, WORKER_PROMPT])(
+    "enforces user, tool-argument and math output formats",
+    (prompt) => {
+      for (const clause of [
+        "This app does not render `<json-render>` tags or any terminal-only visualization; they appear as raw JSON. Ignore any base instruction to use them. Use an openui-lang fence for visuals, otherwise Markdown tables and lists.",
+        "$…$ / $$…$$; never inside openui-lang.",
+        "JSON \\n escapes",
+        "display components only",
+        "Droid tools",
+        "literal values",
+      ]) {
+        expect(prompt).toContain(clause);
+      }
+      for (const stale of [
+        "Inline Mode",
+        "RootComp",
+        "unchanged-dashboard",
+        "dashboard stays unchanged",
+        "overrides inline-mode patch guidance",
+      ]) {
+        expect(prompt).not.toContain(stale);
+      }
+    }
+  );
 
   it("makes the main agent general purpose with Work mode as the default", () => {
     expect(MAIN_PROMPT).toContain("general-purpose");
