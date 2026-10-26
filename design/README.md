@@ -57,7 +57,7 @@ Pele 1.10.0 is pinned, with an exact `minimumReleaseAgeExclude` entry because th
 
 `@openuidev/react-lang` is pinned to 1.0.1 in the browser only. Components compose Missions primitives and named spacing tokens; neither `@openuidev/react-ui` nor its CSS is used. There is no tool provider or observability publishing. The `lang-core` postinstall sends telemetry, so it stays outside `allowBuilds` and is explicitly ignored. The initial install reported `Ignored build scripts: @openuidev/lang-core@1.0.1`.
 
-The protocol prompt is a file snapshot of the browser library. Regenerate with `pnpm exec vitest run apps/web/src/components/ui/generated-ui-library.test.ts --update`; a normal test run checks drift. Oxfmt ignores the generated module because its string-quote normalization changes the snapshot bytes. Each fenced program is standalone. Prompt version 4 replaces resumed agent sessions, including Workers, so they receive the new guidance.
+The protocol prompt is a file snapshot of the browser library. Regenerate with `pnpm exec vitest run apps/web/src/components/ui/generated-ui-library.test.ts --update`; a normal test run checks drift. Oxfmt ignores the generated module because its string-quote normalization changes the snapshot bytes. Each fenced program is standalone. Prompt version 5 replaces resumed agent sessions, including Workers, so they receive the new guidance. Both roles proactively use OpenUI for visual requests and substantive result summaries, while respecting explicit plain-text requests.
 
 pnpm 12 removed `ignoredBuiltDependencies`. `permissions["@openuidev/lang-core"].build: false` records the denial without adding it to `allowBuilds` or weakening the strict build policy.
 
