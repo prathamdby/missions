@@ -2,7 +2,7 @@
 
 import type { AgentModelSettings } from "@missions/protocol/missions";
 import type { Settings } from "@missions/protocol/settings";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { useAddProject } from "@/components/projects/add-project-context";
 import { useShell } from "@/components/shell/shell-context";
@@ -14,6 +14,7 @@ import {
   useSettings,
   useWorktrees,
 } from "@/lib/api/queries";
+import { takeForkGoal } from "@/lib/mission/fork-draft";
 import { MessageDraft } from "@/lib/mission/message-draft";
 
 import {
@@ -133,6 +134,13 @@ export const useNewMissionForm = () => {
     useState<PerProject<WorkspaceChoice> | null>(null);
   const [acknowledged, setAcknowledged] = useState<string | null>(null);
   const messageDraft = useMemo(() => new MessageDraft(), []);
+  // The home page renders on the server, where sessionStorage does not exist.
+  useEffect(() => {
+    const goal = takeForkGoal();
+    if (goal) {
+      messageDraft.change(goal);
+    }
+  }, [messageDraft]);
   const goal = useSyncExternalStore(
     messageDraft.subscribe,
     messageDraft.snapshot,

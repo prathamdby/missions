@@ -148,7 +148,7 @@ const WorkingLine = ({
 
 /** Paper FQQ chat column: transcript, inline state cards, and the composer. */
 export const ChatColumn = ({ agentId }: { agentId?: string }) => {
-  const { idleSubmissions, live, missionId } = useMission();
+  const { idleSubmissions, live, loadOlder, missionId } = useMission();
   const now = useNow();
   const worker = agentId ? live.agents[agentId]?.role === "worker" : false;
   const scroller = useRef<HTMLDivElement>(null);
@@ -156,6 +156,53 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
   const pinned = useRef(true);
   const preserveFrom = useRef<number | null>(null);
   const observedHeight = useRef<number | null>(null);
+
+  const linkedId =
+    typeof window === "undefined" ? "" : window.location.hash.slice(1);
+  const handledLink = useRef<string | null>(null);
+  useEffect(() => {
+    // Worker columns show a slice of the transcript, so a mission link lands in
+    // the orchestrator's column only.
+    if (
+      !linkedId.startsWith("m-") ||
+      worker ||
+      handledLink.current === linkedId
+    ) {
+      return;
+    }
+    const target = () => document.getElementById(linkedId);
+    if (target()) {
+      target()?.scrollIntoView({ block: "center" });
+      handledLink.current = linkedId;
+      return;
+    }
+    if (!live.transcriptHasMore) {
+      handledLink.current = linkedId;
+      return;
+    }
+    let stopped = false;
+    let pages = 0;
+    const page = async () => {
+      pages += 1;
+      const loaded = await loadOlder(PAGE_SIZE);
+      if (stopped || !loaded || pages >= 20) {
+        return;
+      }
+      requestAnimationFrame(() => {
+        const found = target();
+        if (found) {
+          found.scrollIntoView({ block: "center" });
+          handledLink.current = linkedId;
+        } else if (!stopped) {
+          page().catch(() => undefined);
+        }
+      });
+    };
+    page().catch(() => undefined);
+    return () => {
+      stopped = true;
+    };
+  }, [worker, linkedId, live.transcriptHasMore, loadOlder]);
 
   const transcript = useMemo(
     () => conversationTranscript(live.transcript, agentId),

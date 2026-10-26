@@ -3,7 +3,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 
 import { AgentConversations } from "@/components/mission/agent-conversations";
 import { MissionProvider } from "@/components/mission/mission-context";
@@ -23,9 +30,13 @@ import { errorMessage, isApiError } from "@/lib/api/api-error";
 import { agentLabels } from "@/lib/format";
 import { useMissionLive } from "@/lib/live/hooks";
 import { conversationTabs } from "@/lib/mission/conversation-tabs";
+import { saveForkGoal } from "@/lib/mission/fork-draft";
 import type { IdleSubmission } from "@/lib/mission/idle-send";
 import { inlineIdleSubmissions } from "@/lib/mission/idle-send";
+import { forkGoal } from "@/lib/mission/message-actions";
+import { MessageDraft } from "@/lib/mission/message-draft";
 import { useMissionCommands } from "@/lib/mission/use-mission-commands";
+import { toast } from "@/lib/toast-store";
 import { useMediaQuery, WIDE_QUERY } from "@/lib/use-media-query";
 
 const MissionPlaceholder = ({ error }: { error: unknown }) => {
@@ -148,6 +159,7 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
     [agents]
   );
   const commands = useMissionCommands(client, missionId, applyLocal, refresh);
+  const draft = useRef(new MessageDraft()).current;
   const { removed } = mission;
   useEffect(() => {
     if (removed) {
@@ -163,13 +175,39 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
             closeAgent,
             closedAgentIds: conversations.closed,
             commands,
+            draft,
             failIdleSubmission,
+            forkFrom: (item) => {
+              const goal = forkGoal(Object.values(live.transcript), item.id);
+              if (!goal) {
+                return;
+              }
+              if (!saveForkGoal(goal)) {
+                toast({
+                  description:
+                    "The browser blocked storage, so the new mission could not be prepared.",
+                  title: "Could not fork",
+                  tone: "danger",
+                });
+                return;
+              }
+              router.push("/");
+            },
             idleSubmissions,
             live,
             loadOlder,
             missionId,
             presentIdleSubmission,
             refresh,
+            rewindFrom: (item) => {
+              draft.change(item.text);
+              toast({
+                description:
+                  "The message is back in the composer. Nothing was sent, and the conversation after it is still here.",
+                title: "Ready to edit",
+                tone: "info",
+              });
+            },
             selectedAgentId,
             sessionError,
             showAgent,
@@ -179,6 +217,8 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
     [
       applyLocal,
       commands,
+      draft,
+      router,
       idleSubmissions,
       presentIdleSubmission,
       failIdleSubmission,
