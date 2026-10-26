@@ -1,5 +1,7 @@
 "use client";
 
+import { GENERATIVE_UI_FENCE } from "@missions/protocol/generative-ui";
+import { createContext, use } from "react";
 import type { ComponentProps } from "react";
 import {
   defaultRehypePlugins,
@@ -10,6 +12,7 @@ import type { Components, StreamdownProps } from "streamdown";
 
 import { CodeBlock, InlineCode } from "@/components/ui/code-block";
 import { Diagram } from "@/components/ui/diagram";
+import { GeneratedUi } from "@/components/ui/generated-ui";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   codePlugin,
@@ -20,6 +23,7 @@ import { cn } from "@/lib/utils";
 
 const LANGUAGE = /language-(?<lang>[\w-]+)/u;
 const TRAILING_NEWLINE = /\n$/u;
+const ThoughtContext = createContext(false);
 
 type Props<T extends keyof React.JSX.IntrinsicElements> = ComponentProps<T> & {
   node?: unknown;
@@ -148,10 +152,14 @@ const Inline = ({ node: _node, ...props }: Props<"code">) => (
 
 /** A fenced block: app code chrome around Shiki tokens colored by design tokens. */
 const Fence = ({ children, className }: Props<"code">) => {
+  const thought = use(ThoughtContext);
   const incomplete = useIsCodeFenceIncomplete();
   const lang = LANGUAGE.exec(className ?? "")?.groups?.lang ?? "";
   const code = String(children ?? "").replace(TRAILING_NEWLINE, "");
   const highlighted = useHighlightedCode(code, lang, incomplete);
+  if (lang === GENERATIVE_UI_FENCE && !thought) {
+    return <GeneratedUi source={code} streaming={incomplete} />;
+  }
   if (lang === "mermaid" && !incomplete) {
     return <Diagram text={code} />;
   }
@@ -303,23 +311,25 @@ export const Markdown = ({
   appearance?: keyof typeof APPEARANCES;
   streaming?: boolean;
 }) => (
-  <Streamdown
-    className={cn(
-      // space-y-0 replaces Streamdown's root spacing; blocks use our gap instead.
-      "flex min-w-0 flex-col space-y-0 break-words select-text",
-      appearance === "default" ? "gap-md" : "gap-sm",
-      className
-    )}
-    components={APPEARANCES[appearance]}
-    controls={false}
-    isAnimating={streaming}
-    lineNumbers={false}
-    linkSafety={LINK_SAFETY}
-    mode={streaming ? "streaming" : "static"}
-    parseIncompleteMarkdown={streaming}
-    plugins={PLUGINS}
-    rehypePlugins={REHYPE_PLUGINS}
-  >
-    {children}
-  </Streamdown>
+  <ThoughtContext value={appearance === "thought"}>
+    <Streamdown
+      className={cn(
+        // space-y-0 replaces Streamdown's root spacing; blocks use our gap instead.
+        "flex min-w-0 flex-col space-y-0 break-words select-text",
+        appearance === "default" ? "gap-md" : "gap-sm",
+        className
+      )}
+      components={APPEARANCES[appearance]}
+      controls={false}
+      isAnimating={streaming}
+      lineNumbers={false}
+      linkSafety={LINK_SAFETY}
+      mode={streaming ? "streaming" : "static"}
+      parseIncompleteMarkdown={streaming}
+      plugins={PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+    >
+      {children}
+    </Streamdown>
+  </ThoughtContext>
 );
