@@ -64,6 +64,40 @@ describe("native math", () => {
     expect(markup).not.toContain("mathbackground");
   });
 
+  it("retains only vendor class tokens from mixed class lists", () => {
+    vi.spyOn(temml, "renderToString").mockReturnValue(
+      '<math class="tml-display injected mathcal mathscr menclose ff-sans tml-bad123 ff-bad123"><mi class="injected-only">x</mi></math>'
+    );
+    const markup = renderToStaticMarkup(renderMath("class fixture", false));
+    expect(markup).toContain(
+      'class="tml-display mathcal mathscr menclose ff-sans"'
+    );
+    expect(markup).toContain("<mi>x</mi>");
+    expect(markup).not.toMatch(/injected|bad123/u);
+  });
+
+  it.each([
+    "height:var(--spacing-md)",
+    "height:expression(alert(1))",
+    "height:url(https://example.com/injected)",
+    "height:@import",
+    "height:<injected>",
+    "height:{injected}",
+    String.raw`height:\76 ar(--spacing-md)`,
+  ])("drops unsafe styles but preserves safe layout: %s", (declaration) => {
+    vi.spyOn(temml, "renderToString").mockReturnValue(
+      `<math style="width:2em;--injected:10em;${declaration}"><mi>x</mi></math>`
+    );
+    const markup = renderToStaticMarkup(
+      renderMath(`style fixture ${declaration}`, false)
+    );
+    expect(markup).toContain('style="width:2em"');
+    expect(markup).toContain("<mi>x</mi>");
+    expect(markup).not.toMatch(
+      /height|--injected|var\(|expression|url\(|@import|injected/iu
+    );
+  });
+
   it("renders an overlong formula as inert source with the finished caption", () => {
     const markup = renderToStaticMarkup(
       <MathFormula display={false} tex={"x".repeat(4001)} />
