@@ -173,5 +173,4 @@ The first commit's `pnpm test` covers the health route, the health schema, and t
 | [Glossary](GLOSSARY.md) | Mission, project, workspace, agent, queue, publish, cleanup. Added after the first commit. |
 | [Daemon HTTP API](packages/protocol/API.md) | `/v2` routes, delivery, plan mode, Git actions, upgrades. |
 | [Design system](design/README.md) | Tokens, spacing, lint, and documented exceptions. Present in the first commit. |
-| [Architecture notes](docs/architecture-refactor-20261025.md) | Boundary decisions from the architecture refactor. |
 | [First-token notes](apps/daemon/src/perf/README.md) | Startup timing runs against an installed CLI. |
