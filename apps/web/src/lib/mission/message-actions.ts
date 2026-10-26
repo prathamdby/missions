@@ -7,6 +7,9 @@ const GOAL_LIMIT = CreateMissionRequestSchema.shape.goal.maxLength ?? 20_000;
 const clip = (text: string) =>
   text.length > CLIP ? `${text.slice(0, CLIP)}…` : text;
 
+const omission = (count: number) =>
+  `${count} earlier ${count === 1 ? "message" : "messages"} omitted to fit.`;
+
 /**
  * Fork carries the conversation through the chosen message as a new mission's
  * goal. It does not copy the source session, so the source stays unchanged.
@@ -29,25 +32,31 @@ export const forkGoal = (
     const who = item.kind === "user" ? "User" : (item.sender?.title ?? "Agent");
     return `- ${who}: ${clip(item.text)}`;
   });
-  // A goal the form accepts has to be one the server accepts, so the newest
-  // lines stay and earlier ones drop once the limit is reached.
+  // A goal the form accepts has to be one the server accepts. Newest lines
+  // stay, and the omission note is counted before a line is kept.
   const keptLines: string[] = [];
   for (const line of lines.toReversed()) {
-    const next = [intro, "", ...keptLines.toReversed(), line].join("\n");
-    if (next.length > GOAL_LIMIT) {
+    const omitted = lines.length - keptLines.length;
+    const next = [
+      intro,
+      omission(omitted),
+      "",
+      ...keptLines.toReversed(),
+      line,
+    ];
+    if (next.join("\n").length > GOAL_LIMIT) {
       break;
     }
     keptLines.push(line);
   }
   const shown = keptLines.toReversed();
   const omitted = lines.length - shown.length;
-  const head = [intro];
-  if (omitted > 0) {
-    head.push(
-      `${omitted} earlier ${omitted === 1 ? "message" : "messages"} omitted to fit.`
-    );
-  }
-  return [...head, "", ...shown].join("\n");
+  return [
+    intro,
+    ...(omitted > 0 ? [omission(omitted)] : []),
+    "",
+    ...shown,
+  ].join("\n");
 };
 
 /** Hash target for a copied message link. */
