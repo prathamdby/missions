@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { PLAN_GUIDANCE } from "./plan-guidance";
-import { MAIN_PROMPT, promptFor, WORKER_PROMPT } from "./prompts";
+import {
+  MAIN_PROMPT,
+  promptFor,
+  SHARED_GUIDANCE,
+  WORKER_PROMPT,
+} from "./prompts";
 import {
   createRoleToolServer,
   disabledToolIds,
@@ -93,6 +98,27 @@ describe("role tools", () => {
 });
 
 describe("prompts", () => {
+  it("teaches both agents the fenced interface library within its measured budget", () => {
+    for (const prompt of [MAIN_PROMPT, WORKER_PROMPT]) {
+      expect(prompt).toContain("```openui-lang");
+      for (const component of [
+        "Stack",
+        "Text",
+        "Callout",
+        "Badge",
+        "KeyValue",
+        "Table",
+        "Steps",
+        "Progress",
+        "Code",
+      ]) {
+        expect(prompt).toContain(`${component}(`);
+      }
+      expect(prompt).toContain("main agent's latest reply");
+    }
+    expect(SHARED_GUIDANCE.length).toBeLessThanOrEqual(6720);
+  });
+
   it("selects the prompt by role", () => {
     expect(promptFor("orchestrator")).toBe(MAIN_PROMPT);
     expect(promptFor("worker")).toBe(WORKER_PROMPT);
