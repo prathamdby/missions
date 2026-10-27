@@ -120,6 +120,30 @@ describe("attachment draft ownership", () => {
     expect(controller.take("queue")).toStrictEqual(first);
   });
 
+  it("adopts an edit only into an empty draft", () => {
+    const controller = draft();
+    expect(controller.adopt("from an edit")).toBeTruthy();
+    expect(controller.snapshot()).toBe("from an edit");
+    expect(controller.adopt("another edit")).toBeFalsy();
+    expect(controller.snapshot()).toBe("from an edit");
+  });
+
+  it("refuses to adopt an edit over a pending attachment", () => {
+    const controller = draft();
+    controller.beginAttachment("held", file("notes.txt"));
+    expect(controller.adopt("attachment draft")).toBeFalsy();
+    expect(controller.snapshot()).toBe("");
+  });
+
+  it("reports emptiness from text and attachments together", () => {
+    const controller = draft();
+    expect(controller.isEmpty()).toBeTruthy();
+    controller.change("   ");
+    expect(controller.isEmpty()).toBeTruthy();
+    controller.beginAttachment("held", file("notes.txt"));
+    expect(controller.isEmpty()).toBeFalsy();
+  });
+
   it("ignores late upload completion after removal and blocks failed files", () => {
     const controller = draft();
     controller.beginAttachment("gone", file("notes.txt"));

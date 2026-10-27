@@ -2,7 +2,13 @@
 
 import type { DeliveryMode } from "@missions/protocol/common";
 import type { KeyboardEvent, ReactNode } from "react";
-import { useId, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { ComposerSuggestions } from "@/components/composer/composer-suggestions";
 import type { ComposerSuggestion } from "@/components/composer/composer-suggestions";
@@ -24,13 +30,27 @@ import type { MessageDraft } from "@/lib/mission/message-draft";
 
 import { AttachmentChips } from "./attachment-chips";
 
+/**
+ * Alt+ArrowUp opens the newest queued edit when the caret sits at the start of
+ * the field, so ArrowUp still means "move the caret" anywhere else.
+ */
+const isEditLatestKey = (
+  event: KeyboardEvent<HTMLTextAreaElement>,
+  listOpen: boolean,
+  caret: number
+) => !listOpen && event.altKey && event.key === "ArrowUp" && caret === 0;
+
 export const ComposerField = ({
   action,
+  allowAttachments = true,
   children,
   disabled = false,
   draft,
+  existingAttachments,
+  focusRequest = 0,
   id,
   label,
+  onEditLatest,
   onSubmit,
   placeholder,
   scope,
@@ -38,11 +58,19 @@ export const ComposerField = ({
   testId,
 }: {
   action: ReactNode;
+  /** Off while editing, so a save never drops files the edit cannot carry. */
+  allowAttachments?: boolean;
   children?: ReactNode;
   disabled?: boolean;
   draft: MessageDraft;
+  /** Read-only attachments of the message being edited. */
+  existingAttachments?: ReactNode;
+  /** Changes when the composer should take focus at the end of its text. */
+  focusRequest?: number;
   id?: string;
   label: string;
+  /** Opens the newest queued message; returns whether it did. */
+  onEditLatest?: () => boolean;
   onSubmit: (mode: DeliveryMode) => void;
   placeholder: string;
   scope: ComposerScope | null;
@@ -59,11 +87,12 @@ export const ComposerField = ({
     draft.attachmentSnapshot,
     draft.attachmentSnapshot
   );
-  const upload = useAttachments(draft, disabled);
+  const upload = useAttachments(draft, disabled || !allowAttachments);
   const catalog = useComposerCatalog(scope, scope !== null);
   const highlightLength = skillTokenLength(text, catalog.data?.commands ?? []);
   const input = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const handledFocus = useRef(0);
   const listId = useId();
   const [cursor, setCursor] = useState(text.length);
   const [dismissed, setDismissed] = useState("");
@@ -81,6 +110,22 @@ export const ComposerField = ({
   );
   const activeIndex =
     selection.key === key ? Math.min(selection.index, items.length - 1) : 0;
+
+  // Focus only when the owner asks, so typing never steals the caret back.
+  useEffect(() => {
+    if (focusRequest === 0 || handledFocus.current === focusRequest) {
+      return;
+    }
+    handledFocus.current = focusRequest;
+    const node = input.current;
+    if (!node) {
+      return;
+    }
+    const end = node.value.length;
+    node.focus();
+    node.setSelectionRange(end, end);
+    setCursor(end);
+  }, [focusRequest]);
 
   const choose = (item: ComposerSuggestion) => {
     if (!trigger) {
@@ -125,6 +170,11 @@ export const ComposerField = ({
         }
       }
     }
+    if (isEditLatestKey(event, open, input.current?.selectionStart ?? 0)) {
+      event.preventDefault();
+      onEditLatest?.();
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       onSubmit(event.altKey ? "queue" : "steer");
@@ -164,6 +214,7 @@ export const ComposerField = ({
             files={attachments}
             onRetry={upload.handleRetry}
           />
+          {existingAttachments}
           {upload.error ? (
             <p role="alert" className="text-xs text-danger">
               {upload.error}
@@ -203,14 +254,16 @@ export const ComposerField = ({
             variant="bare"
           />
           <ComposerToolbar>
-            <Hint label="Attach files">
-              <IconButton
-                onClick={() => fileInput.current?.click()}
-                icon={<AttachIcon tone="secondary" />}
-                label="Attach files"
-                size="responsive"
-              />
-            </Hint>
+            {allowAttachments ? (
+              <Hint label="Attach files">
+                <IconButton
+                  onClick={() => fileInput.current?.click()}
+                  icon={<AttachIcon tone="secondary" />}
+                  label="Attach files"
+                  size="responsive"
+                />
+              </Hint>
+            ) : null}
             <Hint label="Mention a file">
               <IconButton
                 disabled={!scope}
