@@ -100,7 +100,7 @@ test("settings persist across reload and recover after a failed save", async ({
   await expect(cleanup).toBeChecked({ checked: initial });
 });
 
-test("queued messages can be edited, switched and removed while an agent waits", async ({
+test("queued messages are edited in the composer, switched and removed while an agent waits", async ({
   page,
   request,
 }) => {
@@ -116,23 +116,48 @@ test("queued messages can be edited, switched and removed while an agent waits",
     timeout: 30_000,
   });
   const composer = page.getByTestId("composer-input");
+  const queue = page.getByRole("list", { name: "Message queue" });
+  const transcript = page.getByRole("list", { name: "Mission transcript" });
+
   await composer.fill("Keep the public behavior");
   await composer.press("Enter");
-  const queue = page.getByRole("list", { name: "Message queue" });
   await expect(
     queue.getByText("Keep the public behavior", { exact: true })
   ).toBeVisible();
-  await queue.getByRole("button", { exact: true, name: "Edit" }).click();
-  await queue
-    .getByRole("textbox", { name: "Edit queued message" })
-    .fill("Keep public behavior and add tests");
-  await queue.getByRole("button", { exact: true, name: "Save" }).click();
+
+  // A draft typed before the edit survives the edit being cancelled.
+  await composer.fill("A separate reply");
+  await queue.getByRole("button", { name: "Edit queued message" }).click();
+  await expect(composer).toHaveValue("Keep the public behavior");
+  await expect(composer).toHaveAttribute("aria-label", "Edit queued message");
   await expect(
-    queue.getByRole("textbox", { name: "Edit queued message" })
-  ).toHaveCount(0);
+    queue.getByRole("listitem").filter({ hasText: "Keep the public behavior" })
+  ).toHaveAttribute("aria-current", "true");
+  await expect(
+    queue.getByRole("button", { exact: true, name: "Cancel" })
+  ).toBeVisible();
+  await queue.getByRole("button", { exact: true, name: "Cancel" }).click();
+  await expect(composer).toHaveValue("A separate reply");
+  await expect(composer).toHaveAttribute(
+    "aria-label",
+    "Message the Orchestrator"
+  );
+
+  // Enter saves the edit in place instead of sending a new message.
+  await queue.getByRole("button", { name: "Edit queued message" }).click();
+  await composer.fill("Keep public behavior and add tests");
+  await composer.press("Enter");
+  await expect(composer).toHaveAttribute(
+    "aria-label",
+    "Message the Orchestrator"
+  );
   await expect(
     queue.getByText("Keep public behavior and add tests", { exact: true })
   ).toBeVisible();
+  await expect(
+    transcript.getByText("Keep public behavior and add tests")
+  ).toHaveCount(0);
+
   await queue
     .getByRole("button", { exact: true, name: "Queue instead" })
     .click();
@@ -143,9 +168,12 @@ test("queued messages can be edited, switched and removed while an agent waits",
   await expect(
     queue.getByRole("button", { exact: true, name: "Steer instead" })
   ).toBeVisible();
+  await expect(
+    queue.getByText("Keep public behavior and add tests", { exact: true })
+  ).toBeVisible();
   await queue.getByRole("button", { name: "Remove from queue" }).click();
   await expect(
-    queue.getByRole("button", { exact: true, name: "Edit" })
+    queue.getByRole("button", { name: "Edit queued message" })
   ).toHaveCount(0);
   const snapshot = (await missionSnapshot(request, mission.id)) as {
     queue: { text: string; state: string; mode: string }[];

@@ -111,6 +111,24 @@ export class MessageDraft {
     this.emit();
   }
 
+  /**
+   * Takes text from a discarded owner, such as an ended message edit, only
+   * when this draft has nothing of its own. Returns whether it was adopted.
+   */
+  adopt(text: string): boolean {
+    if (!this.isEmpty()) {
+      return false;
+    }
+    this.text = text;
+    this.emit();
+    return true;
+  }
+
+  /** Whether the draft holds no text and no attachments. */
+  isEmpty(): boolean {
+    return this.text.trim().length === 0 && this.files.length === 0;
+  }
+
   take(mode: DeliveryMode): MessageDelivery | null {
     const text = this.text.trim();
     if ((!text && this.files.length === 0) || !this.uploadsReady()) {

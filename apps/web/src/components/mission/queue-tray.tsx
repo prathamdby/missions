@@ -1,7 +1,7 @@
 "use client";
 
 import type { QueueItem } from "@missions/protocol/missions";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import {
   CheckIcon,
@@ -13,7 +13,6 @@ import {
 import { useMission } from "@/components/mission/mission-context";
 import { useMissionCommand } from "@/components/mission/use-mission-command";
 import { Button, IconButton } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { inlineIdleSubmissions } from "@/lib/mission/idle-send";
 import {
@@ -23,8 +22,8 @@ import {
   isRetryable,
   visibleQueue,
 } from "@/lib/mission/queue";
-import { toast } from "@/lib/toast-store";
 import { useNow } from "@/lib/use-now";
+import { cn } from "@/lib/utils";
 
 const MODE_LABEL = {
   queue: "Queued · sends when the turn ends",
@@ -101,81 +100,6 @@ const stateText = (item: QueueItem) => {
   }
 };
 
-const EDIT_OUTCOME = {
-  already_sent: {
-    description: "The agent already received it, so the edit was not applied.",
-    title: "Already delivered",
-    tone: "info",
-  },
-  delete_unconfirmed: {
-    description:
-      "The original could not be confirmed removed, so the edit was not sent and the original may still be delivered. Your draft is kept.",
-    title: "Edit not sent",
-    tone: "warning",
-  },
-} as const;
-
-const QueueEditor = ({
-  draft,
-  item,
-  onClose,
-  onDraft,
-}: {
-  draft: string;
-  item: QueueItem;
-  onClose: () => void;
-  onDraft: (draft: string) => void;
-}) => {
-  const editable = isEditable(item);
-  const edit = useMissionCommand(
-    "editQueue",
-    "Could not edit the message",
-    (result) => {
-      if (result.outcome !== "delete_unconfirmed") {
-        onClose();
-      }
-      if (result.outcome !== "replaced") {
-        toast(EDIT_OUTCOME[result.outcome]);
-      }
-    }
-  );
-  return (
-    <li className="flex flex-col gap-sm px-md py-sm">
-      <Textarea
-        aria-label="Edit queued message"
-        onChange={(event) => onDraft(event.target.value)}
-        value={draft}
-      />
-      {editable ? null : (
-        <output className="type-caption text-warning">
-          {item.state === "sent"
-            ? "The agent received the original before you saved. Your draft is still here to copy."
-            : "This message can no longer be edited. Your draft is still here to copy."}
-        </output>
-      )}
-      <div className="flex justify-end gap-sm">
-        <Button onClick={onClose} size="sm" variant="ghost">
-          {editable ? "Cancel" : "Close"}
-        </Button>
-        <Button
-          disabled={!(editable && draft.trim()) || edit.isPending}
-          onClick={() =>
-            edit.mutate({
-              expectedRevision: item.revision,
-              itemId: item.id,
-              text: draft.trim(),
-            })
-          }
-          size="sm"
-          variant="primary"
-        >
-          {edit.isPending ? "Saving…" : "Save"}
-        </Button>
-      </div>
-    </li>
-  );
-};
-
 /** Sends a failed or uncertain message again as a new message. */
 const RetryButton = ({ item }: { item: QueueItem }) => {
   const retry = useMissionCommand("retryQueue", "Could not retry the message");
@@ -211,11 +135,17 @@ const useRoute = (item: QueueItem) => {
 };
 
 const QueueRow = ({
+  editing,
   item,
-  onEdit,
+  onBeginEdit,
+  onCancelEdit,
+  saving,
 }: {
+  editing: boolean;
   item: QueueItem;
-  onEdit: () => void;
+  onBeginEdit: () => void;
+  onCancelEdit: () => void;
+  saving: boolean;
 }) => {
   const editable = isEditable(item);
   const route = useRoute(item);
@@ -229,7 +159,14 @@ const QueueRow = ({
     "Could not remove the message"
   );
   return (
-    <li className="flex items-start gap-md px-md py-sm" data-state={item.state}>
+    <li
+      aria-current={editing ? "true" : undefined}
+      className={cn(
+        "flex items-start gap-md px-md py-sm",
+        editing && "bg-surface-active"
+      )}
+      data-state={item.state}
+    >
       <span className="mt-2xs">
         <StateMark item={item} />
       </span>
@@ -239,6 +176,9 @@ const QueueRow = ({
           {stateText(item)}
         </span>
         <span className="truncate type-caption text-text">
+          {editing ? (
+            <span className="sr-only">Editing queued message: </span>
+          ) : null}
           {item.text || attachmentNames}
         </span>
         {item.text && item.attachments.length ? (
@@ -248,7 +188,17 @@ const QueueRow = ({
         ) : null}
       </div>
       {isRetryable(item) ? <RetryButton item={item} /> : null}
-      {editable ? (
+      {editing ? (
+        <Button
+          className="shrink-0"
+          onClick={onCancelEdit}
+          size="sm"
+          variant="ghost"
+        >
+          Cancel
+        </Button>
+      ) : null}
+      {editable && !editing ? (
         <div className="flex shrink-0 items-center gap-2xs">
           <Button
             data-testid={
@@ -269,9 +219,17 @@ const QueueRow = ({
           >
             {item.mode === "steer" ? "Queue instead" : "Steer instead"}
           </Button>
-          <Button onClick={onEdit} size="sm" variant="ghost">
-            Edit
-          </Button>
+          {item.text.trim() ? (
+            <Button
+              aria-label="Edit queued message"
+              disabled={saving}
+              onClick={onBeginEdit}
+              size="sm"
+              variant="ghost"
+            >
+              Edit
+            </Button>
+          ) : null}
           <IconButton
             disabled={remove.isPending}
             icon={<CloseIcon />}
@@ -315,15 +273,23 @@ export const useVisibleQueue = () => {
 };
 
 /** Messages waiting for delivery, above the composer. */
-export const QueueTray = () => {
+export const QueueTray = ({
+  editingItemId,
+  onBeginEdit,
+  onCancelEdit,
+  saving,
+}: {
+  editingItemId: string | null;
+  onBeginEdit: (item: QueueItem) => void;
+  onCancelEdit: () => void;
+  saving: boolean;
+}) => {
   const { live } = useMission();
   const items = useVisibleQueue();
-  // Held here, not in the row, so a draft survives the row leaving the
-  // visible list when the original is delivered mid-edit.
-  const [editing, setEditing] = useState<{ draft: string; id: string } | null>(
-    null
-  );
-  const editingItem = editing ? live.queue[editing.id] : undefined;
+  // The row stays while its edit is open, even after delivery hides it, so
+  // the highlighted target cannot vanish under the composer.
+  const editingItem =
+    editingItemId === null ? undefined : live.queue[editingItemId];
   const rows =
     editingItem && !items.some((item) => item.id === editingItem.id)
       ? [...items, editingItem]
@@ -336,23 +302,16 @@ export const QueueTray = () => {
       aria-label="Message queue"
       className="mx-md flex flex-col divide-y divide-border-subtle rounded-md bg-surface-raised shadow-sm"
     >
-      {rows.map((item) =>
-        editing?.id === item.id ? (
-          <QueueEditor
-            draft={editing.draft}
-            item={item}
-            key={item.id}
-            onClose={() => setEditing(null)}
-            onDraft={(draft) => setEditing({ draft, id: item.id })}
-          />
-        ) : (
-          <QueueRow
-            item={item}
-            key={item.id}
-            onEdit={() => setEditing({ draft: item.text, id: item.id })}
-          />
-        )
-      )}
+      {rows.map((item) => (
+        <QueueRow
+          editing={editingItemId === item.id}
+          item={item}
+          key={item.id}
+          onBeginEdit={() => onBeginEdit(item)}
+          onCancelEdit={onCancelEdit}
+          saving={saving}
+        />
+      ))}
     </ul>
   );
 };
