@@ -123,6 +123,8 @@ describe("queued message edit", () => {
     const value = {
       agentLabels: {},
       applyLocal,
+      cancelTranscriptEdit:
+        vi.fn<MissionContextValue["cancelTranscriptEdit"]>(),
       closeAgent: vi.fn<MissionContextValue["closeAgent"]>(),
       closedAgentIds: [],
       commands: new MissionCommands(
@@ -141,10 +143,15 @@ describe("queued message edit", () => {
         vi.fn<MissionContextValue["presentIdleSubmission"]>(),
       refresh,
       rewindFrom: vi.fn<MissionContextValue["rewindFrom"]>(),
+      rewindSaving: false,
       selectedAgentId: null,
       sessionError: null,
+      setRewindSaving: vi.fn<MissionContextValue["setRewindSaving"]>(),
+      setTranscriptEditError:
+        vi.fn<MissionContextValue["setTranscriptEditError"]>(),
       showAgent: vi.fn<MissionContextValue["showAgent"]>(),
       showPanel: vi.fn<MissionContextValue["showPanel"]>(),
+      transcriptEdit: null,
     } as unknown as MissionContextValue;
     props = value;
     await paint();
@@ -715,7 +722,10 @@ describe("queued message edit", () => {
       }
       return url.endsWith("/edit")
         ? Promise.resolve(
-            Response.json({ outcome: "delete_unconfirmed", replacementId: null })
+            Response.json({
+              outcome: "delete_unconfirmed",
+              replacementId: null,
+            })
           )
         : Promise.resolve(Response.json({}));
     });
@@ -804,11 +814,11 @@ describe("queued message edit", () => {
       return Promise.resolve();
     });
     expect(
-      fetch_.mock.calls.filter(([input]) => String(input).endsWith("/attachments"))
+      fetch_.mock.calls.filter(([input]) =>
+        String(input).endsWith("/attachments")
+      )
     ).toStrictEqual([]);
-    expect(
-      host.querySelector('[aria-label="Attachments"]')
-    ).toBeNull();
+    expect(host.querySelector('[aria-label="Attachments"]')).toBeNull();
   });
 
   it("settles two cancelled saves independently", async () => {
@@ -855,7 +865,9 @@ describe("queued message edit", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      second.resolve(Response.json({ outcome: "replaced", replacementId: "q" }));
+      second.resolve(
+        Response.json({ outcome: "replaced", replacementId: "q" })
+      );
       await Promise.resolve();
     });
     // The first did not apply, so its text comes back even though a second

@@ -3,20 +3,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 
 import { AgentConversations } from "@/components/mission/agent-conversations";
 import { MissionProvider } from "@/components/mission/mission-context";
 import type {
   MissionContextValue,
   PanelTab,
+  TranscriptEdit,
 } from "@/components/mission/mission-context";
 import { MissionHeader } from "@/components/mission/mission-header";
 import { RightPanel } from "@/components/mission/right-panel";
@@ -29,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage, isApiError } from "@/lib/api/api-error";
 import { agentLabels } from "@/lib/format";
 import { useMissionLive } from "@/lib/live/hooks";
+import { missionCapabilities } from "@/lib/mission/capabilities";
 import { conversationTabs } from "@/lib/mission/conversation-tabs";
 import { saveForkGoal } from "@/lib/mission/fork-draft";
 import type { IdleSubmission } from "@/lib/mission/idle-send";
@@ -107,6 +102,10 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
       );
     });
   }, []);
+  const [transcriptEdit, setTranscriptEdit] = useState<TranscriptEdit | null>(
+    null
+  );
+  const [rewindSaving, setRewindSaving] = useState(false);
   const [conversations, dispatchConversation] = useReducer(conversationTabs, {
     closed: [],
     selected: null,
@@ -159,7 +158,8 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
     [agents]
   );
   const commands = useMissionCommands(client, missionId, applyLocal, refresh);
-  const draft = useRef(new MessageDraft()).current;
+  const [draft, setDraft] = useState(() => new MessageDraft());
+  void setDraft;
   const { removed } = mission;
   useEffect(() => {
     if (removed) {
@@ -172,6 +172,7 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
         ? {
             agentLabels: labels,
             applyLocal,
+            cancelTranscriptEdit: () => setTranscriptEdit(null),
             closeAgent,
             closedAgentIds: conversations.closed,
             commands,
@@ -200,18 +201,33 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
             presentIdleSubmission,
             refresh,
             rewindFrom: (item) => {
-              draft.change(item.text);
-              toast({
-                description:
-                  "The message is back in the composer. Nothing was sent, and the conversation after it is still here.",
-                title: "Ready to edit",
-                tone: "info",
+              if (
+                rewindSaving ||
+                item.kind !== "user" ||
+                !missionCapabilities(live.mission.status).message
+              ) {
+                return;
+              }
+              setTranscriptEdit({
+                error: null,
+                itemId: item.id,
+                originalText: item.text,
+                requestId: item.requestId,
+                seq: item.seq,
               });
             },
+            rewindSaving,
             selectedAgentId,
             sessionError,
+            setRewindSaving,
+            setTranscriptEditError: (error) => {
+              setTranscriptEdit((current) =>
+                current ? { ...current, error } : current
+              );
+            },
             showAgent,
             showPanel,
+            transcriptEdit,
           }
         : null,
     [
@@ -229,7 +245,9 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
       loadOlder,
       missionId,
       refresh,
+      rewindSaving,
       sessionError,
+      transcriptEdit,
       selectedAgentId,
       showAgent,
       showPanel,

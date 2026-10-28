@@ -10,23 +10,29 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import type { ReactNode } from "react";
 
 import { AttachmentPreview } from "@/components/composer/attachment-chips";
 import { ComposerField } from "@/components/composer/composer-field";
 import {
   ArrowUpIcon,
   CheckIcon,
+  CloseIcon,
   PauseIcon,
   PlayIcon,
   RepeatIcon,
 } from "@/components/mission/icons";
 import { useMission } from "@/components/mission/mission-context";
+import type { TranscriptEdit } from "@/components/mission/mission-context";
 import { QueueTray, useVisibleQueue } from "@/components/mission/queue-tray";
 import { reportMutationError } from "@/components/mission/report-error";
 import { useMissionControl } from "@/components/mission/use-mission-control";
 import { useSendMessage } from "@/components/mission/use-send-message";
+import { IconButton } from "@/components/ui/button";
+import { EditIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
 import { Hint } from "@/components/ui/tooltip";
+import { errorMessage } from "@/lib/api/api-error";
 import { canResume } from "@/lib/format";
 import { missionCapabilities } from "@/lib/mission/capabilities";
 import type { MissionCommandInputs } from "@/lib/mission/commands";
@@ -41,6 +47,7 @@ import {
   resolveQueuedEditExit,
 } from "@/lib/mission/queued-edit";
 import { toast } from "@/lib/toast-store";
+import { cn } from "@/lib/utils";
 
 const placeholderFor = (status: MissionStatus) => {
   if (status === "archived") {
@@ -213,6 +220,57 @@ const EditSaveButton = ({
   );
 };
 
+interface RewindSession {
+  draft: MessageDraft;
+  itemId: string;
+  originalText: string;
+}
+
+const rewindPreview = (text: string) =>
+  text.includes("\n") ? (text.split("\n")[0] ?? text) : text;
+
+const RewindSaveButton = ({
+  draft,
+  onSave,
+  saving,
+}: {
+  draft: MessageDraft;
+  onSave: () => void;
+  saving: boolean;
+}) => {
+  const text = useSyncExternalStore(
+    draft.subscribe,
+    draft.snapshot,
+    draft.snapshot
+  );
+  const ready = text.trim().length > 0;
+  return (
+    <Hint label={saving ? "Restarting from this message" : "Update message"}>
+      <button
+        aria-busy={saving || undefined}
+        aria-disabled={!ready || saving}
+        aria-label={saving ? "Restarting from this message" : "Update message"}
+        className={cn(
+          "flex size-7 items-center justify-center rounded-full transition-colors duration-fast",
+          ready && !saving
+            ? "cursor-pointer bg-accent text-on-accent hover:bg-accent-hover"
+            : "cursor-not-allowed bg-surface-active text-text-disabled"
+        )}
+        data-testid="composer-rewind"
+        disabled={!ready || saving}
+        onClick={onSave}
+        type="button"
+      >
+        {saving ? (
+          <Spinner label="Restarting from this message" size="sm" />
+        ) : (
+          <CheckIcon className="size-3.5" />
+        )}
+      </button>
+    </Hint>
+  );
+};
+
 /** Attachments of the message being edited; Phase one keeps them read-only. */
 const ExistingAttachments = ({
   missionId,
@@ -234,11 +292,370 @@ const ExistingAttachments = ({
     </ul>
   ) : null;
 
+const attachmentRow = (item: QueueItem | undefined, missionId: string) =>
+  item && item.attachments.length > 0 ? (
+    <ExistingAttachments item={item} missionId={missionId} />
+  ) : null;
+
+/** Old message stacked on the composer, matching the queue tray. */
+const TranscriptEditTray = ({
+  onDismiss,
+  saving,
+  text,
+}: {
+  onDismiss: () => void;
+  saving: boolean;
+  text: string;
+}) => (
+  <div className="-mb-hairline flex w-[calc(100%-var(--spacing-3xl))] flex-col rounded-t-lg rounded-b-none bg-surface px-card py-sm shadow-sm">
+    <div className="flex items-start gap-md">
+      <span className="mt-2xs text-text-tertiary">
+        <EditIcon className="size-3.5" />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2xs">
+        <span className="text-xs leading-sm text-text-tertiary">
+          Editing message
+        </span>
+        <p className="line-clamp-2 text-sm leading-sm text-text-secondary">
+          {rewindPreview(text)}
+        </p>
+      </div>
+      <IconButton
+        disabled={saving}
+        icon={<CloseIcon />}
+        label="Stop editing"
+        onClick={onDismiss}
+        size="sm"
+      />
+    </div>
+  </div>
+);
+
 /**
  * Paper composer. Enter steers (delivered after the current tool call);
  * Alt+Enter queues (delivered when the turn ends) while agents are working.
  * While a queued message is being edited the same field saves it instead.
  */
+const releaseRewind = (ending: RewindSession, missionDraft: MessageDraft) => {
+  const edited = ending.draft.snapshot();
+  const outcome = resolveQueuedEditExit({
+    editChanged: edited !== ending.originalText,
+    missionDraftEmpty: missionDraft.isEmpty(),
+  });
+  if (outcome !== "kept") {
+    return;
+  }
+  missionDraft.adopt(edited);
+  toast({
+    description: "It is back in the composer. Nothing was sent.",
+    title: "Edit kept",
+    tone: "info",
+  });
+};
+
+const useTranscriptRewind = ({
+  draft,
+  finish,
+  savingRef,
+  sessionRef,
+  setFocusRequest,
+}: {
+  draft: MessageDraft;
+  finish: (ending: EditSession, reason?: "already_sent" | "saving") => void;
+  savingRef: { current: boolean };
+  sessionRef: { current: EditSession | null };
+  setFocusRequest: (update: (request: number) => number) => void;
+}) => {
+  const {
+    cancelTranscriptEdit,
+    commands,
+    live,
+    setRewindSaving,
+    setTranscriptEditError,
+    transcriptEdit,
+  } = useMission();
+  const [rewind, setRewind] = useState<RewindSession | null>(null);
+  const rewindRef = useRef<RewindSession | null>(null);
+  const replaceRewind = useCallback((next: RewindSession | null) => {
+    rewindRef.current = next;
+    setRewind(next);
+  }, []);
+  const rewindCommand = useMutation({
+    mutationFn: (input: MissionCommandInputs["rewind"]) =>
+      commands.run("rewind", input),
+  });
+  const dismissRewind = useCallback(() => {
+    if (rewindCommand.isPending) {
+      return;
+    }
+    const ending = rewindRef.current;
+    if (ending) {
+      releaseRewind(ending, draft);
+    }
+    replaceRewind(null);
+    cancelTranscriptEdit();
+    setFocusRequest((request) => request + 1);
+  }, [
+    cancelTranscriptEdit,
+    draft,
+    replaceRewind,
+    rewindCommand.isPending,
+    setFocusRequest,
+  ]);
+  useEffect(() => {
+    if (!transcriptEdit) {
+      if (rewindRef.current) {
+        replaceRewind(null);
+      }
+      return;
+    }
+    if (rewindRef.current?.itemId === transcriptEdit.itemId) {
+      return;
+    }
+    if (rewindRef.current) {
+      releaseRewind(rewindRef.current, draft);
+    }
+    if (sessionRef.current) {
+      finish(sessionRef.current, savingRef.current ? "saving" : undefined);
+    }
+    const next = new MessageDraft();
+    next.change(transcriptEdit.originalText);
+    replaceRewind({
+      draft: next,
+      itemId: transcriptEdit.itemId,
+      originalText: transcriptEdit.originalText,
+    });
+    setFocusRequest((request) => request + 1);
+  }, [
+    draft,
+    finish,
+    replaceRewind,
+    savingRef,
+    sessionRef,
+    setFocusRequest,
+    transcriptEdit,
+  ]);
+  const saveRewind = async () => {
+    const active = rewindRef.current;
+    if (!(active && transcriptEdit)) {
+      return;
+    }
+    const { draft: activeDraft, itemId } = active;
+    const nextText = activeDraft.snapshot().trim();
+    if (!nextText) {
+      return;
+    }
+    setRewindSaving(true);
+    setTranscriptEditError(null);
+    try {
+      await rewindCommand.mutateAsync({
+        expectedRevision: live.mission.revision,
+        itemId,
+        text: nextText,
+      });
+      if (rewindRef.current?.itemId === itemId) {
+        replaceRewind(null);
+        cancelTranscriptEdit();
+        setFocusRequest((request) => request + 1);
+      }
+    } catch (error) {
+      if (rewindRef.current?.itemId === itemId) {
+        setTranscriptEditError(errorMessage(error));
+      }
+    }
+    setRewindSaving(false);
+  };
+  return {
+    dismissRewind,
+    editingTranscript: transcriptEdit !== null && rewind !== null,
+    rewind,
+    rewindSaving: rewindCommand.isPending,
+    saveRewind,
+    transcriptEdit,
+  };
+};
+
+const dockAction = ({
+  attachments,
+  draft,
+  editingTranscript,
+  onSaveEdit,
+  onSaveRewind,
+  onSteer,
+  rewind,
+  rewindSaving,
+  saving,
+  session,
+  text,
+}: {
+  attachments: readonly unknown[];
+  draft: MessageDraft;
+  editingTranscript: boolean;
+  onSaveEdit: () => void;
+  onSaveRewind: () => void;
+  onSteer: () => void;
+  rewind: RewindSession | null;
+  rewindSaving: boolean;
+  saving: boolean;
+  session: EditSession | null;
+  text: string;
+}): ReactNode => {
+  if (editingTranscript && rewind) {
+    return (
+      <RewindSaveButton
+        draft={rewind.draft}
+        onSave={onSaveRewind}
+        saving={rewindSaving}
+      />
+    );
+  }
+  if (session) {
+    return (
+      <EditSaveButton
+        draft={session.draft}
+        onSave={onSaveEdit}
+        saving={saving}
+      />
+    );
+  }
+  return (
+    <ComposerActionButton
+      hasDraft={text.trim().length > 0 || attachments.length > 0}
+      onSend={onSteer}
+      ready={draft.uploadsReady()}
+    />
+  );
+};
+
+const composerLabel = (
+  editingTranscript: boolean,
+  session: EditSession | null
+) => {
+  if (editingTranscript) {
+    return "Editing message";
+  }
+  if (session) {
+    return "Edit queued message";
+  }
+  return "Message the Orchestrator";
+};
+
+const ComposerDock = ({
+  attachments,
+  beginEdit,
+  beginLatest,
+  cancelEdit,
+  dismissRewind,
+  draft,
+  editing,
+  editingItem,
+  editingTranscript,
+  focusRequest,
+  missionId,
+  missionStatus,
+  onSaveEdit,
+  onSaveRewind,
+  onSubmit,
+  rewind,
+  rewindSaving,
+  saving,
+  sentItem,
+  session,
+  status,
+  text,
+  transcriptEdit,
+  working,
+}: {
+  attachments: readonly unknown[];
+  beginEdit: (item: QueueItem) => void;
+  beginLatest: () => boolean;
+  cancelEdit: () => void;
+  dismissRewind: () => void;
+  draft: MessageDraft;
+  editing: boolean;
+  editingItem: QueueItem | undefined;
+  editingTranscript: boolean;
+  focusRequest: number;
+  missionId: string;
+  missionStatus: MissionStatus;
+  onSaveEdit: () => void;
+  onSaveRewind: () => void;
+  onSubmit: (mode: DeliveryMode) => void;
+  rewind: RewindSession | null;
+  rewindSaving: boolean;
+  saving: boolean;
+  sentItem: QueueItem | undefined;
+  session: EditSession | null;
+  status: string | null;
+  text: string;
+  transcriptEdit: TranscriptEdit | null;
+  working: boolean;
+}) => (
+  <div
+    className={cn(
+      "flex w-full max-w-chat flex-col",
+      editingTranscript ? "items-center gap-0" : "gap-sm"
+    )}
+  >
+    {editingTranscript ? null : (
+      <QueueTray
+        editingItemId={session?.itemId ?? null}
+        onBeginEdit={beginEdit}
+        onCancelEdit={cancelEdit}
+        saving={saving}
+      />
+    )}
+    {editingTranscript && transcriptEdit && rewind ? (
+      <TranscriptEditTray
+        onDismiss={dismissRewind}
+        saving={rewindSaving}
+        text={transcriptEdit.originalText}
+      />
+    ) : null}
+    <div className="w-full">
+      <ComposerField
+        action={dockAction({
+          attachments,
+          draft,
+          editingTranscript,
+          onSaveEdit,
+          onSaveRewind,
+          onSteer: () => onSubmit("steer"),
+          rewind,
+          rewindSaving,
+          saving,
+          session,
+          text,
+        })}
+        allowAttachments={!editing}
+        disabled={
+          saving || rewindSaving || (!editing && missionStatus === "archived")
+        }
+        draft={rewind?.draft ?? session?.draft ?? draft}
+        existingAttachments={attachmentRow(editingItem ?? sentItem, missionId)}
+        focusRequest={focusRequest}
+        label={composerLabel(editingTranscript, session)}
+        onEditLatest={editing ? undefined : beginLatest}
+        onSubmit={(mode) =>
+          onSubmit(mode === "queue" && working ? "queue" : "steer")
+        }
+        placeholder={placeholderFor(missionStatus)}
+        scope={{ id: missionId, kind: "mission" }}
+        size="touch"
+        testId="composer-input"
+      />
+    </div>
+    {status ? (
+      <p
+        className="px-card text-xs leading-sm font-book tracking-tight text-info md:hidden"
+        data-testid="mode-status"
+      >
+        {status}
+      </p>
+    ) : null}
+  </div>
+);
+
 export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
   const { commands, draft, live, refresh } = useMission();
   const { mission } = live;
@@ -290,7 +707,6 @@ export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
       reportMutationError(error, refresh, "Could not edit the message"),
   });
   const queue = useVisibleQueue();
-  const editing = session !== null;
   const editingItem = session ? live.queue[session.itemId] : undefined;
 
   /**
@@ -401,9 +817,25 @@ export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
     return () => cancelAnimationFrame(frame);
   }, [finish, live.queue, saving, session]);
 
+  const {
+    dismissRewind,
+    editingTranscript,
+    rewind,
+    rewindSaving,
+    saveRewind,
+    transcriptEdit,
+  } = useTranscriptRewind({
+    draft,
+    finish,
+    savingRef,
+    sessionRef,
+    setFocusRequest,
+  });
+  const editing = session !== null || editingTranscript;
+
   const beginEdit = useCallback(
     (item: QueueItem) => {
-      if (!item.text.trim()) {
+      if (!item.text.trim() || rewind) {
         return;
       }
       // Swapping sessions under a save would settle the wrong edit, so the row
@@ -425,7 +857,7 @@ export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
       }));
       setFocusRequest((request) => request + 1);
     },
-    [finish, markSaving, updateSession]
+    [finish, markSaving, rewind, updateSession]
   );
 
   const cancelEdit = useCallback(() => {
@@ -499,6 +931,10 @@ export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
   };
 
   const submit = (mode: DeliveryMode) => {
+    if (rewind && transcriptEdit) {
+      void saveRewind();
+      return;
+    }
     if (session) {
       void saveEdit();
       return;
@@ -513,57 +949,39 @@ export const MissionComposer = ({ onSend }: { onSend: () => void }) => {
   };
 
   return (
-    <div className="flex w-full max-w-chat flex-col gap-sm">
-      <QueueTray
-        editingItemId={session?.itemId ?? null}
-        onBeginEdit={beginEdit}
-        onCancelEdit={cancelEdit}
-        saving={saving}
-      />
-      <ComposerField
-        action={
-          session ? (
-            <EditSaveButton
-              draft={session.draft}
-              onSave={saveEdit}
-              saving={saving}
-            />
-          ) : (
-            <ComposerActionButton
-              onSend={() => submit("steer")}
-              ready={draft.uploadsReady()}
-              hasDraft={text.trim().length > 0 || attachments.length > 0}
-            />
-          )
-        }
-        allowAttachments={!editing}
-        // A save already carries its text, so later keys would be dropped.
-        disabled={saving || (!editing && mission.status === "archived")}
-        draft={session?.draft ?? draft}
-        existingAttachments={
-          editingItem ? (
-            <ExistingAttachments item={editingItem} missionId={mission.id} />
-          ) : null
-        }
-        focusRequest={focusRequest}
-        label={editing ? "Edit queued message" : "Message the Orchestrator"}
-        onEditLatest={editing ? undefined : beginLatest}
-        onSubmit={(mode) =>
-          submit(mode === "queue" && working ? "queue" : "steer")
-        }
-        placeholder={placeholderFor(mission.status)}
-        scope={{ id: mission.id, kind: "mission" }}
-        size="touch"
-        testId="composer-input"
-      />
-      {status ? (
-        <p
-          className="px-card text-xs leading-sm font-book tracking-tight text-info md:hidden"
-          data-testid="mode-status"
-        >
-          {status}
-        </p>
-      ) : null}
-    </div>
+    <ComposerDock
+      attachments={attachments}
+      beginEdit={beginEdit}
+      beginLatest={beginLatest}
+      cancelEdit={cancelEdit}
+      dismissRewind={dismissRewind}
+      draft={draft}
+      editing={editing}
+      editingItem={editingItem}
+      editingTranscript={editingTranscript}
+      focusRequest={focusRequest}
+      missionId={mission.id}
+      missionStatus={mission.status}
+      onSaveEdit={() => {
+        void saveEdit();
+      }}
+      onSaveRewind={() => {
+        void saveRewind();
+      }}
+      onSubmit={submit}
+      rewind={rewind}
+      rewindSaving={rewindSaving}
+      saving={saving}
+      sentItem={
+        transcriptEdit?.requestId
+          ? live.queue[transcriptEdit.requestId]
+          : undefined
+      }
+      session={session}
+      status={status}
+      text={text}
+      transcriptEdit={transcriptEdit}
+      working={working}
+    />
   );
 };

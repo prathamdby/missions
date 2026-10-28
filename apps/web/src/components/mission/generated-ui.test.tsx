@@ -84,6 +84,8 @@ describe("generated UI message admission", () => {
     context = {
       agentLabels: {},
       applyLocal: vi.fn<MissionContextValue["applyLocal"]>(),
+      cancelTranscriptEdit:
+        vi.fn<MissionContextValue["cancelTranscriptEdit"]>(),
       closeAgent: vi.fn<MissionContextValue["closeAgent"]>(),
       closedAgentIds: [],
       commands: new MissionCommands(
@@ -116,10 +118,15 @@ describe("generated UI message admission", () => {
         vi.fn<MissionContextValue["presentIdleSubmission"]>(),
       refresh,
       rewindFrom: vi.fn<MissionContextValue["rewindFrom"]>(),
+      rewindSaving: false,
       selectedAgentId: null,
       sessionError: null,
+      setRewindSaving: vi.fn<MissionContextValue["setRewindSaving"]>(),
+      setTranscriptEditError:
+        vi.fn<MissionContextValue["setTranscriptEditError"]>(),
       showAgent: vi.fn<MissionContextValue["showAgent"]>(),
       showPanel: vi.fn<MissionContextValue["showPanel"]>(),
+      transcriptEdit: null,
     };
   });
 

@@ -18,8 +18,11 @@ import { and, desc, eq, inArray, like, lt, max } from "drizzle-orm";
 import type { DatabaseHandle, Db } from "./database";
 import {
   normalizeAgent,
+  normalizeAssignment,
   normalizeMission,
+  normalizePermission,
   normalizePlan,
+  normalizeQuestion,
   normalizeQueueItem,
   normalizeTranscriptItem,
 } from "./normalize";
@@ -134,19 +137,22 @@ export class Store {
       db,
       assignments,
       (a) => a.status,
-      (a) => a.updatedAt
+      (a) => a.updatedAt,
+      normalizeAssignment
     );
     this.questions = missionRepo<Question>(
       db,
       questions,
       (q) => q.status,
-      (q) => q.createdAt
+      (q) => q.createdAt,
+      normalizeQuestion
     );
     this.permissions = missionRepo<PermissionRequest>(
       db,
       permissions,
       (p) => p.status,
-      (p) => p.decidedAt ?? p.createdAt
+      (p) => p.decidedAt ?? p.createdAt,
+      normalizePermission
     );
     this.queue = missionRepo<QueueItem>(
       db,
@@ -362,6 +368,17 @@ export class Store {
     return operation;
   }
 
+  operationsFor(missionId: string, kind: string): Operation[] {
+    return this.db
+      .select()
+      .from(operations)
+      .where(
+        and(eq(operations.missionId, missionId), eq(operations.kind, kind))
+      )
+      .all()
+      .map((row) => row.data as Operation);
+  }
+
   getOperation(id: string): { operation: Operation; result: unknown } | null {
     const row = this.db
       .select()
@@ -437,6 +454,26 @@ export class Store {
       })
       .run();
     return full;
+  }
+
+  /** Rewrites one row's document. The sequence column stays put. */
+  reviseTranscript(item: TranscriptItem): TranscriptItem {
+    this.db
+      .update(transcript)
+      .set({ data: item })
+      .where(eq(transcript.id, item.id))
+      .run();
+    return item;
+  }
+
+  listTranscript(missionId: string): TranscriptItem[] {
+    return this.db
+      .select()
+      .from(transcript)
+      .where(eq(transcript.missionId, missionId))
+      .orderBy(transcript.seq)
+      .all()
+      .map((row) => normalizeTranscriptItem(row.data));
   }
 
   getTranscriptItem(id: string): TranscriptItem | null {

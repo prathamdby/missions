@@ -672,4 +672,16 @@ describe("agent messages", () => {
       "plan",
     ]);
   });
+
+  it("hides a rewind's discarded tail and cards", () => {
+    const timeline = buildTimeline({
+      ...empty,
+      plans: [{ ...plan(1, 3), rewindDiscarded: true }],
+      transcript: [
+        item(1, "user", { text: "Keep" }),
+        item(2, "assistant", { superseded: true, text: "Drop" }),
+      ],
+    });
+    expect(timeline.map((entry) => entry.kind)).toStrictEqual(["user"]);
+  });
 });

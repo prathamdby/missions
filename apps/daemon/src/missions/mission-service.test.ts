@@ -1036,6 +1036,113 @@ describe("mission service", () => {
     ]);
   });
 
+  it("rewinds a sent message into a new session and hides the later transcript", async () => {
+    const started: (string | undefined)[] = [];
+    const { start } = FakeRuntime.prototype;
+    const spy = vi
+      .spyOn(FakeRuntime.prototype, "start")
+      .mockImplementation(function mockStart(this: FakeRuntime, resume) {
+        started.push(resume);
+        return start.call(this, resume);
+      });
+    try {
+      const { daemon, missionId, orchestrator, runtimes } =
+        await startMission();
+      orchestrator.consume(`${missionId}:goal`);
+      orchestrator.emit({
+        message: {
+          id: "reply-1",
+          requestId: null,
+          role: "assistant",
+          sender: null,
+          text: "Done",
+          thinking: "",
+          toolResults: [],
+          toolUses: [],
+        },
+        type: "message",
+      });
+      await yieldImmediate();
+      const before = daemon.missions.snapshot(missionId);
+      const goal = before.transcript.find((item) => item.kind === "user");
+      if (!goal) {
+        throw new Error("goal transcript missing");
+      }
+      const mission = await daemon.missions.rewindTranscript(
+        missionId,
+        goal.id,
+        {
+          expectedRevision: daemon.missions.get(missionId).revision,
+          operationId: "rewind-1",
+          text: "Add a clock",
+        }
+      );
+      const after = daemon.missions.snapshot(missionId);
+      const next = runtimes.at(-1);
+      const submitted = next?.submitted.at(-1);
+      expect({
+        contexts: next?.contexts ?? [],
+        epoch: mission.epoch,
+        fresh: next !== undefined && next !== orchestrator,
+        goal: mission.goal,
+        resume: started.at(-1) ?? null,
+        seqs: after.transcript.map((item) => item.seq),
+        status: mission.status,
+        submitted: { id: submitted?.id, text: submitted?.text },
+        superseded: after.transcript.some((item) => item.superseded === true),
+        visible: after.transcript
+          .filter((item) => item.superseded !== true)
+          .map((item) => [item.kind, item.text]),
+      }).toStrictEqual({
+        contexts: [],
+        epoch: before.mission.epoch + 1,
+        fresh: true,
+        goal: "Add a clock",
+        resume: null,
+        seqs: before.transcript.map((item) => item.seq),
+        status: before.mission.status,
+        submitted: { id: `${missionId}:goal`, text: "Add a clock" },
+        superseded: true,
+        visible: [["user", "Add a clock"]],
+      });
+      next?.consume(`${missionId}:goal`);
+      await yieldImmediate();
+      expect(
+        daemon.missions
+          .snapshot(missionId)
+          .transcript.filter(
+            (item) => item.kind === "user" && item.superseded !== true
+          )
+      ).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("leaves the chat unchanged when the restart cannot stop the agent", async () => {
+    const { daemon, missionId, orchestrator } = await startMission();
+    orchestrator.consume(`${missionId}:goal`);
+    await yieldImmediate();
+    const goal = daemon.missions
+      .snapshot(missionId)
+      .transcript.find((item) => item.kind === "user");
+    if (!goal) {
+      throw new Error("goal transcript missing");
+    }
+    orchestrator.survivors = [1];
+    await expect(
+      daemon.missions.rewindTranscript(missionId, goal.id, {
+        expectedRevision: daemon.missions.get(missionId).revision,
+        operationId: "rewind-blocked",
+        text: "Add a clock",
+      })
+    ).rejects.toThrow(/chat is unchanged/u);
+    expect(
+      daemon.missions.snapshot(missionId).transcript.map((item) => item.text)
+    ).toStrictEqual([goal.text]);
+    expect(daemon.missions.get(missionId).goal).toBe("Add a greeting file");
+  });
+
   it("blocks writes in Plan mode until the live plan revision is approved", async () => {
     const ctx = await startMission(undefined, {
       goal: "Add a greeting file. Plan it first.",

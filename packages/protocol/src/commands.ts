@@ -83,6 +83,15 @@ export const EditQueueItemResponseSchema = z.object({
 });
 export type EditQueueItemResponse = z.infer<typeof EditQueueItemResponseSchema>;
 
+export const RewindTranscriptRequestSchema = z.strictObject({
+  expectedRevision: RevisionSchema,
+  operationId: OperationIdSchema,
+  text: z.string().trim().min(1).max(100_000),
+});
+export type RewindTranscriptRequest = z.infer<
+  typeof RewindTranscriptRequestSchema
+>;
+
 export const DecidePermissionRequestSchema = z.strictObject({
   decision: PermissionDecisionSchema,
   epoch: z.int().nonnegative(),

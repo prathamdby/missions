@@ -10,6 +10,7 @@ import { IconButton } from "@/components/ui/button";
 import { EditIcon } from "@/components/ui/icons";
 import { Hint } from "@/components/ui/tooltip";
 import { shortAge } from "@/lib/format";
+import { missionCapabilities } from "@/lib/mission/capabilities";
 import { messageLink } from "@/lib/mission/message-actions";
 import { toast } from "@/lib/toast-store";
 import { cn } from "@/lib/utils";
@@ -51,7 +52,8 @@ const useAge = (createdAt: string) => {
 };
 
 const FooterRow = ({ item }: { item: TranscriptItem }) => {
-  const { forkFrom, missionId, rewindFrom } = useMission();
+  const { forkFrom, live, missionId, rewindFrom } = useMission();
+  const canEdit = missionCapabilities(live.mission.status).message;
   const age = useAge(item.createdAt);
   const copyText = () => writeClipboard(item.text, "Copied");
   const copyLink = () =>
@@ -71,7 +73,7 @@ const FooterRow = ({ item }: { item: TranscriptItem }) => {
           {age}
         </span>
       )}
-      {item.kind === "user" ? (
+      {item.kind === "user" && canEdit ? (
         <FooterButton
           icon={<EditIcon />}
           label="Edit from here"
@@ -84,7 +86,11 @@ const FooterRow = ({ item }: { item: TranscriptItem }) => {
         onClick={copyText}
       />
       {item.kind === "user" ? (
-        <FooterButton icon={<LinkIcon />} label="Copy link" onClick={copyLink} />
+        <FooterButton
+          icon={<LinkIcon />}
+          label="Copy link"
+          onClick={copyLink}
+        />
       ) : (
         <FooterButton
           icon={<LinkIcon />}

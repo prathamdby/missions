@@ -78,9 +78,15 @@ describe("message footer", () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        observe = () => undefined;
-        unobserve = () => undefined;
-        disconnect = () => undefined;
+        observe() {
+          return this;
+        }
+        unobserve() {
+          return this;
+        }
+        disconnect() {
+          return this;
+        }
       }
     );
     host = document.createElement("div");
