@@ -672,4 +672,46 @@ describe("agent messages", () => {
       "plan",
     ]);
   });
+
+  it("hides a rewind's discarded tail and cards", () => {
+    const timeline = buildTimeline({
+      ...empty,
+      assignments: [
+        {
+          createdAt: at(3),
+          epoch: 0,
+          handoff: null,
+          id: "discarded-assignment",
+          instructions: "",
+          missionId: "m1",
+          needsWrite: false,
+          rewindDiscarded: true,
+          status: "cancelled",
+          title: "Discarded work",
+          updatedAt: at(3),
+          workerAgentId: "w1",
+        },
+      ],
+      permissions: [{ ...permission(3), rewindDiscarded: true }],
+      plans: [{ ...plan(1, 3), rewindDiscarded: true }],
+      questions: [
+        {
+          agentId: "orch",
+          answers: null,
+          createdAt: at(3),
+          epoch: 0,
+          id: "discarded-question",
+          missionId: "m1",
+          questions: [],
+          rewindDiscarded: true,
+          status: "cancelled",
+        },
+      ],
+      transcript: [
+        item(1, "user", { text: "Keep" }),
+        item(2, "assistant", { superseded: true, text: "Drop" }),
+      ],
+    });
+    expect(timeline.map((entry) => entry.kind)).toStrictEqual(["user"]);
+  });
 });

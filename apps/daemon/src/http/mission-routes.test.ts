@@ -2,7 +2,7 @@ import { CommandAcceptedSchema } from "@missions/protocol/commands";
 import { ApiErrorSchema } from "@missions/protocol/errors";
 import { EVENTS_PATH } from "@missions/protocol/events";
 import { routes } from "@missions/protocol/routes";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Daemon } from "../daemon";
 import {
@@ -37,7 +37,89 @@ const failureOf = async (response: Response) => {
 
 describe("mission routes", () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(opened.splice(0).map((daemon) => daemon.close()));
+  });
+
+  it("validates rewind text and maps missing, foreign and stale targets", async () => {
+    const ctx = await startMission(await bootDaemon(opened));
+    ctx.orchestrator.consume(`${ctx.missionId}:goal`);
+    const [item] = ctx.daemon.store.listTranscript(ctx.missionId);
+    if (!item) {
+      throw new Error("Missing transcript item");
+    }
+    const request = {
+      ...control(ctx.daemon, ctx.missionId, "rewind-http-validation"),
+      text: "Changed goal",
+    };
+    const cases = [
+      {
+        body: { ...request, text: "   " },
+        code: "bad_request",
+        itemId: item.id,
+        status: 400,
+      },
+      { body: request, code: "not_found", itemId: "unknown-item", status: 404 },
+      {
+        body: { ...request, expectedRevision: 0 },
+        code: "stale_revision",
+        itemId: item.id,
+        status: 409,
+      },
+    ];
+    const other = await startMission(ctx, "other");
+    other.orchestrator.consume(`${other.missionId}:goal`);
+    const [foreign] = ctx.daemon.store.listTranscript(other.missionId);
+    if (!foreign) {
+      throw new Error("Missing foreign transcript item");
+    }
+    cases.push({
+      body: request,
+      code: "not_found",
+      itemId: foreign.id,
+      status: 404,
+    });
+    const outcomes = await Promise.all(
+      cases.map(async (entry) => {
+        const response = await send(
+          ctx,
+          routes.transcriptRewind(ctx.missionId, entry.itemId),
+          { body: JSON.stringify(entry.body), method: "POST" }
+        );
+        return await failureOf(response);
+      })
+    );
+    expect(outcomes).toStrictEqual(
+      cases.map((entry) => [entry.status, entry.code])
+    );
+    expect(ctx.daemon.store.getTranscriptItem(item.id)?.text).toBe(item.text);
+  });
+
+  it("maps a rejected rewind stop to a conflict instead of an internal error", async () => {
+    const ctx = await startMission(await bootDaemon(opened));
+    ctx.orchestrator.consume(`${ctx.missionId}:goal`);
+    const [item] = ctx.daemon.store.listTranscript(ctx.missionId);
+    if (!item) {
+      throw new Error("Missing transcript item");
+    }
+    vi.spyOn(ctx.orchestrator, "close").mockRejectedValueOnce(
+      new Error("stop failed")
+    );
+    const response = await send(
+      ctx,
+      routes.transcriptRewind(ctx.missionId, item.id),
+      {
+        body: JSON.stringify({
+          ...control(ctx.daemon, ctx.missionId, "rewind-http-stop"),
+          text: "Changed goal",
+        }),
+        method: "POST",
+      }
+    );
+    await expect(failureOf(response)).resolves.toStrictEqual([409, "conflict"]);
+    expect(ctx.daemon.store.getTranscriptItem(item.id)?.text).toBe(item.text);
+    opened.splice(opened.indexOf(ctx.daemon), 1);
+    await expect(ctx.daemon.close()).rejects.toThrow(/shutdown failed/u);
   });
 
   it.each([

@@ -14,6 +14,7 @@ import type {
   EditQueueItemRequest,
   EditQueueItemResponse,
   MissionControlRequest,
+  RewindTranscriptRequest,
   RetryQueueItemRequest,
   SubmitMessageRequest,
   UpdateMissionRequest,
@@ -1383,6 +1384,7 @@ export class MissionService {
       .transcriptPage(mission.id, null, 60)
       .items.filter(
         (item) =>
+          item.superseded !== true &&
           (item.kind === "user" ||
             item.kind === "assistant" ||
             item.kind === "agent_message") &&
@@ -1763,7 +1765,12 @@ export class MissionService {
           const fromAgent =
             (queued && queued.origin !== "user") ||
             Boolean(event.message.sender);
-          return fromAgent ? [] : [entry];
+          // The edited row already holds this request, so the new session's
+          // echo must not become a second user bubble.
+          const alreadyRecorded =
+            entry.requestId !== null &&
+            this.#store.hasUserTranscriptRequest(mission.id, entry.requestId);
+          return fromAgent || alreadyRecorded ? [] : [entry];
         });
         this.#appendTranscript(mission.id, items);
         for (const result of event.message.toolResults) {
@@ -3526,7 +3533,10 @@ export class MissionService {
     const titles = new Map(
       this.#store.listAgents(mission.id).map((agent) => [agent.id, agent.title])
     );
-    const lines = page.items.map((item) => {
+    const lines = page.items.flatMap((item) => {
+      if (item.superseded === true) {
+        return [];
+      }
       const who =
         item.kind === "user" ? "User" : (titles.get(item.agentId) ?? "Agent");
       const to = item.recipient ? ` → ${item.recipient.title}` : "";
@@ -3535,7 +3545,7 @@ export class MissionService {
         item.text.length > HISTORY_ENTRY_LIMIT
           ? `${item.text.slice(0, HISTORY_ENTRY_LIMIT)}…`
           : item.text;
-      return `#${item.seq} ${who}${to} [${item.kind}${tool}]: ${text}`;
+      return [`#${item.seq} ${who}${to} [${item.kind}${tool}]: ${text}`];
     });
     const more = page.hasMore
       ? `Older entries exist: call read_history with before=${page.items[0]?.seq ?? ""}.`
@@ -4260,6 +4270,353 @@ export class MissionService {
     };
   }
 
+  /**
+   * Rewrites a sent user message, hides everything after it, and starts a new
+   * session on that text. The transcript sequences stay contiguous.
+   */
+  rewindTranscript(
+    missionId: string,
+    itemId: string,
+    request: RewindTranscriptRequest
+  ): Promise<Mission> {
+    if (this.#closing) {
+      return Promise.reject(conflict("The daemon is stopping"));
+    }
+    return this.#own(this.#rewindTranscript(missionId, itemId, request));
+  }
+
+  async #rewindTranscript(
+    missionId: string,
+    itemId: string,
+    request: RewindTranscriptRequest
+  ): Promise<Mission> {
+    this.#admit(missionId);
+    const saved = this.#journal.get(request.operationId, {
+      kind: "mission.rewind",
+      missionId,
+    });
+    if (saved?.operation.status === "succeeded") {
+      return this.get(missionId);
+    }
+    const mission = this.get(missionId);
+    if (mission.revision !== request.expectedRevision) {
+      throw stale("The mission changed; refresh and try again");
+    }
+    if (FENCED.has(mission.status)) {
+      throw conflict("Resume the mission before editing a message");
+    }
+    const item = this.#rewindTarget(missionId, itemId);
+    const later = this.#store
+      .listTranscript(missionId)
+      .some((row) => row.seq > item.seq && row.superseded !== true);
+    if (request.text === item.text && !later) {
+      throw conflict("Nothing to restart");
+    }
+    const results = await Promise.allSettled(
+      this.#store
+        .listAgents(missionId)
+        .map((agent) => this.#closeRuntime(agent.id))
+    );
+    if (
+      results.some(
+        (result) => result.status === "rejected" || !result.value.stopped
+      )
+    ) {
+      throw conflict("Could not restart. The chat is unchanged.");
+    }
+    const current = this.get(missionId);
+    if (
+      current.revision !== request.expectedRevision ||
+      FENCED.has(current.status)
+    ) {
+      throw conflict("Could not restart. The chat is unchanged.");
+    }
+    const requestId = item.requestId ?? item.id;
+    this.#log.commit((emit) => {
+      this.#writeRewind(emit, {
+        itemId,
+        missionId,
+        request,
+        requestId,
+      });
+    });
+    await this.#sendRewound(missionId, request.operationId, itemId);
+    return this.get(missionId);
+  }
+
+  #rewindTarget(missionId: string, itemId: string): TranscriptItem {
+    const item = this.#store.getTranscriptItem(itemId);
+    if (!item || item.missionId !== missionId || item.kind !== "user") {
+      throw notFound("Message");
+    }
+    return item;
+  }
+
+  #writeRewind(
+    emit: Emit,
+    input: {
+      itemId: string;
+      missionId: string;
+      request: RewindTranscriptRequest;
+      requestId: string;
+    }
+  ) {
+    const mission = this.get(input.missionId);
+    if (mission.revision !== input.request.expectedRevision) {
+      throw stale("The mission changed; refresh and try again");
+    }
+    const target = this.#rewindTarget(input.missionId, input.itemId);
+    this.#retirePendingRewinds(input.missionId);
+    const revised: TranscriptItem = {
+      ...target,
+      requestId: input.requestId,
+      superseded: false,
+      text: input.request.text,
+    };
+    this.#store.reviseTranscript(revised);
+    emit(input.missionId, { data: { item: revised }, type: "transcript.item" });
+    this.#supersedeTail(emit, input.missionId, target.seq);
+    this.#discardRewindSpan(emit, input.missionId, target.createdAt);
+    this.#clearSessions(emit, input.missionId);
+    const queued = this.#store.queue.get(input.requestId);
+    if (queued?.missionId === input.missionId) {
+      const next = {
+        ...queued,
+        revision: queued.revision + 1,
+        text: input.request.text,
+        updatedAt: this.#iso(),
+      };
+      this.#store.queue.put(next);
+      emit(input.missionId, { data: { item: next }, type: "queue.updated" });
+    }
+    const goalId = `${input.missionId}:goal`;
+    this.#saveMission(emit, {
+      ...mission,
+      epoch: mission.epoch + 1,
+      goal: input.requestId === goalId ? input.request.text : mission.goal,
+    });
+    this.#journal.recordCompleted(
+      {
+        detail: {
+          itemId: input.itemId,
+          requestId: input.requestId,
+          submitted: false,
+          text: input.request.text,
+        },
+        id: input.request.operationId,
+        kind: "mission.rewind",
+        missionId: input.missionId,
+      },
+      { missionId: input.missionId }
+    );
+  }
+
+  #supersedeTail(emit: Emit, missionId: string, seq: number) {
+    for (const row of this.#store.listTranscript(missionId)) {
+      if (row.seq <= seq || row.superseded === true) {
+        continue;
+      }
+      const next = { ...row, superseded: true };
+      this.#store.reviseTranscript(next);
+      emit(missionId, { data: { item: next }, type: "transcript.item" });
+    }
+  }
+
+  #discardRewindSpan(emit: Emit, missionId: string, at: string) {
+    const now = this.#iso();
+    for (const assignment of this.#store.assignments.list(missionId)) {
+      const live =
+        assignment.status === "running" || assignment.status === "queued";
+      if (!live && assignment.createdAt <= at) {
+        continue;
+      }
+      const next = {
+        ...assignment,
+        rewindDiscarded: true,
+        status: live ? ("cancelled" as const) : assignment.status,
+        updatedAt: now,
+      };
+      this.#store.assignments.put(next);
+      emit(missionId, {
+        data: { assignment: next },
+        type: "assignment.updated",
+      });
+    }
+    for (const question of this.#store.questions.list(missionId)) {
+      if (question.createdAt <= at) {
+        continue;
+      }
+      const next = {
+        ...question,
+        rewindDiscarded: true,
+        status:
+          question.status === "pending"
+            ? ("cancelled" as const)
+            : question.status,
+      };
+      this.#store.questions.put(next);
+      emit(missionId, { data: { question: next }, type: "question.updated" });
+    }
+    for (const plan of this.#store.plans.list(missionId)) {
+      if (plan.createdAt <= at) {
+        continue;
+      }
+      const next = { ...plan, actionable: false, rewindDiscarded: true };
+      this.#store.plans.put(next);
+      emit(missionId, { data: { plan: next }, type: "plan.updated" });
+    }
+    for (const request of this.#store.permissions.list(missionId)) {
+      if (request.createdAt <= at) {
+        continue;
+      }
+      const next = {
+        ...request,
+        rewindDiscarded: true,
+        status:
+          request.status === "pending"
+            ? ("cancelled" as const)
+            : request.status,
+      };
+      this.#store.permissions.put(next);
+      emit(missionId, {
+        data: { request: next },
+        type: "permission.updated",
+      });
+    }
+  }
+
+  #clearSessions(emit: Emit, missionId: string) {
+    for (const agent of this.#store.listAgents(missionId)) {
+      if (!agent.sessionId) {
+        continue;
+      }
+      this.#saveAgent(
+        {
+          ...agent,
+          previousSessionIds: [...agent.previousSessionIds, agent.sessionId],
+          sessionGeneration: agent.sessionGeneration + 1,
+          sessionId: null,
+          status: "idle",
+          waitingReason: null,
+        },
+        emit
+      );
+    }
+  }
+
+  async #sendRewound(missionId: string, operationId: string, itemId: string) {
+    try {
+      const orchestrator = this.#orchestrator(missionId);
+      const runtime = await this.#ensureRuntime(orchestrator.id);
+      this.#requireRuntime(orchestrator.id, runtime);
+      await this.#submitRewind(
+        runtime,
+        operationId,
+        this.#rewindTarget(missionId, itemId)
+      );
+    } catch (error) {
+      if (!FENCED.has(this.get(missionId).status)) {
+        await this.#stopMission(missionId, "interrupted");
+        this.#notice(
+          missionId,
+          "run_failed",
+          "warning",
+          `The message was updated, but the new session did not start (${errorMessage(error)}). Resume to send it.`
+        );
+      }
+    }
+  }
+
+  #pendingRewind(missionId: string) {
+    const [operation] = this.#store
+      .operationsFor(missionId, "mission.rewind")
+      .filter(
+        (entry) =>
+          entry.status === "succeeded" && entry.detail.superseded !== true
+      )
+      .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (!operation || operation.detail.submitted === true) {
+      return null;
+    }
+    const { itemId, requestId, text } = operation.detail;
+    if (
+      typeof itemId !== "string" ||
+      typeof requestId !== "string" ||
+      typeof text !== "string" ||
+      !text
+    ) {
+      return null;
+    }
+    const item = this.#store.getTranscriptItem(itemId);
+    if (
+      !item ||
+      item.missionId !== missionId ||
+      item.kind !== "user" ||
+      item.superseded === true ||
+      item.text !== text ||
+      (item.requestId ?? item.id) !== requestId
+    ) {
+      return null;
+    }
+    return { item, operationId: operation.id };
+  }
+
+  #retirePendingRewinds(missionId: string) {
+    for (const operation of this.#store.operationsFor(
+      missionId,
+      "mission.rewind"
+    )) {
+      if (
+        operation.status !== "succeeded" ||
+        operation.detail.submitted === true ||
+        operation.detail.superseded === true
+      ) {
+        continue;
+      }
+      this.#store.putOperation(
+        {
+          ...operation,
+          detail: { ...operation.detail, superseded: true },
+          updatedAt: this.#iso(),
+        },
+        this.#store.getOperation(operation.id)?.result
+      );
+    }
+  }
+
+  async #submitRewind(
+    runtime: RuntimeHandle,
+    operationId: string,
+    item: TranscriptItem
+  ) {
+    const queued = item.requestId
+      ? this.#store.queue.get(item.requestId)
+      : null;
+    const options = await attachmentPayload(this.#attachments, {
+      attachments: queued?.attachments ?? [],
+      missionId: item.missionId,
+    });
+    await this.#execute(this.#orchestrator(item.missionId).id, runtime, () =>
+      runtime.submit(item.requestId ?? item.id, item.text, "steer", options)
+    );
+    this.#markRewindSubmitted(operationId);
+  }
+
+  #markRewindSubmitted(operationId: string) {
+    const existing = this.#store.getOperation(operationId);
+    if (!existing) {
+      return;
+    }
+    this.#store.putOperation(
+      {
+        ...existing.operation,
+        detail: { ...existing.operation.detail, submitted: true },
+        updatedAt: this.#iso(),
+      },
+      existing.result
+    );
+  }
+
   // --------------------------------------------------------- update/pause
 
   update(missionId: string, request: UpdateMissionRequest): Promise<Mission> {
@@ -4597,7 +4954,9 @@ export class MissionService {
           .list(missionId, ["cancelled"])
           .filter(
             (assignment) =>
-              !assignment.handoff && assignment.epoch === mission.epoch - 1
+              !assignment.handoff &&
+              assignment.rewindDiscarded !== true &&
+              assignment.epoch === mission.epoch - 1
           );
         const orchestrator = this.#orchestrator(missionId);
         if (mission.status === "completed") {
@@ -4609,7 +4968,14 @@ export class MissionService {
         try {
           const runtime = await this.#ensureRuntime(orchestrator.id);
           this.#requireRuntime(orchestrator.id, runtime);
-          if (!goalPending) {
+          const pendingRewind = this.#pendingRewind(missionId);
+          if (!goalPending && pendingRewind) {
+            await this.#submitRewind(
+              runtime,
+              pendingRewind.operationId,
+              pendingRewind.item
+            );
+          } else if (!goalPending) {
             const failures = this.#unconfirmedFailures(missionId);
             const sent = await this.#sendSystem(
               orchestrator.id,

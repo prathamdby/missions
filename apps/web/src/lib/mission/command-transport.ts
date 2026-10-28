@@ -78,6 +78,20 @@ export const missionCommandTransport = (
         "queue",
         api.retryQueueItem(missionId, itemId, { ...body, operationId })
       ),
+    rewind: async ({ itemId, ...body }, operationId) => {
+      const mission = await api.rewindTranscript(missionId, itemId, {
+        ...body,
+        operationId,
+      });
+      apply({ kind: "mission", value: mission });
+      try {
+        await refresh();
+      } catch {
+        // The mission response is already applied. A failed refresh leaves the
+        // transcript for the next snapshot instead of failing a finished rewind.
+      }
+      return mission;
+    },
     update: (body) => receive("mission", api.updateMission(missionId, body)),
   };
 };

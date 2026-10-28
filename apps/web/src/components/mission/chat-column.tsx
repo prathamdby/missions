@@ -35,6 +35,7 @@ import {
 } from "@/lib/mission/queue";
 import { WAITING, waitingOf } from "@/lib/mission/waiting";
 import { useNow } from "@/lib/use-now";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 100;
 /** Within this distance of the bottom, new output keeps the view pinned. */
@@ -148,7 +149,8 @@ const WorkingLine = ({
 
 /** Paper FQQ chat column: transcript, inline state cards, and the composer. */
 export const ChatColumn = ({ agentId }: { agentId?: string }) => {
-  const { idleSubmissions, live, loadOlder, missionId } = useMission();
+  const { idleSubmissions, live, loadOlder, missionId, transcriptEdit } =
+    useMission();
   const now = useNow();
   const worker = agentId ? live.agents[agentId]?.role === "worker" : false;
   const scroller = useRef<HTMLDivElement>(null);
@@ -170,7 +172,7 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
     ) {
       return;
     }
-    const target = () => document.getElementById(linkedId);
+    const target = () => document.querySelector(`#${CSS.escape(linkedId)}`);
     if (target()) {
       target()?.scrollIntoView({ block: "center" });
       handledLink.current = linkedId;
@@ -194,11 +196,11 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
           found.scrollIntoView({ block: "center" });
           handledLink.current = linkedId;
         } else if (!stopped) {
-          page().catch(() => undefined);
+          page().catch(() => null);
         }
       });
     };
-    page().catch(() => undefined);
+    page().catch(() => null);
     return () => {
       stopped = true;
     };
@@ -311,6 +313,14 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
             ref={content}
             className="mx-auto flex min-h-full w-full max-w-chat min-w-0 flex-col justify-end gap-lg pt-md pb-2xl"
           >
+            {transcriptEdit?.error ? (
+              <p
+                className="rounded-sm bg-danger-muted px-lg py-control text-sm leading-sm text-danger"
+                role="alert"
+              >
+                {transcriptEdit.error}
+              </p>
+            ) : null}
             {live.transcriptHasMore ? (
               <EarlierMessages
                 onLoaded={() => {
@@ -351,19 +361,21 @@ export const ChatColumn = ({ agentId }: { agentId?: string }) => {
                     />
                   </div>
                 ))}
-            <WorkingLine
-              agentId={currentAgentId}
-              now={now}
-              showDuration={!timedByWork}
-              transcript={transcript}
-            />
-            {worker ? null : (
-              <>
-                <MissionBanners />
-                <FinishFlow />
-                <PublishNotices />
-              </>
-            )}
+            <div className={cn(transcriptEdit && "opacity-disabled")}>
+              <WorkingLine
+                agentId={currentAgentId}
+                now={now}
+                showDuration={!timedByWork}
+                transcript={transcript}
+              />
+              {worker ? null : (
+                <>
+                  <MissionBanners />
+                  <FinishFlow />
+                  <PublishNotices />
+                </>
+              )}
+            </div>
           </div>
         </section>
       </ScrollArea>

@@ -34,8 +34,13 @@ import {
   storedWorkOpen,
   transcriptRows,
 } from "@/lib/mission/timeline";
-import type { TimelineEntry, TurnPart } from "@/lib/mission/timeline";
+import type {
+  TimelineEntry,
+  TranscriptRow,
+  TurnPart,
+} from "@/lib/mission/timeline";
 import { markFirstOutput } from "@/lib/perf-marks";
+import { cn } from "@/lib/utils";
 
 /** Paper user bubble: right-aligned, 480px max, overlay surface. */
 const NO_ATTACHMENTS: readonly DraftAttachment[] = [];
@@ -230,6 +235,43 @@ const InteractiveReply = ({
  * The Orchestrator's side of the mission: messages, tool runs, and decision
  * cards. The worktree line follows the goal.
  */
+const entryIncludes = (entry: TimelineEntry, itemId: string) => {
+  if ("item" in entry) {
+    return entry.id === itemId || entry.item.id === itemId;
+  }
+  if (entry.kind === "tools") {
+    return entry.calls.some(
+      (call) => call.id === itemId || call.call?.id === itemId
+    );
+  }
+  return entry.id === itemId;
+};
+
+const rowIncludes = (row: TranscriptRow, itemId: string) => {
+  if (row.kind === "messages") {
+    return row.items.some((item) => item.id === itemId);
+  }
+  if (row.kind === "tools") {
+    return row.groups.some((group) =>
+      group.some((call) => call.id === itemId || call.call?.id === itemId)
+    );
+  }
+  if (row.kind === "card") {
+    return row.calls.some(
+      (call) => call.id === itemId || call.call?.id === itemId
+    );
+  }
+  if (row.entry.kind === "tools") {
+    return row.entry.calls.some(
+      (call) => call.id === itemId || call.call?.id === itemId
+    );
+  }
+  if ("item" in row.entry) {
+    return row.entry.id === itemId || row.entry.item.id === itemId;
+  }
+  return row.entry.id === itemId;
+};
+
 const TranscriptRows = ({
   entries,
   interactiveId,
@@ -239,14 +281,24 @@ const TranscriptRows = ({
   interactiveId: string | undefined;
   running: boolean;
 }) => {
-  const { missionId } = useMission();
+  const { missionId, transcriptEdit } = useMission();
   const rows = transcriptRows(entries, running);
+  const editIndex = transcriptEdit
+    ? rows.findIndex((row) => rowIncludes(row, transcriptEdit.itemId))
+    : -1;
   return (
     <ol className="flex flex-col gap-lg">
-      {rows.map((row) => {
+      {rows.map((row, index) => {
+        const dim = editIndex !== -1 && index > editIndex;
         if (row.kind === "card") {
           return (
-            <li className="flex min-w-0 flex-col gap-md" key={row.id}>
+            <li
+              className={cn(
+                "flex min-w-0 flex-col gap-md",
+                dim && "opacity-disabled"
+              )}
+              key={row.id}
+            >
               {row.calls.map((call) => {
                 if (row.card === "command") {
                   return <CommandCard call={call} key={call.id} />;
@@ -264,14 +316,23 @@ const TranscriptRows = ({
           const [lead] = row.items;
           const body = <AgentMessages items={row.items} />;
           return (
-            <li className="flex min-w-0 flex-col" key={row.id}>
+            <li
+              className={cn("flex min-w-0 flex-col", dim && "opacity-disabled")}
+              key={row.id}
+            >
               {lead ? <MessageFooter item={lead}>{body}</MessageFooter> : body}
             </li>
           );
         }
         if (row.kind === "tools") {
           return (
-            <li className="flex min-w-0 flex-col gap-2xs" key={row.id}>
+            <li
+              className={cn(
+                "flex min-w-0 flex-col gap-2xs",
+                dim && "opacity-disabled"
+              )}
+              key={row.id}
+            >
               <ToolRun
                 autoOpen={running && row.tail}
                 groups={row.groups}
@@ -283,7 +344,13 @@ const TranscriptRows = ({
         const { entry } = row;
         const goal = entry.kind === "user" && isGoal(entry.item, missionId);
         return (
-          <li className="flex min-w-0 flex-col gap-lg" key={row.id}>
+          <li
+            className={cn(
+              "flex min-w-0 flex-col gap-lg",
+              dim && "opacity-disabled"
+            )}
+            key={row.id}
+          >
             {entry.id === interactiveId ? (
               <InteractiveReply replyId={entry.id}>
                 <EntryBody entry={entry} />
@@ -309,12 +376,25 @@ export const Transcript = ({
   now: number;
 }) => {
   const [manual, setManual] = useState(() => new Map<string, boolean>());
-  const { live } = useMission();
+  const { live, transcriptEdit } = useMission();
   const interactiveId = latestOrchestratorReply(parts, live.agents);
+  const editedPart = transcriptEdit
+    ? parts.findIndex((part) =>
+        part.entries.some((entry) =>
+          entryIncludes(entry, transcriptEdit.itemId)
+        )
+      )
+    : -1;
   return (
     <ol aria-label="Mission transcript" className="flex flex-col gap-lg">
-      {parts.map((part) => (
-        <li className="flex min-w-0 flex-col" key={part.id}>
+      {parts.map((part, index) => (
+        <li
+          className={cn(
+            "flex min-w-0 flex-col",
+            editedPart !== -1 && index > editedPart && "opacity-disabled"
+          )}
+          key={part.id}
+        >
           {part.kind === "work" ? (
             <TurnGroup
               end={part.end}

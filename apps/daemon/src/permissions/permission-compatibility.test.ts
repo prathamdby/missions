@@ -126,7 +126,7 @@ describe("permission compatibility", () => {
         closed: true,
         grants: [],
         pending: [],
-        stored: request,
+        stored: { ...request, rewindDiscarded: false },
       });
       expect(() =>
         daemon.missions.decidePermission(current.id, request.id, {

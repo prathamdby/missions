@@ -60,6 +60,7 @@ describe("v1 document normalization", () => {
         epoch: null,
         guidanceVersion: null,
         id: "p",
+        rewindDiscarded: false,
         sessionId: null,
         status: "proposed",
         toolUseId: null,
@@ -88,6 +89,7 @@ describe("v1 document normalization", () => {
         purpose: null,
         recipient: null,
         sender: null,
+        superseded: false,
         text: "Worker finished assignment",
       },
     });

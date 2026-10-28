@@ -7,6 +7,7 @@ import {
   DecidePlanRequestSchema,
   EditQueueItemRequestSchema,
   EditQueueItemResponseSchema,
+  RewindTranscriptRequestSchema,
   MissionControlRequestSchema,
   RemoveQueueItemRequestSchema,
   RetryQueueItemRequestSchema,
@@ -150,6 +151,17 @@ export const registerMissionRoutes = (app: Hono, missions: MissionService) => {
         id(c),
         param(c, "itemId"),
         await parseBody(c, EditQueueItemRequestSchema)
+      )
+    )
+  );
+  app.post(routes.transcriptRewind(M, ":itemId"), async (c) =>
+    reply(
+      c,
+      MissionSchema,
+      await missions.rewindTranscript(
+        id(c),
+        param(c, "itemId"),
+        await parseBody(c, RewindTranscriptRequestSchema)
       )
     )
   );

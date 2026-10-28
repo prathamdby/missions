@@ -11,6 +11,15 @@ import type { MessageDraft } from "@/lib/mission/message-draft";
 
 export type PanelTab = "changes" | "digest" | "files" | "overview";
 
+export interface TranscriptEdit {
+  draft: MessageDraft;
+  error: string | null;
+  itemId: string;
+  originalText: string;
+  requestId: string | null;
+  seq: number;
+}
+
 export interface MissionContextValue {
   agentLabels: Record<string, string>;
   commands: MissionCommands;
@@ -29,10 +38,17 @@ export interface MissionContextValue {
   showAgent: (agentId: string) => void;
   /** Opens the details panel on a tab (docked or as a sheet). */
   showPanel: (tab: PanelTab) => void;
-  /** The composer's draft, so Edit from here can restore a message unsent. */
+  /** The composer's draft, so a cancelled edit can return text there. */
   draft: MessageDraft;
-  /** Restores a user message into the composer. Sends nothing. */
+  /** Opens the dock editor for a sent user message. */
   rewindFrom: (item: TranscriptItem) => void;
+  /** The sent message currently open in the dock, with any restart error. */
+  transcriptEdit: TranscriptEdit | null;
+  cancelTranscriptEdit: () => void;
+  setTranscriptEditError: (error: string | null) => void;
+  /** True while a restart is in flight, so a second edit cannot replace it. */
+  rewindSaving: boolean;
+  setRewindSaving: (saving: boolean) => void;
   /** Opens a new mission whose goal is the conversation through this message. */
   forkFrom: (item: TranscriptItem) => void;
 }

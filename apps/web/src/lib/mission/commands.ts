@@ -12,6 +12,7 @@ import type {
   MissionControlRequest,
   PushRequest,
   RetryQueueItemRequest,
+  RewindTranscriptRequest,
   SubmitMessageRequest,
   UpdateMissionRequest,
 } from "@missions/protocol/commands";
@@ -45,6 +46,7 @@ export interface MissionCommandInputs {
   queueMode: ChangeQueueModeRequest & { itemId: string };
   removeQueue: { expectedRevision: number; itemId: string };
   resume: WithoutOperation<MissionControlRequest>;
+  rewind: WithoutOperation<RewindTranscriptRequest> & { itemId: string };
   retryQueue: WithoutOperation<RetryQueueItemRequest> & { itemId: string };
   update: UpdateMissionRequest;
 }
@@ -65,6 +67,7 @@ export interface MissionCommandResults {
   queueMode: QueueItem;
   removeQueue: QueueItem;
   resume: Mission;
+  rewind: Mission;
   retryQueue: QueueItem;
   update: Mission;
 }

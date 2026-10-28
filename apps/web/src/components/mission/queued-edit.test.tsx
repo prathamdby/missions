@@ -28,7 +28,7 @@ type FetchStub = (
 
 const CATALOG = JSON.stringify({ commands: [], source: "unavailable" });
 
-/** Daemon answers for the two endpoints this flow touches. */
+/** Daemon answers for the edit endpoints and composer catalog. */
 const respond =
   (outcome: "already_sent" | "replaced") => (input: RequestInfo | URL) => {
     const url = String(input);
@@ -42,6 +42,9 @@ const respond =
           replacementId: outcome === "replaced" ? "queue-2" : null,
         })
       );
+    }
+    if (url.endsWith("/rewind")) {
+      return Promise.resolve(Response.json(snapshot().mission));
     }
     return Promise.resolve(Response.json({}));
   };
@@ -91,7 +94,7 @@ const nextFrame = () => {
   return frame.promise;
 };
 
-describe("queued message edit", () => {
+describe("message edit", () => {
   let host: HTMLDivElement;
   let root: Root;
   let client: QueryClient;
@@ -99,6 +102,7 @@ describe("queued message edit", () => {
   let fetch_: Mock<FetchStub>;
   let refresh: Mock<MissionContextValue["refresh"]>;
   let props: MissionContextValue;
+  let composerMounted: boolean;
 
   const paint = async () => {
     const value = props;
@@ -107,7 +111,7 @@ describe("queued message edit", () => {
         <QueryClientProvider client={client}>
           <TooltipProvider>
             <MissionProvider value={value}>
-              <MissionComposer onSend={() => null} />
+              {composerMounted ? <MissionComposer onSend={() => null} /> : null}
             </MissionProvider>
           </TooltipProvider>
         </QueryClientProvider>
@@ -123,6 +127,8 @@ describe("queued message edit", () => {
     const value = {
       agentLabels: {},
       applyLocal,
+      cancelTranscriptEdit:
+        vi.fn<MissionContextValue["cancelTranscriptEdit"]>(),
       closeAgent: vi.fn<MissionContextValue["closeAgent"]>(),
       closedAgentIds: [],
       commands: new MissionCommands(
@@ -141,10 +147,15 @@ describe("queued message edit", () => {
         vi.fn<MissionContextValue["presentIdleSubmission"]>(),
       refresh,
       rewindFrom: vi.fn<MissionContextValue["rewindFrom"]>(),
+      rewindSaving: false,
       selectedAgentId: null,
       sessionError: null,
+      setRewindSaving: vi.fn<MissionContextValue["setRewindSaving"]>(),
+      setTranscriptEditError:
+        vi.fn<MissionContextValue["setTranscriptEditError"]>(),
       showAgent: vi.fn<MissionContextValue["showAgent"]>(),
       showPanel: vi.fn<MissionContextValue["showPanel"]>(),
+      transcriptEdit: null,
     } as unknown as MissionContextValue;
     props = value;
     await paint();
@@ -165,6 +176,28 @@ describe("queued message edit", () => {
       throw new Error("Missing edit button");
     }
     await act(() => edit.click());
+  };
+
+  const beginRewind = async () => {
+    const editDraft = new MessageDraft();
+    editDraft.change("Sent message");
+    props = {
+      ...props,
+      cancelTranscriptEdit: vi.fn<MissionContextValue["cancelTranscriptEdit"]>(
+        () => {
+          props = { ...props, transcriptEdit: null };
+        }
+      ),
+      transcriptEdit: {
+        draft: editDraft,
+        error: null,
+        itemId: "sent-message",
+        originalText: "Sent message",
+        requestId: "sent-request",
+        seq: 1,
+      },
+    };
+    await paint();
   };
 
   beforeEach(() => {
@@ -199,6 +232,7 @@ describe("queued message edit", () => {
       dismissToast(shown.id);
     }
     missionDraft = new MessageDraft();
+    composerMounted = true;
     refresh = vi.fn<MissionContextValue["refresh"]>(() =>
       Promise.resolve(true)
     );
@@ -211,6 +245,90 @@ describe("queued message edit", () => {
     host.remove();
     client.clear();
     vi.unstubAllGlobals();
+  });
+
+  it("opens a sent message in the dock without changing the composer draft", async () => {
+    missionDraft.change("Unsent draft");
+    await render();
+    await beginRewind();
+    expect(composer(host)?.value).toBe("Sent message");
+    expect(composer(host)?.getAttribute("aria-label")).toBe("Editing message");
+    expect(buttonNamed(host, "Update message")).toBeDefined();
+    expect(buttonNamed(host, "Stop editing")).toBeDefined();
+    expect(missionDraft.snapshot()).toBe("Unsent draft");
+  });
+
+  it("posts one rewind with the revision, operation ID and trimmed edit", async () => {
+    await render();
+    await beginRewind();
+    const field = composer(host);
+    if (!field) {
+      throw new Error("Missing composer");
+    }
+    await act(() => type(field, "  Revised sent message  "));
+    await act(async () => {
+      buttonNamed(host, "Update message")?.click();
+      await Promise.resolve();
+    });
+    const requests = fetch_.mock.calls.filter(([input]) =>
+      String(input).endsWith("/transcript/sent-message/rewind")
+    );
+    expect(requests).toHaveLength(1);
+    expect(JSON.parse(String(requests[0]?.[1]?.body))).toStrictEqual({
+      expectedRevision: 1,
+      operationId: "operation-edit",
+      text: "Revised sent message",
+    });
+    expect(
+      fetch_.mock.calls.filter(([input]) => String(input).endsWith("/messages"))
+    ).toHaveLength(0);
+    expect(props.cancelTranscriptEdit).toHaveBeenCalledOnce();
+    expect(missionDraft.snapshot()).toBe("");
+  });
+
+  it("returns a cancelled sent-message edit to the empty composer without sending", async () => {
+    await render();
+    await beginRewind();
+    const field = composer(host);
+    if (!field) {
+      throw new Error("Missing composer");
+    }
+    await act(() => type(field, "Keep this edit"));
+    await act(() => buttonNamed(host, "Stop editing")?.click());
+    await paint();
+    expect(missionDraft.snapshot()).toBe("Keep this edit");
+    expect(composer(host)?.value).toBe("Keep this edit");
+    expect(composer(host)?.getAttribute("aria-label")).toBe(
+      "Message the Orchestrator"
+    );
+    expect(
+      fetch_.mock.calls.filter(([input]) => String(input).endsWith("/rewind"))
+    ).toHaveLength(0);
+  });
+
+  it("keeps an unsaved sent-message edit when agent tabs unmount the composer", async () => {
+    await render();
+    await beginRewind();
+    const field = composer(host);
+    if (!field) {
+      throw new Error("Missing composer");
+    }
+    await act(() => type(field, "Keep across tabs"));
+    composerMounted = false;
+    await paint();
+    composerMounted = true;
+    await paint();
+    expect(composer(host)?.value).toBe("Keep across tabs");
+    await act(async () => {
+      buttonNamed(host, "Update message")?.click();
+      await Promise.resolve();
+    });
+    const request = fetch_.mock.calls.find(([input]) =>
+      String(input).endsWith("/rewind")
+    );
+    expect(JSON.parse(String(request?.[1]?.body)).text).toBe(
+      "Keep across tabs"
+    );
   });
 
   it("moves the queued text into the composer", async () => {
@@ -715,7 +833,10 @@ describe("queued message edit", () => {
       }
       return url.endsWith("/edit")
         ? Promise.resolve(
-            Response.json({ outcome: "delete_unconfirmed", replacementId: null })
+            Response.json({
+              outcome: "delete_unconfirmed",
+              replacementId: null,
+            })
           )
         : Promise.resolve(Response.json({}));
     });
@@ -804,11 +925,11 @@ describe("queued message edit", () => {
       return Promise.resolve();
     });
     expect(
-      fetch_.mock.calls.filter(([input]) => String(input).endsWith("/attachments"))
+      fetch_.mock.calls.filter(([input]) =>
+        String(input).endsWith("/attachments")
+      )
     ).toStrictEqual([]);
-    expect(
-      host.querySelector('[aria-label="Attachments"]')
-    ).toBeNull();
+    expect(host.querySelector('[aria-label="Attachments"]')).toBeNull();
   });
 
   it("settles two cancelled saves independently", async () => {
@@ -855,7 +976,9 @@ describe("queued message edit", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      second.resolve(Response.json({ outcome: "replaced", replacementId: "q" }));
+      second.resolve(
+        Response.json({ outcome: "replaced", replacementId: "q" })
+      );
       await Promise.resolve();
     });
     // The first did not apply, so its text comes back even though a second

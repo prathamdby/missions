@@ -99,6 +99,7 @@ const fakeTransport = (
   removeQueue: missing,
   resume: missing,
   retryQueue: missing,
+  rewind: missing,
   update: missing,
   ...overrides,
 });

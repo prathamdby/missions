@@ -322,9 +322,23 @@ const firstSeq = (preview: StreamingPreview) =>
  */
 export const buildTimeline = (input: TimelineInput): TimelineEntry[] => {
   const transcript = transcriptEntries(
-    input.transcript.toSorted((a, b) => a.seq - b.seq)
+    input.transcript
+      .filter((item) => item.superseded !== true)
+      .toSorted((a, b) => a.seq - b.seq)
   );
-  const cards = cardEntries(input);
+  const cards = cardEntries({
+    ...input,
+    assignments: input.assignments?.filter(
+      (assignment) => assignment.rewindDiscarded !== true
+    ),
+    permissions: input.permissions.filter(
+      (request) => request.rewindDiscarded !== true
+    ),
+    plans: input.plans.filter((plan) => plan.rewindDiscarded !== true),
+    questions: input.questions.filter(
+      (question) => question.rewindDiscarded !== true
+    ),
+  });
   const out: TimelineEntry[] = [];
   let next = 0;
   for (const { at, entry } of transcript) {

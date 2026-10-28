@@ -1,8 +1,11 @@
 import type {
   Agent,
+  Assignment,
   Mission,
+  PermissionRequest,
   PlanRevision,
   QueueItem,
+  Question,
   TranscriptItem,
 } from "@missions/protocol/missions";
 
@@ -40,10 +43,29 @@ export const normalizePlan = (data: unknown): PlanRevision =>
     agentId: null,
     epoch: null,
     guidanceVersion: null,
+    rewindDiscarded: false,
     sessionId: null,
     toolUseId: null,
     ...(data as Stored<PlanRevision>),
   }) as PlanRevision;
+
+export const normalizeAssignment = (data: unknown): Assignment =>
+  ({
+    rewindDiscarded: false,
+    ...(data as Stored<Assignment>),
+  }) as Assignment;
+
+export const normalizeQuestion = (data: unknown): Question =>
+  ({
+    rewindDiscarded: false,
+    ...(data as Stored<Question>),
+  }) as Question;
+
+export const normalizePermission = (data: unknown): PermissionRequest =>
+  ({
+    rewindDiscarded: false,
+    ...(data as Stored<PermissionRequest>),
+  }) as PermissionRequest;
 
 export const normalizeQueueItem = (data: unknown): QueueItem => {
   const stored = { ...(data as Stored<QueueItem>) };
@@ -64,5 +86,6 @@ export const normalizeTranscriptItem = (data: unknown): TranscriptItem =>
     purpose: null,
     recipient: null,
     sender: null,
+    superseded: false,
     ...(data as Stored<TranscriptItem>),
   }) as TranscriptItem;

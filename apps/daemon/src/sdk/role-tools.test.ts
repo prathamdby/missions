@@ -7,7 +7,6 @@ import {
   MAIN_PROMPT,
   PROMPT_VERSION,
   promptFor,
-  SHARED_GUIDANCE,
   USER_SUMMARY_FORMAT,
   WORKER_PROMPT,
 } from "./prompts";
@@ -231,14 +230,23 @@ describe("prompts", () => {
   );
 
   it("makes the main agent general purpose with Work mode as the default", () => {
-    expect(MAIN_PROMPT).toContain("general-purpose");
-    expect(MAIN_PROMPT).toContain("no mandatory plan");
-    expect(MAIN_PROMPT).toContain("missions.enter_plan");
-    expect(MAIN_PROMPT).not.toContain("propose_plan");
-    expect(MAIN_PROMPT).toContain("repository administration");
-    expect(MAIN_PROMPT).toContain(
-      "Push or open a pull request only when the user asked"
-    );
+    expect({
+      administration: MAIN_PROMPT.includes("repository administration"),
+      enterPlan: MAIN_PROMPT.includes("missions.enter_plan"),
+      general: MAIN_PROMPT.includes("general-purpose"),
+      legacyPlan: MAIN_PROMPT.includes("propose_plan"),
+      plan: MAIN_PROMPT.includes("no mandatory plan"),
+      publish: MAIN_PROMPT.includes(
+        "Push or open a pull request only when the user asked"
+      ),
+    }).toStrictEqual({
+      administration: true,
+      enterPlan: true,
+      general: true,
+      legacyPlan: false,
+      plan: true,
+      publish: true,
+    });
   });
 
   it("keeps Workers out of repository administration and delegation", () => {

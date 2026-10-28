@@ -67,4 +67,6 @@ export const routes = {
   queueItemRetry: (missionId: string, itemId: string) =>
     apiPath(`/missions/${missionId}/queue/${itemId}/retry`),
   settings: () => apiPath("/settings"),
+  transcriptRewind: (missionId: string, itemId: string) =>
+    apiPath(`/missions/${missionId}/transcript/${itemId}/rewind`),
 } as const;

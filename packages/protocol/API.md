@@ -46,6 +46,7 @@ All paths come from `routes` in `src/routes.ts`. Bodies and responses use the sc
 | PATCH | `queueItem(id, item)` | `ChangeQueueModeRequest` | `QueueItem` |
 | DELETE | `queueItem(id, item)` | `RemoveQueueItemRequest` | `QueueItem` |
 | POST | `queueItemEdit(id, item)` | `EditQueueItemRequest` | `EditQueueItemResponse` |
+| POST | `transcriptRewind(id, item)` | `RewindTranscriptRequest` | `Mission` (rewrites that user message, hides every later row, and starts a new session) |
 | POST | `queueItemRetry(id, item)` | `RetryQueueItemRequest` | `QueueItem` (a new item with `retryOf`; failed or unknown items only) |
 | POST | `permission(id, req)` | `DecidePermissionRequest` | `PermissionRequest` |
 | POST | `question(id, q)` | `AnswerQuestionRequest` | `Question` |

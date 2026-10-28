@@ -182,6 +182,8 @@ export const PlanRevisionSchema = z.object({
   markdown: z.string(),
   missionId: IdSchema,
   revision: z.int().positive(),
+  /** A rewind discarded this proposal, so the chat no longer shows it. */
+  rewindDiscarded: z.boolean().optional(),
   sessionId: z.string().nullable().default(null),
   status: PlanStatusSchema,
   title: z.string(),
@@ -218,6 +220,8 @@ export const AssignmentSchema = z.object({
   missionId: IdSchema,
   /** Writable assignments must hold the shared workspace lease to run. */
   needsWrite: z.boolean(),
+  /** Resume must not requeue work a rewind already discarded. */
+  rewindDiscarded: z.boolean().optional(),
   status: z.enum(["queued", "running", "handed_off", "failed", "cancelled"]),
   title: z.string(),
   updatedAt: TimestampSchema,
@@ -247,6 +251,8 @@ export const QuestionSchema = z.object({
   id: IdSchema,
   missionId: IdSchema,
   questions: z.array(QuestionItemSchema),
+  /** A rewind discarded this question, so the chat no longer shows it. */
+  rewindDiscarded: z.boolean().optional(),
   status: z.enum(["pending", "answered", "cancelled"]),
 });
 export type Question = z.infer<typeof QuestionSchema>;
@@ -281,6 +287,8 @@ export const PermissionRequestSchema = z.object({
   kind: PermissionKindSchema,
   missionId: IdSchema,
   reason: z.string().nullable(),
+  /** A rewind discarded this approval, so the chat no longer shows it. */
+  rewindDiscarded: z.boolean().optional(),
   status: z.enum(["pending", "approved", "denied", "cancelled", "stale"]),
   toolUses: z.array(ToolUseSummarySchema),
 });
@@ -396,6 +404,11 @@ export const TranscriptItemSchema = z.object({
   requestId: z.string().nullable(),
   sender: MessagePartySchema.nullable().default(null),
   seq: z.int().nonnegative(),
+  /**
+   * A rewind kept the row so transcript sequences stay contiguous, and hid it
+   * from the chat and from agent history.
+   */
+  superseded: z.boolean().optional(),
   text: z.string(),
   toolInput: z.unknown().optional(),
   toolName: z.string().nullable(),

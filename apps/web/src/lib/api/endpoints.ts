@@ -14,6 +14,7 @@ import type {
   DecidePlanRequest,
   EditQueueItemRequest,
   MissionControlRequest,
+  RewindTranscriptRequest,
   SubmitMessageRequest,
   UpdateMissionRequest,
   AnswerQuestionRequest,
@@ -297,6 +298,15 @@ export const api = {
     }),
   revokeGrant: (grantId: string) =>
     apiRequestVoid(routes.grant(grantId), { method: "DELETE" }),
+  rewindTranscript: (
+    missionId: string,
+    itemId: string,
+    body: RewindTranscriptRequest
+  ) =>
+    apiRequest(routes.transcriptRewind(missionId, itemId), MissionSchema, {
+      body,
+      method: "POST",
+    }),
   settings: (signal?: AbortSignal) =>
     apiRequest(routes.settings(), SettingsSchema, { signal }),
   sharedFile: (missionId: string, path: string, signal?: AbortSignal) =>
