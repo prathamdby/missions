@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
@@ -101,7 +102,13 @@ export const transcript = sqliteTable(
     missionId: text("mission_id").notNull(),
     seq: integer("seq").notNull(),
   },
-  (t) => [index("transcript_mission_seq_idx").on(t.missionId, t.seq)]
+  (t) => [
+    index("transcript_mission_seq_idx").on(t.missionId, t.seq),
+    index("transcript_mission_request_idx").on(
+      t.missionId,
+      sql`json_extract(${t.data}, '$.requestId')`
+    ),
+  ]
 );
 
 /** One gap-free sequence per stream: a mission ID, or "" for global events. */

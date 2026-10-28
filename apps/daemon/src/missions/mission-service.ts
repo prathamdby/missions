@@ -1769,14 +1769,7 @@ export class MissionService {
           // echo must not become a second user bubble.
           const alreadyRecorded =
             entry.requestId !== null &&
-            this.#store
-              .listTranscript(mission.id)
-              .some(
-                (saved) =>
-                  saved.kind === "user" &&
-                  saved.requestId === entry.requestId &&
-                  saved.superseded !== true
-              );
+            this.#store.hasUserTranscriptRequest(mission.id, entry.requestId);
           return fromAgent || alreadyRecorded ? [] : [entry];
         });
         this.#appendTranscript(mission.id, items);
@@ -4319,12 +4312,16 @@ export class MissionService {
     if (request.text === item.text && !later) {
       throw conflict("Nothing to restart");
     }
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       this.#store
         .listAgents(missionId)
         .map((agent) => this.#closeRuntime(agent.id))
     );
-    if (results.some((result) => !result.stopped)) {
+    if (
+      results.some(
+        (result) => result.status === "rejected" || !result.value.stopped
+      )
+    ) {
       throw conflict("Could not restart. The chat is unchanged.");
     }
     const current = this.get(missionId);
@@ -4343,12 +4340,7 @@ export class MissionService {
         requestId,
       });
     });
-    await this.#sendRewound(
-      missionId,
-      request.operationId,
-      requestId,
-      request.text
-    );
+    await this.#sendRewound(missionId, request.operationId, itemId);
     return this.get(missionId);
   }
 
@@ -4374,6 +4366,7 @@ export class MissionService {
       throw stale("The mission changed; refresh and try again");
     }
     const target = this.#rewindTarget(input.missionId, input.itemId);
+    this.#retirePendingRewinds(input.missionId);
     const revised: TranscriptItem = {
       ...target,
       requestId: input.requestId,
@@ -4511,20 +4504,19 @@ export class MissionService {
     }
   }
 
-  async #sendRewound(
-    missionId: string,
-    operationId: string,
-    requestId: string,
-    text: string
-  ) {
+  async #sendRewound(missionId: string, operationId: string, itemId: string) {
     try {
       const orchestrator = this.#orchestrator(missionId);
       const runtime = await this.#ensureRuntime(orchestrator.id);
       this.#requireRuntime(orchestrator.id, runtime);
-      await runtime.submit(requestId, text, "steer");
-      this.#markRewindSubmitted(operationId);
+      await this.#submitRewind(
+        runtime,
+        operationId,
+        this.#rewindTarget(missionId, itemId)
+      );
     } catch (error) {
       if (!FENCED.has(this.get(missionId).status)) {
+        await this.#stopMission(missionId, "interrupted");
         this.#notice(
           missionId,
           "run_failed",
@@ -4536,20 +4528,78 @@ export class MissionService {
   }
 
   #pendingRewind(missionId: string) {
-    const operation = this.#store
+    const [operation] = this.#store
       .operationsFor(missionId, "mission.rewind")
-      .find(
+      .filter(
         (entry) =>
-          entry.status === "succeeded" && entry.detail.submitted !== true
+          entry.status === "succeeded" && entry.detail.superseded !== true
+      )
+      .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (!operation || operation.detail.submitted === true) {
+      return null;
+    }
+    const { itemId, requestId, text } = operation.detail;
+    if (
+      typeof itemId !== "string" ||
+      typeof requestId !== "string" ||
+      typeof text !== "string" ||
+      !text
+    ) {
+      return null;
+    }
+    const item = this.#store.getTranscriptItem(itemId);
+    if (
+      !item ||
+      item.missionId !== missionId ||
+      item.kind !== "user" ||
+      item.superseded === true ||
+      item.text !== text ||
+      (item.requestId ?? item.id) !== requestId
+    ) {
+      return null;
+    }
+    return { item, operationId: operation.id };
+  }
+
+  #retirePendingRewinds(missionId: string) {
+    for (const operation of this.#store.operationsFor(
+      missionId,
+      "mission.rewind"
+    )) {
+      if (
+        operation.status !== "succeeded" ||
+        operation.detail.submitted === true ||
+        operation.detail.superseded === true
+      ) {
+        continue;
+      }
+      this.#store.putOperation(
+        {
+          ...operation,
+          detail: { ...operation.detail, superseded: true },
+          updatedAt: this.#iso(),
+        },
+        this.#store.getOperation(operation.id)?.result
       );
-    if (!operation) {
-      return null;
     }
-    const { requestId, text } = operation.detail;
-    if (typeof requestId !== "string" || typeof text !== "string" || !text) {
-      return null;
-    }
-    return { operationId: operation.id, requestId, text };
+  }
+
+  async #submitRewind(
+    runtime: RuntimeHandle,
+    operationId: string,
+    item: TranscriptItem
+  ) {
+    const queued = item.requestId
+      ? this.#store.queue.get(item.requestId)
+      : null;
+    const options = await attachmentPayload(this.#attachments, {
+      attachments: queued?.attachments ?? [],
+      missionId: item.missionId,
+    });
+    await this.#execute(this.#orchestrator(item.missionId).id, runtime, () =>
+      runtime.submit(item.requestId ?? item.id, item.text, "steer", options)
+    );
+    this.#markRewindSubmitted(operationId);
   }
 
   #markRewindSubmitted(operationId: string) {
@@ -4920,12 +4970,11 @@ export class MissionService {
           this.#requireRuntime(orchestrator.id, runtime);
           const pendingRewind = this.#pendingRewind(missionId);
           if (!goalPending && pendingRewind) {
-            await runtime.submit(
-              pendingRewind.requestId,
-              pendingRewind.text,
-              "steer"
+            await this.#submitRewind(
+              runtime,
+              pendingRewind.operationId,
+              pendingRewind.item
             );
-            this.#markRewindSubmitted(pendingRewind.operationId);
           } else if (!goalPending) {
             const failures = this.#unconfirmedFailures(missionId);
             const sent = await this.#sendSystem(

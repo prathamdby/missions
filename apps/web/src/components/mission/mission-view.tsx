@@ -208,7 +208,10 @@ export const MissionView = ({ missionId }: { missionId: string }) => {
               ) {
                 return;
               }
+              const editDraft = new MessageDraft();
+              editDraft.change(item.text);
               setTranscriptEdit({
+                draft: editDraft,
                 error: null,
                 itemId: item.id,
                 originalText: item.text,

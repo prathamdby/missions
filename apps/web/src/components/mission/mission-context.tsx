@@ -12,6 +12,7 @@ import type { MessageDraft } from "@/lib/mission/message-draft";
 export type PanelTab = "changes" | "digest" | "files" | "overview";
 
 export interface TranscriptEdit {
+  draft: MessageDraft;
   error: string | null;
   itemId: string;
   originalText: string;

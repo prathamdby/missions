@@ -13,7 +13,7 @@ import type {
   TranscriptItem,
 } from "@missions/protocol/missions";
 import type { Project, CloneJob } from "@missions/protocol/projects";
-import { and, desc, eq, inArray, like, lt, max } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, like, lt, max, sql } from "drizzle-orm";
 
 import type { DatabaseHandle, Db } from "./database";
 import {
@@ -485,24 +485,53 @@ export class Store {
     return row ? normalizeTranscriptItem(row.data) : null;
   }
 
-  /** Newest-first page, returned in ascending order. */
+  hasUserTranscriptRequest(missionId: string, requestId: string): boolean {
+    return Boolean(
+      this.db
+        .select({ id: transcript.id })
+        .from(transcript)
+        .where(
+          and(
+            eq(transcript.missionId, missionId),
+            sql`json_extract(${transcript.data}, '$.requestId') = ${requestId}`,
+            sql`json_extract(${transcript.data}, '$.kind') = 'user'`,
+            sql`coalesce(json_extract(${transcript.data}, '$.superseded'), 0) != 1`
+          )
+        )
+        .limit(1)
+        .get()
+    );
+  }
+
+  /** Visible rows own the budget; retain hidden rows so sequences stay contiguous. */
   transcriptPage(missionId: string, before: number | null, limit: number) {
     const where =
       before === null
         ? eq(transcript.missionId, missionId)
         : and(eq(transcript.missionId, missionId), lt(transcript.seq, before));
-    const rows = this.db
-      .select()
+    const visible = this.db
+      .select({ seq: transcript.seq })
       .from(transcript)
-      .where(where)
+      .where(
+        and(
+          where,
+          sql`coalesce(json_extract(${transcript.data}, '$.superseded'), 0) != 1`
+        )
+      )
       .orderBy(desc(transcript.seq))
       .limit(limit + 1)
       .all();
-    const hasMore = rows.length > limit;
-    const items = rows
-      .slice(0, limit)
-      .map((row) => normalizeTranscriptItem(row.data))
-      .toReversed();
+    const hasMore = visible.length > limit;
+    const oldest = visible.slice(0, limit).at(-1);
+    const items = oldest
+      ? this.db
+          .select()
+          .from(transcript)
+          .where(and(where, gte(transcript.seq, oldest.seq)))
+          .orderBy(transcript.seq)
+          .all()
+          .map((row) => normalizeTranscriptItem(row.data))
+      : [];
     return { hasMore, items };
   }
 

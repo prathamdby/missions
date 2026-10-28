@@ -418,10 +418,8 @@ const useTranscriptRewind = ({
     if (sessionRef.current) {
       finish(sessionRef.current, savingRef.current ? "saving" : undefined);
     }
-    const next = new MessageDraft();
-    next.change(transcriptEdit.originalText);
     replaceRewind({
-      draft: next,
+      draft: transcriptEdit.draft,
       itemId: transcriptEdit.itemId,
       originalText: transcriptEdit.originalText,
     });
